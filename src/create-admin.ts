@@ -1,8 +1,9 @@
+import "dotenv/config";
 import { emitKeypressEvents } from "node:readline";
 import { createInterface } from "node:readline/promises";
 import { stdin, stdout } from "node:process";
 import { z } from "zod";
-import { prisma } from "./db.js";
+import { prisma } from "./db-node.js";
 import { hashPassword } from "./security.js";
 
 async function hiddenQuestion(prompt: string) {

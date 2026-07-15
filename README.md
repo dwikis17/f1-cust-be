@@ -88,3 +88,15 @@ curl -X POST http://localhost:3000/api/admin/auth/login \
 ```
 
 Prices use integer Indonesian rupiah. Public product responses expose `available` for each variant but do not expose exact stock quantities.
+
+## Cloudflare Worker deployment
+
+The Express API can run on Cloudflare Workers through `cloudflare:node`. Production PostgreSQL traffic uses the `HYPERDRIVE` binding configured in `wrangler.jsonc`; local Node development continues to use `DATABASE_URL`.
+
+```sh
+npm run worker:types
+npm run worker:dry-run
+npm run worker:deploy
+```
+
+Apply Prisma migrations to the production database separately with `npm run db:deploy` before deploying. Product photo upload and `/uploads` serving return `501` in the Worker until local filesystem storage is replaced with R2.

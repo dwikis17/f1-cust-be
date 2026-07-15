@@ -1,0 +1,25 @@
+{
+  "$schema": "./node_modules/wrangler/config-schema.json",
+  "name": "f1-store-api",
+  "main": "src/worker.ts",
+  "compatibility_date": "2026-07-15",
+  "compatibility_flags": ["nodejs_compat"],
+  "vars": {
+    "CORS_ORIGINS": "http://localhost:5173,http://localhost:3001",
+    "SESSION_TTL_HOURS": "168",
+    "MAX_UPLOAD_BYTES": "5242880",
+    "MAX_PHOTOS_PER_PRODUCT": "12"
+  },
+  "hyperdrive": [
+    {
+      "binding": "HYPERDRIVE",
+      "id": "dc41a0198dc848fb8179a4b6d72d0473"
+    }
+  ],
+  "observability": {
+    "enabled": true,
+    "logs": {
+      "head_sampling_rate": 1
+    }
+  }
+}

@@ -1,9 +1,8 @@
-import "dotenv/config";
 import path from "node:path";
 import { z } from "zod";
 
 const env = z.object({
-  DATABASE_URL: z.string().url(),
+  DATABASE_URL: z.string().url().optional(),
   PORT: z.coerce.number().int().min(1).max(65535).default(3000),
   CORS_ORIGINS: z.string().default("http://localhost:5173"),
   UPLOAD_DIR: z.string().default("uploads"),
@@ -21,3 +20,8 @@ export const config = {
   maxUploadBytes: env.MAX_UPLOAD_BYTES,
   maxPhotosPerProduct: env.MAX_PHOTOS_PER_PRODUCT,
 };
+
+export function requireDatabaseUrl() {
+  if (!config.databaseUrl) throw new Error("DATABASE_URL is required outside the Cloudflare Worker runtime");
+  return config.databaseUrl;
+}

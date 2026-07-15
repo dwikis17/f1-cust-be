@@ -4,9 +4,11 @@ import { access } from "node:fs/promises";
 import path from "node:path";
 import { after, before, test } from "node:test";
 import request from "supertest";
-import { app } from "./app.js";
+import { createApp } from "./app.js";
 import { config } from "./config.js";
-import { prisma } from "./db.js";
+import { prisma } from "./db-node.js";
+
+const app = createApp();
 import { hashPassword, hashToken } from "./security.js";
 
 let token = "";
@@ -36,7 +38,7 @@ before(async () => {
 after(async () => prisma.$disconnect());
 
 test("health and admin authentication", async () => {
-  await request(app).get("/health").expect(200, { status: "ok" });
+  await request(app).get("/health").expect(200, { status: "okk" });
   await request(app).post("/api/admin/auth/login")
     .send({ email: "admin@example.com", password: "wrong-password" }).expect(401);
   const login = await request(app).post("/api/admin/auth/login")
