@@ -2,6 +2,7 @@ import { Router } from "express";
 import { z } from "zod";
 import { prisma } from "./db.js";
 import { notFound, parse } from "./http.js";
+import { storedPhotoUrl } from "./photo-storage.js";
 import { slugSchema } from "./schemas.js";
 
 const router = Router();
@@ -39,7 +40,7 @@ function publicProduct(product: Awaited<ReturnType<typeof prisma.product.findFir
     driver: value.driver,
     tags: value.tags.map(({ tag }: any) => tag),
     variants: value.variants.map(({ stockQuantity, ...variant }: any) => ({ ...variant, available: stockQuantity > 0 })),
-    photos: value.photos.map((photo: any) => ({ ...photo, url: `/uploads/${photo.path}` })),
+    photos: value.photos.map((photo: any) => ({ ...photo, url: storedPhotoUrl(photo.path) })),
     createdAt: value.createdAt,
     updatedAt: value.updatedAt,
   };

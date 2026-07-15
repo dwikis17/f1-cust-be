@@ -7,6 +7,7 @@ import request from "supertest";
 import { createApp } from "./app.js";
 import { config } from "./config.js";
 import { prisma } from "./db-node.js";
+import { storePhoto } from "./photo-storage.js";
 
 const app = createApp();
 import { hashPassword, hashToken } from "./security.js";
@@ -264,11 +265,30 @@ test("photo uploads validate signatures and clean up files", async () => {
   const upload = await request(app).post(`/api/admin/products/${productId}/photos`).set("authorization", `Bearer ${token}`)
     .field("altText", "Red Ferrari jersey").field("color", "Red").field("position", "0")
     .attach("photo", pngHeader, "jersey.png").expect(201);
-  const storedPath = path.join(config.uploadDir, upload.body.path);
+  assert.match(upload.body.path, /^http:\/\/127\.0\.0\.1:\d+\/uploads\//);
+  assert.equal(upload.body.url, upload.body.path);
+  const storedKey = new URL(upload.body.path).pathname.replace("/uploads/", "");
+  const storedPath = path.join(config.uploadDir, storedKey);
   await access(storedPath);
+  await request(app).get(new URL(upload.body.path).pathname).expect("content-type", /image\/png/).expect(200);
+  const publicProduct = await request(app).get("/api/products/ferrari-team-jersey").expect(200);
+  assert.equal(publicProduct.body.photos[0].url, upload.body.path);
   await request(app).delete(`/api/admin/products/${productId}/photos/${upload.body.id}`)
     .set("authorization", `Bearer ${token}`).expect(204);
   await assert.rejects(access(storedPath));
+
+  const legacyKey = `legacy-${randomUUID()}.png`;
+  await storePhoto(legacyKey, pngHeader, "image/png");
+  const legacy = await prisma.productPhoto.create({
+    data: { productId, path: legacyKey, altText: "Legacy product image", position: 0 },
+  });
+  const legacyPath = path.join(config.uploadDir, legacyKey);
+  await access(legacyPath);
+  const legacyProduct = await request(app).get("/api/products/ferrari-team-jersey").expect(200);
+  assert.equal(legacyProduct.body.photos[0].url, `/uploads/${legacyKey}`);
+  await request(app).delete(`/api/admin/products/${productId}/photos/${legacy.id}`)
+    .set("authorization", `Bearer ${token}`).expect(204);
+  await assert.rejects(access(legacyPath));
 });
 
 test("expired sessions are rejected and removed", async () => {

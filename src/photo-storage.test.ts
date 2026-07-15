@@ -6,6 +6,8 @@ import {
   photoKey,
   readStoredPhoto,
   runWithPhotoBucket,
+  storedPhotoKey,
+  storedPhotoUrl,
   storePhoto,
 } from "./photo-storage.js";
 
@@ -41,4 +43,19 @@ test("R2 photo lifecycle uses the request namespace", async () => {
     await deletePhoto(key);
     assert.equal(await readStoredPhoto(key), null);
   });
+});
+
+test("stored product photo values support links and legacy keys", () => {
+  assert.equal(storedPhotoKey("development/photo.png"), "development/photo.png");
+  assert.equal(storedPhotoKey("/uploads/development/photo.png"), "development/photo.png");
+  assert.equal(
+    storedPhotoKey("https://f1-store-api.dwikis17.workers.dev/uploads/production/photo.png"),
+    "production/photo.png",
+  );
+  assert.equal(storedPhotoUrl("development/photo.png"), "/uploads/development/photo.png");
+  assert.equal(storedPhotoUrl("/uploads/development/photo.png"), "/uploads/development/photo.png");
+  assert.equal(
+    storedPhotoUrl("https://f1-store-api.dwikis17.workers.dev/uploads/production/photo.png"),
+    "https://f1-store-api.dwikis17.workers.dev/uploads/production/photo.png",
+  );
 });

@@ -22,6 +22,22 @@ export function photoKey(filename: string) {
   return `${requestStorage.getStore()?.prefix ?? ""}${filename}`;
 }
 
+export function storedPhotoKey(value: string) {
+  if (value.startsWith("/uploads/")) return value.slice("/uploads/".length);
+  try {
+    const url = new URL(value);
+    if (url.pathname.startsWith("/uploads/")) return url.pathname.slice("/uploads/".length);
+  } catch {
+    // Legacy rows contain the R2 key directly.
+  }
+  return value;
+}
+
+export function storedPhotoUrl(value: string) {
+  if (value.startsWith("http://") || value.startsWith("https://") || value.startsWith("/uploads/")) return value;
+  return `/uploads/${value}`;
+}
+
 export async function storePhoto(key: string, body: Uint8Array, contentType: string) {
   const storage = requestStorage.getStore();
   if (storage) {
