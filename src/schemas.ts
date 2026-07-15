@@ -3,7 +3,10 @@ import { z } from "zod";
 export const idSchema = z.string().uuid();
 export const slugSchema = z.string().trim().min(2).max(100).regex(/^[a-z0-9]+(?:-[a-z0-9]+)*$/);
 export const nameSchema = z.string().trim().min(1).max(120);
-const urlSchema = z.string().url().max(2048);
+const urlSchema = z.union([
+  z.string().url().max(2048),
+  z.string().max(2048).regex(/^\/uploads\/[a-zA-Z0-9][a-zA-Z0-9/_-]*\.(?:jpe?g|png|webp)$/),
+]);
 
 export const catalogEntitySchema = z.object({ name: nameSchema, slug: slugSchema }).strict();
 export const catalogEntityPatchSchema = catalogEntitySchema.partial().refine((value) => Object.keys(value).length > 0);

@@ -136,13 +136,34 @@ test("admin can update and delete unreferenced teams and drivers", async () => {
   const updatedTeam = await request(app).patch(`/api/admin/teams/${team.body.id}`)
     .set("authorization", `Bearer ${token}`).send({ name: "Alpine F1 Team", slug: "alpine-f1-team" }).expect(200);
   assert.equal(updatedTeam.body.slug, "alpine-f1-team");
+  const pngHeader = Buffer.from([0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a]);
+  await request(app).post(`/api/admin/teams/${team.body.id}/logo`).set("authorization", `Bearer ${token}`)
+    .attach("image", Buffer.from("not-image"), "fake.png").expect(400);
+  const firstLogo = await request(app).post(`/api/admin/teams/${team.body.id}/logo`)
+    .set("authorization", `Bearer ${token}`).attach("image", pngHeader, "alpine.png").expect(200);
+  const firstLogoPath = path.join(config.uploadDir, firstLogo.body.logoUrl.replace("/uploads/", ""));
+  await access(firstLogoPath);
+  await request(app).get(firstLogo.body.logoUrl).expect("content-type", /image\/png/).expect(200);
+  const replacementLogo = await request(app).post(`/api/admin/teams/${team.body.id}/logo`)
+    .set("authorization", `Bearer ${token}`).attach("image", pngHeader, "alpine-new.png").expect(200);
+  const replacementLogoPath = path.join(config.uploadDir, replacementLogo.body.logoUrl.replace("/uploads/", ""));
+  await assert.rejects(access(firstLogoPath));
+  await access(replacementLogoPath);
   const driver = await request(app).post("/api/admin/drivers").set("authorization", `Bearer ${token}`)
     .send({ name: "Pierre Gasly", slug: "pierre-gasly", racingNumber: 10, teamId: team.body.id }).expect(201);
   const updatedDriver = await request(app).patch(`/api/admin/drivers/${driver.body.id}`)
     .set("authorization", `Bearer ${token}`).send({ racingNumber: 11 }).expect(200);
   assert.equal(updatedDriver.body.racingNumber, 11);
+  const photo = await request(app).post(`/api/admin/drivers/${driver.body.id}/photo`)
+    .set("authorization", `Bearer ${token}`).attach("image", pngHeader, "gasly.png").expect(200);
+  const photoPath = path.join(config.uploadDir, photo.body.photoUrl.replace("/uploads/", ""));
+  await access(photoPath);
+  await request(app).delete(`/api/admin/drivers/${driver.body.id}/photo`)
+    .set("authorization", `Bearer ${token}`).expect(204);
+  await assert.rejects(access(photoPath));
   await request(app).delete(`/api/admin/drivers/${driver.body.id}`).set("authorization", `Bearer ${token}`).expect(204);
   await request(app).delete(`/api/admin/teams/${team.body.id}`).set("authorization", `Bearer ${token}`).expect(204);
+  await assert.rejects(access(replacementLogoPath));
 });
 
 test("public team and driver references support catalog filters", async () => {
@@ -215,9 +236,22 @@ test("driver transfers preserve historical product teams and references", async 
   assert.equal(publicProduct.body.driver.teamId, secondTeamId);
   const transferredDrivers = await request(app).get("/api/drivers?team=mercedes").expect(200);
   assert.equal(transferredDrivers.body[0].id, driverId);
+  const pngHeader = Buffer.from([0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a]);
+  const logo = await request(app).post(`/api/admin/teams/${teamId}/logo`)
+    .set("authorization", `Bearer ${token}`).attach("image", pngHeader, "ferrari.png").expect(200);
+  const photo = await request(app).post(`/api/admin/drivers/${driverId}/photo`)
+    .set("authorization", `Bearer ${token}`).attach("image", pngHeader, "leclerc.png").expect(200);
+  const logoPath = path.join(config.uploadDir, logo.body.logoUrl.replace("/uploads/", ""));
+  const photoPath = path.join(config.uploadDir, photo.body.photoUrl.replace("/uploads/", ""));
   await request(app).delete(`/api/admin/drivers/${driverId}`).set("authorization", `Bearer ${token}`).expect(409);
   await request(app).delete(`/api/admin/teams/${teamId}`).set("authorization", `Bearer ${token}`).expect(409);
   await request(app).delete(`/api/admin/teams/${secondTeamId}`).set("authorization", `Bearer ${token}`).expect(409);
+  await access(logoPath);
+  await access(photoPath);
+  await request(app).delete(`/api/admin/teams/${teamId}/logo`).set("authorization", `Bearer ${token}`).expect(204);
+  await request(app).delete(`/api/admin/drivers/${driverId}/photo`).set("authorization", `Bearer ${token}`).expect(204);
+  await assert.rejects(access(logoPath));
+  await assert.rejects(access(photoPath));
 });
 
 test("photo uploads validate signatures and clean up files", async () => {

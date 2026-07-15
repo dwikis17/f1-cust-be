@@ -57,8 +57,10 @@ Send the login token as `Authorization: Bearer <token>` for all remaining admin 
 - `PATCH|DELETE /api/admin/tags/:id`
 - `GET|POST /api/admin/teams`
 - `PATCH|DELETE /api/admin/teams/:id`
+- `POST|DELETE /api/admin/teams/:id/logo` using multipart field `image`
 - `GET|POST /api/admin/drivers`
 - `PATCH|DELETE /api/admin/drivers/:id`
+- `POST|DELETE /api/admin/drivers/:id/photo` using multipart field `image`
 - `GET|POST /api/admin/products`
 - `GET|PATCH /api/admin/products/:id`
 - `POST /api/admin/products/:productId/variants`

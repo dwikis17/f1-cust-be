@@ -119,7 +119,11 @@ router.patch("/teams/:id", async (request, response) => {
   response.json(await prisma.team.update({ where: { id: parse(idSchema, request.params.id) }, data: parse(teamPatchSchema, request.body) }));
 });
 router.delete("/teams/:id", async (request, response) => {
-  await prisma.team.delete({ where: { id: parse(idSchema, request.params.id) } });
+  const id = parse(idSchema, request.params.id);
+  const team = await prisma.team.findUnique({ where: { id } });
+  if (!team) notFound("Team not found");
+  await prisma.team.delete({ where: { id } });
+  await deleteManagedImage(team.logoUrl);
   response.status(204).send();
 });
 
@@ -137,7 +141,11 @@ router.patch("/drivers/:id", async (request, response) => {
   }));
 });
 router.delete("/drivers/:id", async (request, response) => {
-  await prisma.driver.delete({ where: { id: parse(idSchema, request.params.id) } });
+  const id = parse(idSchema, request.params.id);
+  const driver = await prisma.driver.findUnique({ where: { id } });
+  if (!driver) notFound("Driver not found");
+  await prisma.driver.delete({ where: { id } });
+  await deleteManagedImage(driver.photoUrl);
   response.status(204).send();
 });
 
@@ -220,11 +228,88 @@ function imageExtension(buffer: Buffer) {
   return null;
 }
 
+function imageFile(file?: Express.Multer.File) {
+  if (!file) throw new HttpError(400, "IMAGE_REQUIRED", "An image file is required");
+  const extension = imageExtension(file.buffer);
+  if (!extension) throw new HttpError(400, "INVALID_IMAGE", "Only valid JPEG, PNG, and WebP images are allowed");
+  return {
+    extension,
+    contentType: extension === "png" ? "image/png" : extension === "webp" ? "image/webp" : "image/jpeg",
+  };
+}
+
+function managedImageKey(url?: string | null) {
+  return url?.startsWith("/uploads/") ? url.slice("/uploads/".length) : null;
+}
+
+async function deleteManagedImage(url?: string | null) {
+  const key = managedImageKey(url);
+  if (!key) return;
+  await deletePhoto(key).catch((error: NodeJS.ErrnoException) => {
+    if (error.code !== "ENOENT") console.error("Could not remove image", error);
+  });
+}
+
+router.post("/teams/:id/logo", upload.single("image"), async (request, response) => {
+  const id = parse(idSchema, request.params.id);
+  const team = await prisma.team.findUnique({ where: { id } });
+  if (!team) notFound("Team not found");
+  const image = imageFile(request.file);
+  const key = photoKey(`team-${randomUUID()}.${image.extension}`);
+  await storePhoto(key, request.file!.buffer, image.contentType);
+  try {
+    const updated = await prisma.team.update({ where: { id }, data: { logoUrl: `/uploads/${key}` } });
+    await deleteManagedImage(team.logoUrl);
+    response.json(updated);
+  } catch (error) {
+    await deletePhoto(key).catch(() => undefined);
+    throw error;
+  }
+});
+
+router.delete("/teams/:id/logo", async (request, response) => {
+  const id = parse(idSchema, request.params.id);
+  const team = await prisma.team.findUnique({ where: { id } });
+  if (!team) notFound("Team not found");
+  await prisma.team.update({ where: { id }, data: { logoUrl: null } });
+  await deleteManagedImage(team.logoUrl);
+  response.status(204).send();
+});
+
+router.post("/drivers/:id/photo", upload.single("image"), async (request, response) => {
+  const id = parse(idSchema, request.params.id);
+  const driver = await prisma.driver.findUnique({ where: { id } });
+  if (!driver) notFound("Driver not found");
+  const image = imageFile(request.file);
+  const key = photoKey(`driver-${randomUUID()}.${image.extension}`);
+  await storePhoto(key, request.file!.buffer, image.contentType);
+  try {
+    const updated = await prisma.driver.update({
+      where: { id },
+      data: { photoUrl: `/uploads/${key}` },
+      include: { team: true },
+    });
+    await deleteManagedImage(driver.photoUrl);
+    response.json(updated);
+  } catch (error) {
+    await deletePhoto(key).catch(() => undefined);
+    throw error;
+  }
+});
+
+router.delete("/drivers/:id/photo", async (request, response) => {
+  const id = parse(idSchema, request.params.id);
+  const driver = await prisma.driver.findUnique({ where: { id } });
+  if (!driver) notFound("Driver not found");
+  await prisma.driver.update({ where: { id }, data: { photoUrl: null } });
+  await deleteManagedImage(driver.photoUrl);
+  response.status(204).send();
+});
+
 router.post("/products/:productId/photos", upload.single("photo"), async (request, response) => {
   const productId = parse(idSchema, request.params.productId);
   if (!request.file) throw new HttpError(400, "PHOTO_REQUIRED", "A photo file is required");
-  const extension = imageExtension(request.file.buffer);
-  if (!extension) throw new HttpError(400, "INVALID_IMAGE", "Only valid JPEG, PNG, and WebP images are allowed");
+  const image = imageFile(request.file);
   const metadata = parse(z.object({
     color: z.string().trim().min(1).max(60).optional(),
     altText: z.string().trim().min(1).max(240),
@@ -239,9 +324,8 @@ router.post("/products/:productId/photos", upload.single("photo"), async (reques
     throw new HttpError(400, "UNKNOWN_COLOR", "Photo color must match a product variant");
   }
 
-  const filename = photoKey(`${randomUUID()}.${extension}`);
-  const contentType = extension === "png" ? "image/png" : extension === "webp" ? "image/webp" : "image/jpeg";
-  await storePhoto(filename, request.file.buffer, contentType);
+  const filename = photoKey(`${randomUUID()}.${image.extension}`);
+  await storePhoto(filename, request.file.buffer, image.contentType);
   try {
     const photo = await prisma.productPhoto.create({ data: { productId, path: filename, ...metadata } });
     response.status(201).json({ ...photo, url: `/uploads/${filename}` });
