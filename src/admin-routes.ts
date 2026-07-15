@@ -1,6 +1,4 @@
 import { randomUUID } from "node:crypto";
-import { mkdir, unlink, writeFile } from "node:fs/promises";
-import path from "node:path";
 import { Router } from "express";
 import multer from "multer";
 import { z } from "zod";
@@ -8,6 +6,7 @@ import { requireAdmin } from "./auth.js";
 import { config } from "./config.js";
 import { prisma } from "./db.js";
 import { HttpError, notFound, parse } from "./http.js";
+import { deletePhoto, photoKey, storePhoto } from "./photo-storage.js";
 import { createSessionToken, hashToken, verifyPassword } from "./security.js";
 import {
   catalogEntityPatchSchema,
@@ -185,15 +184,14 @@ router.post("/products/:productId/photos", upload.single("photo"), async (reques
     throw new HttpError(400, "UNKNOWN_COLOR", "Photo color must match a product variant");
   }
 
-  await mkdir(config.uploadDir, { recursive: true });
-  const filename = `${randomUUID()}.${extension}`;
-  const target = path.join(config.uploadDir, filename);
-  await writeFile(target, request.file.buffer, { flag: "wx" });
+  const filename = photoKey(`${randomUUID()}.${extension}`);
+  const contentType = extension === "png" ? "image/png" : extension === "webp" ? "image/webp" : "image/jpeg";
+  await storePhoto(filename, request.file.buffer, contentType);
   try {
     const photo = await prisma.productPhoto.create({ data: { productId, path: filename, ...metadata } });
     response.status(201).json({ ...photo, url: `/uploads/${filename}` });
   } catch (error) {
-    await unlink(target).catch(() => undefined);
+    await deletePhoto(filename).catch(() => undefined);
     throw error;
   }
 });
@@ -216,7 +214,7 @@ router.delete("/products/:productId/photos/:id", async (request, response) => {
   const photo = await prisma.productPhoto.findFirst({ where: { id, productId } });
   if (!photo) notFound("Photo not found");
   await prisma.productPhoto.delete({ where: { id } });
-  await unlink(path.join(config.uploadDir, photo.path)).catch((error: NodeJS.ErrnoException) => {
+  await deletePhoto(photo.path).catch((error: NodeJS.ErrnoException) => {
     if (error.code !== "ENOENT") console.error("Could not remove photo file", error);
   });
   response.status(204).send();

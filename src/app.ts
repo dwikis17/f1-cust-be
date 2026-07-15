@@ -4,6 +4,7 @@ import express from "express";
 import { config } from "./config.js";
 import { prisma } from "./db.js";
 import { errorHandler } from "./http.js";
+import { readStoredPhoto } from "./photo-storage.js";
 import adminRoutes from "./admin-routes.js";
 import publicRoutes from "./public-routes.js";
 
@@ -26,8 +27,28 @@ export function createApp({ localUploads = true }: AppOptions = {}) {
   if (localUploads) {
     app.use("/uploads", express.static(config.uploadDir, { dotfiles: "deny", fallthrough: false, index: false }));
   } else {
-    app.use("/api/admin/products/:productId/photos", (_request, response) => {
-      response.status(501).json({ error: { code: "PHOTO_STORAGE_UNAVAILABLE", message: "Photo storage requires R2" } });
+    app.use("/uploads", async (request, response) => {
+      if (request.method !== "GET" && request.method !== "HEAD") {
+        response.status(405).set("allow", "GET, HEAD").send();
+        return;
+      }
+      const key = request.path.replace(/^\/+/, "");
+      if (!key || key.includes("..") || key.includes("\\")) {
+        response.status(400).json({ error: { code: "INVALID_PATH", message: "Invalid photo path" } });
+        return;
+      }
+      const photo = await readStoredPhoto(key);
+      if (!photo) {
+        response.status(404).json({ error: { code: "NOT_FOUND", message: "Photo not found" } });
+        return;
+      }
+      response.set({
+        "cache-control": "public, max-age=31536000, immutable",
+        "content-length": String(photo.body.byteLength),
+        "content-type": photo.contentType,
+        ...(photo.etag && { etag: photo.etag }),
+      });
+      response.status(200).send(request.method === "HEAD" ? undefined : Buffer.from(photo.body));
     });
   }
 

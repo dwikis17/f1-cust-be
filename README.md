@@ -17,7 +17,7 @@ npm run dev
 
 For non-interactive local setup or automation, provide `ADMIN_EMAIL`, `ADMIN_DISPLAY_NAME`, and `ADMIN_PASSWORD` when running `npm run admin:create`.
 
-The API starts at `http://localhost:3000`. PostgreSQL is available only on `127.0.0.1:5432`. Uploaded images are stored under `uploads/` and served from `/uploads/<filename>`.
+The API starts at `http://localhost:3000`. PostgreSQL is available only on `127.0.0.1:5432`. Local Worker development writes product photos to the remote `f1-bucket` R2 bucket under `development/`, so Wrangler must be logged in; deployed Workers use `production/`. Run `npm run dev:node` only when you explicitly want filesystem uploads under `uploads/`.
 
 Useful commands:
 
@@ -99,4 +99,4 @@ npm run worker:dry-run
 npm run worker:deploy
 ```
 
-Apply Prisma migrations to the production database separately with `npm run db:deploy` before deploying. Product photo upload and `/uploads` serving return `501` in the Worker until local filesystem storage is replaced with R2.
+Apply Prisma migrations to the production database separately with `npm run db:deploy` before deploying. Product photo upload and `/uploads` serving use the `PHOTO_BUCKET` R2 binding.

@@ -13,7 +13,15 @@
   "hyperdrive": [
     {
       "binding": "HYPERDRIVE",
-      "id": "dc41a0198dc848fb8179a4b6d72d0473"
+      "id": "dc41a0198dc848fb8179a4b6d72d0473",
+      "localConnectionString": "postgresql://f1:f1@localhost:5432/f1_store"
+    }
+  ],
+  "r2_buckets": [
+    {
+      "binding": "PHOTO_BUCKET",
+      "bucket_name": "f1-bucket",
+      "remote": true
     }
   ],
   "observability": {

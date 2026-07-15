@@ -38,7 +38,7 @@ before(async () => {
 after(async () => prisma.$disconnect());
 
 test("health and admin authentication", async () => {
-  await request(app).get("/health").expect(200, { status: "okk" });
+  await request(app).get("/health").expect(200, { status: "ok" });
   await request(app).post("/api/admin/auth/login")
     .send({ email: "admin@example.com", password: "wrong-password" }).expect(401);
   const login = await request(app).post("/api/admin/auth/login")
