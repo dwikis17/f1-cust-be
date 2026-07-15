@@ -2,6 +2,7 @@ import { Router } from "express";
 import { z } from "zod";
 import { prisma } from "./db.js";
 import { notFound, parse } from "./http.js";
+import { slugSchema } from "./schemas.js";
 
 const router = Router();
 const listQuerySchema = z.object({
@@ -10,12 +11,16 @@ const listQuerySchema = z.object({
   search: z.string().trim().max(100).optional(),
   category: z.string().trim().max(100).optional(),
   tag: z.string().trim().max(100).optional(),
+  team: z.string().trim().max(100).optional(),
+  driver: z.string().trim().max(100).optional(),
   size: z.string().trim().max(40).optional(),
   color: z.string().trim().max(60).optional(),
 }).strict();
 
 const productInclude = {
   category: true,
+  team: true,
+  driver: true,
   tags: { include: { tag: true } },
   variants: { orderBy: [{ color: "asc" as const }, { size: "asc" as const }] },
   photos: { orderBy: [{ position: "asc" as const }, { createdAt: "asc" as const }] },
@@ -30,6 +35,8 @@ function publicProduct(product: Awaited<ReturnType<typeof prisma.product.findFir
     description: value.description,
     priceIdr: value.priceIdr,
     category: value.category,
+    team: value.team,
+    driver: value.driver,
     tags: value.tags.map(({ tag }: any) => tag),
     variants: value.variants.map(({ stockQuantity, ...variant }: any) => ({ ...variant, available: stockQuantity > 0 })),
     photos: value.photos.map((photo: any) => ({ ...photo, url: `/uploads/${photo.path}` })),
@@ -46,6 +53,19 @@ router.get("/tags", async (_request, response) => {
   response.json(await prisma.tag.findMany({ orderBy: { name: "asc" } }));
 });
 
+router.get("/teams", async (_request, response) => {
+  response.json(await prisma.team.findMany({ orderBy: { name: "asc" } }));
+});
+
+router.get("/drivers", async (request, response) => {
+  const query = parse(z.object({ team: slugSchema.optional() }).strict(), request.query);
+  response.json(await prisma.driver.findMany({
+    where: query.team ? { team: { slug: query.team } } : undefined,
+    include: { team: true },
+    orderBy: { name: "asc" },
+  }));
+});
+
 router.get("/products", async (request, response) => {
   const query = parse(listQuerySchema, request.query);
   const where = {
@@ -58,6 +78,8 @@ router.get("/products", async (request, response) => {
     }),
     ...(query.category && { category: { slug: query.category } }),
     ...(query.tag && { tags: { some: { tag: { slug: query.tag } } } }),
+    ...(query.team && { team: { slug: query.team } }),
+    ...(query.driver && { driver: { slug: query.driver } }),
     ...((query.size || query.color) && {
       variants: { some: { ...(query.size && { size: query.size }), ...(query.color && { color: query.color }) } },
     }),

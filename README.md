@@ -11,6 +11,7 @@ cp .env.example .env
 npm install
 npm run db:up
 npm run db:migrate
+npm run db:seed
 npm run admin:create
 npm run dev
 ```
@@ -23,6 +24,7 @@ Useful commands:
 
 ```sh
 npm run db:studio    # inspect local data
+npm run db:seed      # upsert the official 2026 F1 teams and drivers
 npm run db:deploy    # apply committed migrations
 npm run build        # generate Prisma Client and compile TypeScript
 npm test             # migrate the isolated test DB and run integration tests
@@ -36,7 +38,9 @@ Public endpoints:
 - `GET /health`
 - `GET /api/categories`
 - `GET /api/tags`
-- `GET /api/products?page=1&limit=20&search=&category=&tag=&size=&color=`
+- `GET /api/teams`
+- `GET /api/drivers?team=<team-slug>`
+- `GET /api/products?page=1&limit=20&search=&category=&tag=&team=&driver=&size=&color=`
 - `GET /api/products/:slug`
 
 Admin authentication:
@@ -51,6 +55,10 @@ Send the login token as `Authorization: Bearer <token>` for all remaining admin 
 - `PATCH|DELETE /api/admin/categories/:id`
 - `GET|POST /api/admin/tags`
 - `PATCH|DELETE /api/admin/tags/:id`
+- `GET|POST /api/admin/teams`
+- `PATCH|DELETE /api/admin/teams/:id`
+- `GET|POST /api/admin/drivers`
+- `PATCH|DELETE /api/admin/drivers/:id`
 - `GET|POST /api/admin/products`
 - `GET|PATCH /api/admin/products/:id`
 - `POST /api/admin/products/:productId/variants`
@@ -59,6 +67,8 @@ Send the login token as `Authorization: Bearer <token>` for all remaining admin 
 - `PATCH|DELETE /api/admin/products/:productId/photos/:id`
 
 Products are removed from the storefront by setting `status` to `ARCHIVED`; there is intentionally no destructive product-delete endpoint.
+Product create and update payloads accept nullable `teamId` and `driverId`. Assigning a driver requires its current team, while unassigned products remain valid for general merchandise and backwards compatibility. Driver payloads use `{ name, slug, racingNumber, teamId }`, with unique racing numbers from 1 through 99. Driver transfers do not rewrite historical product team assignments.
+Team and driver payloads also expose nullable `logoUrl` and `photoUrl`. The idempotent seed uses the official 2026 roster, numbers, and media assets published by Formula 1.
 
 ### Example login
 

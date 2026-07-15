@@ -11,10 +11,14 @@ import { createSessionToken, hashToken, verifyPassword } from "./security.js";
 import {
   catalogEntityPatchSchema,
   catalogEntitySchema,
+  driverPatchSchema,
+  driverSchema,
   idSchema,
   photoPatchSchema,
   productPatchSchema,
   productSchema,
+  teamPatchSchema,
+  teamSchema,
   variantPatchSchema,
   variantSchema,
 } from "./schemas.js";
@@ -26,10 +30,22 @@ const loginSchema = z.object({ email: z.string().trim().email().max(254), passwo
 const loginAttempts = new Map<string, { count: number; resetAt: number }>();
 const productInclude = {
   category: true,
+  team: true,
+  driver: true,
   tags: { include: { tag: true } },
   variants: { orderBy: [{ color: "asc" as const }, { size: "asc" as const }] },
   photos: { orderBy: [{ position: "asc" as const }, { createdAt: "asc" as const }] },
 };
+
+async function validateProductTeamDriver(teamId?: string | null, driverId?: string | null) {
+  if (!driverId) return;
+  if (!teamId) throw new HttpError(400, "DRIVER_REQUIRES_TEAM", "A driver product must also have a team");
+  const driver = await prisma.driver.findUnique({ where: { id: driverId }, select: { teamId: true } });
+  if (!driver) throw new HttpError(400, "UNKNOWN_DRIVER", "Driver does not exist");
+  if (driver.teamId !== teamId) {
+    throw new HttpError(400, "DRIVER_TEAM_MISMATCH", "Driver must belong to the product team when assigned");
+  }
+}
 
 function checkLoginRate(ip: string) {
   const now = Date.now();
@@ -95,6 +111,36 @@ router.delete("/tags/:id", async (request, response) => {
   response.status(204).send();
 });
 
+router.get("/teams", async (_request, response) => response.json(await prisma.team.findMany({ orderBy: { name: "asc" } })));
+router.post("/teams", async (request, response) => {
+  response.status(201).json(await prisma.team.create({ data: parse(teamSchema, request.body) }));
+});
+router.patch("/teams/:id", async (request, response) => {
+  response.json(await prisma.team.update({ where: { id: parse(idSchema, request.params.id) }, data: parse(teamPatchSchema, request.body) }));
+});
+router.delete("/teams/:id", async (request, response) => {
+  await prisma.team.delete({ where: { id: parse(idSchema, request.params.id) } });
+  response.status(204).send();
+});
+
+router.get("/drivers", async (_request, response) => {
+  response.json(await prisma.driver.findMany({ include: { team: true }, orderBy: { name: "asc" } }));
+});
+router.post("/drivers", async (request, response) => {
+  response.status(201).json(await prisma.driver.create({ data: parse(driverSchema, request.body), include: { team: true } }));
+});
+router.patch("/drivers/:id", async (request, response) => {
+  response.json(await prisma.driver.update({
+    where: { id: parse(idSchema, request.params.id) },
+    data: parse(driverPatchSchema, request.body),
+    include: { team: true },
+  }));
+});
+router.delete("/drivers/:id", async (request, response) => {
+  await prisma.driver.delete({ where: { id: parse(idSchema, request.params.id) } });
+  response.status(204).send();
+});
+
 router.get("/products", async (_request, response) => {
   response.json(await prisma.product.findMany({ include: productInclude, orderBy: { createdAt: "desc" } }));
 });
@@ -108,6 +154,7 @@ router.get("/products/:id", async (request, response) => {
 router.post("/products", async (request, response) => {
   const input = parse(productSchema, request.body);
   const { tagIds, variants, ...product } = input;
+  await validateProductTeamDriver(product.teamId, product.driverId);
   const created = await prisma.product.create({
     data: {
       ...product,
@@ -123,6 +170,14 @@ router.patch("/products/:id", async (request, response) => {
   const id = parse(idSchema, request.params.id);
   const input = parse(productPatchSchema, request.body);
   const { tagIds, ...product } = input;
+  if (product.teamId !== undefined || product.driverId !== undefined) {
+    const current = await prisma.product.findUnique({ where: { id }, select: { teamId: true, driverId: true } });
+    if (!current) notFound("Product not found");
+    await validateProductTeamDriver(
+      product.teamId === undefined ? current.teamId : product.teamId,
+      product.driverId === undefined ? current.driverId : product.driverId,
+    );
+  }
   const uniqueTagIds = tagIds ? [...new Set(tagIds)] : undefined;
   if (uniqueTagIds && await prisma.tag.count({ where: { id: { in: uniqueTagIds } } }) !== uniqueTagIds.length) {
     throw new HttpError(400, "UNKNOWN_TAG", "Every tag must exist before it can be assigned");
