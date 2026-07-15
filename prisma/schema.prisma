@@ -1,0 +1,122 @@
+generator client {
+  provider = "prisma-client"
+  output   = "../src/generated/prisma"
+}
+
+datasource db {
+  provider = "postgresql"
+}
+
+enum ProductStatus {
+  DRAFT
+  ACTIVE
+  ARCHIVED
+}
+
+model Admin {
+  id           String         @id @default(uuid()) @db.Uuid
+  email        String         @unique
+  displayName  String
+  passwordSalt String
+  passwordHash String
+  active       Boolean        @default(true)
+  sessions     AdminSession[]
+  createdAt    DateTime       @default(now())
+  updatedAt    DateTime       @updatedAt
+}
+
+model AdminSession {
+  id        String   @id @default(uuid()) @db.Uuid
+  tokenHash String   @unique
+  expiresAt DateTime
+  adminId   String   @db.Uuid
+  admin     Admin    @relation(fields: [adminId], references: [id], onDelete: Cascade)
+  createdAt DateTime @default(now())
+
+  @@index([adminId])
+  @@index([expiresAt])
+}
+
+model Category {
+  id        String    @id @default(uuid()) @db.Uuid
+  name      String    @unique
+  slug      String    @unique
+  products  Product[]
+  createdAt DateTime  @default(now())
+  updatedAt DateTime  @updatedAt
+}
+
+model Tag {
+  id        String       @id @default(uuid()) @db.Uuid
+  name      String       @unique
+  slug      String       @unique
+  products  ProductTag[]
+  createdAt DateTime     @default(now())
+  updatedAt DateTime     @updatedAt
+}
+
+model Product {
+  id          String          @id @default(uuid()) @db.Uuid
+  name        String
+  slug        String          @unique
+  description String          @default("")
+  priceIdr    Int
+  status      ProductStatus   @default(DRAFT)
+  categoryId  String          @db.Uuid
+  category    Category        @relation(fields: [categoryId], references: [id], onDelete: Restrict)
+  tags        ProductTag[]
+  variants    ProductVariant[]
+  photos      ProductPhoto[]
+  createdAt   DateTime        @default(now())
+  updatedAt   DateTime        @updatedAt
+
+  @@index([categoryId])
+  @@index([status])
+  @@index([createdAt])
+}
+
+model ProductTag {
+  productId String  @db.Uuid
+  tagId     String  @db.Uuid
+  product   Product @relation(fields: [productId], references: [id], onDelete: Cascade)
+  tag       Tag     @relation(fields: [tagId], references: [id], onDelete: Cascade)
+
+  @@id([productId, tagId])
+  @@index([tagId])
+}
+
+model ProductVariant {
+  id              String   @id @default(uuid()) @db.Uuid
+  productId       String   @db.Uuid
+  product         Product  @relation(fields: [productId], references: [id], onDelete: Cascade)
+  sku             String   @unique
+  size            String
+  color           String
+  stockQuantity   Int      @default(0)
+  packageLengthMm Int
+  packageWidthMm  Int
+  packageHeightMm Int
+  packageWeightG  Int
+  sizingGuide     Json
+  createdAt       DateTime @default(now())
+  updatedAt       DateTime @updatedAt
+
+  @@unique([productId, size, color])
+  @@index([productId])
+  @@index([size])
+  @@index([color])
+}
+
+model ProductPhoto {
+  id        String   @id @default(uuid()) @db.Uuid
+  productId String   @db.Uuid
+  product   Product  @relation(fields: [productId], references: [id], onDelete: Cascade)
+  color     String?
+  path      String   @unique
+  altText   String
+  position  Int      @default(0)
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  @@index([productId, position])
+}
