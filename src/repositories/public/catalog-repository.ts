@@ -11,4 +11,20 @@ export class PublicCatalogRepository {
       orderBy: { name: "asc" },
     });
   }
+  static listCollections() {
+    return prisma.collection.findMany({
+      where: { active: true },
+      orderBy: [{ position: "asc" }, { name: "asc" }],
+    });
+  }
+  static findCollection(slug: string) {
+    return prisma.collection.findFirst({
+      where: { slug, active: true },
+      include: {
+        parent: true,
+        children: { where: { active: true }, orderBy: [{ position: "asc" }, { name: "asc" }] },
+        _count: { select: { products: { where: { product: { status: "ACTIVE" } } } } },
+      },
+    });
+  }
 }

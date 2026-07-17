@@ -34,6 +34,13 @@ router.post("/drivers", CatalogController.createDriver);
 router.patch("/drivers/:id", CatalogController.updateDriver);
 router.delete("/drivers/:id", CatalogController.deleteDriver);
 
+router.get("/collections", CatalogController.listCollections);
+router.get("/collections/:id", CatalogController.findCollection);
+router.post("/collections", CatalogController.createCollection);
+router.patch("/collections/:id", CatalogController.updateCollection);
+router.put("/collections/:id/products", CatalogController.replaceCollectionProducts);
+router.delete("/collections/:id", CatalogController.deleteCollection);
+
 router.get("/products", ProductController.listProducts);
 router.get("/products/:id", ProductController.findProduct);
 router.post("/products", ProductController.createProduct);

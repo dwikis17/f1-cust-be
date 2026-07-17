@@ -20,6 +20,23 @@ enum ProductStatus {
   ARCHIVED
 }
 
+enum ProductAudience {
+  MEN
+  WOMEN
+  KIDS
+  UNISEX
+}
+
+enum CollectionKind {
+  DOMAIN
+  TEAM
+  DRIVER
+  MERCHANDISE
+  BRAND
+  PROMOTION
+  MANUAL
+}
+
 model Admin {
   id           String         @id @default(uuid()) @db.Uuid
   email        String         @unique
@@ -79,9 +96,9 @@ model Driver {
   slug         String    @unique
   racingNumber Int       @unique
   photoUrl     String?
-  teamId       String    @db.Uuid
-  team         Team      @relation(fields: [teamId], references: [id], onDelete: Restrict)
-  products     Product[]
+  teamId       String?   @db.Uuid
+  team         Team?     @relation(fields: [teamId], references: [id], onDelete: Restrict)
+  products     ProductDriver[]
   createdAt    DateTime  @default(now())
   updatedAt    DateTime  @updatedAt
 
@@ -99,8 +116,9 @@ model Product {
   category    Category         @relation(fields: [categoryId], references: [id], onDelete: Restrict)
   teamId      String?          @db.Uuid
   team        Team?            @relation(fields: [teamId], references: [id], onDelete: Restrict)
-  driverId    String?          @db.Uuid
-  driver      Driver?          @relation(fields: [driverId], references: [id], onDelete: Restrict)
+  audience    ProductAudience?
+  drivers     ProductDriver[]
+  collections ProductCollection[]
   tags        ProductTag[]
   variants    ProductVariant[]
   photos      ProductPhoto[]
@@ -109,9 +127,51 @@ model Product {
 
   @@index([categoryId])
   @@index([teamId])
-  @@index([driverId])
+  @@index([audience])
   @@index([status])
   @@index([createdAt])
+}
+
+model ProductDriver {
+  productId String  @db.Uuid
+  driverId  String  @db.Uuid
+  product   Product @relation(fields: [productId], references: [id], onDelete: Cascade)
+  driver    Driver  @relation(fields: [driverId], references: [id], onDelete: Restrict)
+
+  @@id([productId, driverId])
+  @@index([driverId])
+}
+
+model Collection {
+  id          String              @id @default(uuid()) @db.Uuid
+  name        String
+  slug        String              @unique
+  kind        CollectionKind
+  parentId    String?             @db.Uuid
+  parent      Collection?         @relation("CollectionTree", fields: [parentId], references: [id], onDelete: Restrict)
+  children    Collection[]        @relation("CollectionTree")
+  imageUrl    String?
+  description String              @default("")
+  position    Int                 @default(0)
+  active      Boolean             @default(true)
+  products    ProductCollection[]
+  createdAt   DateTime            @default(now())
+  updatedAt   DateTime            @updatedAt
+
+  @@index([parentId, position])
+  @@index([kind, active])
+}
+
+model ProductCollection {
+  productId   String     @db.Uuid
+  collectionId String   @db.Uuid
+  product     Product    @relation(fields: [productId], references: [id], onDelete: Cascade)
+  collection  Collection @relation(fields: [collectionId], references: [id], onDelete: Cascade)
+  position    Int?
+  featured    Boolean    @default(false)
+
+  @@id([productId, collectionId])
+  @@index([collectionId, position])
 }
 
 model ProductTag {
@@ -129,18 +189,17 @@ model ProductVariant {
   productId       String   @db.Uuid
   product         Product  @relation(fields: [productId], references: [id], onDelete: Cascade)
   sku             String   @unique
-  size            String
-  color           String
+  size            String?
+  color           String?
   stockQuantity   Int      @default(0)
   packageLengthMm Int
   packageWidthMm  Int
   packageHeightMm Int
   packageWeightG  Int
-  sizingGuide     Json
+  sizingGuide     Json?
   createdAt       DateTime @default(now())
   updatedAt       DateTime @updatedAt
 
-  @@unique([productId, size, color])
   @@index([productId])
   @@index([size])
   @@index([color])

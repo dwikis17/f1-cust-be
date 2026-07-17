@@ -1,9 +1,12 @@
 import type { z } from "zod";
-import { notFound } from "../../http.js";
+import { HttpError, notFound } from "../../http.js";
 import { CatalogRepository } from "../../repositories/admin/catalog-repository.js";
 import type {
   catalogEntityPatchSchema,
   catalogEntitySchema,
+  collectionMembershipSchema,
+  collectionPatchSchema,
+  collectionSchema,
   driverPatchSchema,
   driverSchema,
   teamPatchSchema,
@@ -16,6 +19,9 @@ type TeamInput = z.infer<typeof teamSchema>;
 type TeamPatch = z.infer<typeof teamPatchSchema>;
 type DriverInput = z.infer<typeof driverSchema>;
 type DriverPatch = z.infer<typeof driverPatchSchema>;
+type CollectionInput = z.infer<typeof collectionSchema>;
+type CollectionPatch = z.infer<typeof collectionPatchSchema>;
+type CollectionMembership = z.infer<typeof collectionMembershipSchema>;
 
 export class CatalogService {
   private static async deleteManagedImage(url?: string | null) {
@@ -54,5 +60,60 @@ export class CatalogService {
     if (!driver) notFound("Driver not found");
     await CatalogRepository.deleteDriver(id);
     await CatalogService.deleteManagedImage(driver.photoUrl);
+  }
+
+  private static async validateCollectionParent(id: string | undefined, parentId: string | null | undefined) {
+    if (!parentId) return;
+    if (id === parentId) throw new HttpError(400, "COLLECTION_CYCLE", "A collection cannot be its own parent");
+    const hierarchy = await CatalogRepository.listCollectionHierarchy();
+    const parents = new Map(hierarchy.map((collection) => [collection.id, collection.parentId]));
+    if (!parents.has(parentId)) throw new HttpError(400, "UNKNOWN_COLLECTION_PARENT", "Parent collection does not exist");
+    let cursor: string | null | undefined = parentId;
+    while (cursor) {
+      if (cursor === id) throw new HttpError(400, "COLLECTION_CYCLE", "Collection hierarchy cannot contain a cycle");
+      cursor = parents.get(cursor);
+    }
+  }
+
+  static listCollections() { return CatalogRepository.listCollections(); }
+  static async findCollection(id: string) {
+    const collection = await CatalogRepository.findCollection(id);
+    if (!collection) notFound("Collection not found");
+    return collection;
+  }
+  static async createCollection(input: CollectionInput) {
+    await CatalogService.validateCollectionParent(undefined, input.parentId);
+    return CatalogRepository.createCollection(input);
+  }
+  static async updateCollection(id: string, input: CollectionPatch) {
+    const current = await CatalogRepository.findCollection(id);
+    if (!current) notFound("Collection not found");
+    if (input.parentId !== undefined) await CatalogService.validateCollectionParent(id, input.parentId);
+    if (current.active && input.active === false && await CatalogRepository.countActiveProductsDependingOnCollection(id)) {
+      throw new HttpError(
+        409,
+        "ACTIVE_COLLECTION_REQUIRED",
+        "Move active products to another active collection before hiding this collection",
+      );
+    }
+    return CatalogRepository.updateCollection(id, input);
+  }
+  static async deleteCollection(id: string) {
+    const collection = await CatalogRepository.findCollection(id);
+    if (!collection) notFound("Collection not found");
+    if (collection._count.children > 0 || collection._count.products > 0) {
+      throw new HttpError(409, "COLLECTION_IN_USE", "Remove child collections and product memberships before deletion");
+    }
+    await CatalogRepository.deleteCollection(id);
+    await CatalogService.deleteManagedImage(collection.imageUrl);
+  }
+  static async replaceCollectionProducts(id: string, input: CollectionMembership) {
+    if (!await CatalogRepository.findCollection(id)) notFound("Collection not found");
+    const productIds = [...new Set(input.productIds)];
+    const featuredProductIds = [...new Set(input.featuredProductIds)];
+    if (await CatalogRepository.countProducts(productIds) !== productIds.length) {
+      throw new HttpError(400, "UNKNOWN_PRODUCT", "Every product must exist before it can be assigned");
+    }
+    return CatalogRepository.replaceCollectionProducts(id, productIds, featuredProductIds);
   }
 }

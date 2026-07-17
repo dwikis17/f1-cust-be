@@ -54,21 +54,148 @@ const teams = [
 ] as const;
 
 async function main() {
-  for (const team of teams) {
+  const teamIds = new Map<string, string>();
+  const driverIds = new Map<string, string>();
+  const teamCollectionIds = new Map<string, string>();
+  const driverCollectionIds = new Map<string, string>();
+  const formulaOne = await prisma.collection.upsert({
+    where: { slug: "formula-1" },
+    create: { name: "Formula 1", slug: "formula-1", kind: "DOMAIN", position: 0 },
+    update: { name: "Formula 1", kind: "DOMAIN", position: 0, active: true },
+  });
+  const driversCollection = await prisma.collection.upsert({
+    where: { slug: "drivers" },
+    create: { name: "Drivers", slug: "drivers", kind: "DOMAIN", position: 1 },
+    update: { name: "Drivers", kind: "DOMAIN", position: 1, active: true },
+  });
+
+  for (const [teamPosition, team] of teams.entries()) {
     const savedTeam = await prisma.team.upsert({
       where: { slug: team.slug },
       create: { name: team.name, slug: team.slug, logoUrl: logoUrl(team.asset) },
       update: { name: team.name, logoUrl: logoUrl(team.asset) },
     });
-    for (const [name, slug, racingNumber, asset] of team.drivers) {
-      await prisma.driver.upsert({
+    teamIds.set(team.slug, savedTeam.id);
+    const teamCollection = await prisma.collection.upsert({
+      where: { slug: team.slug },
+      create: {
+        name: team.name,
+        slug: team.slug,
+        kind: "TEAM",
+        parentId: formulaOne.id,
+        imageUrl: logoUrl(team.asset),
+        position: teamPosition,
+      },
+      update: {
+        name: team.name,
+        kind: "TEAM",
+        parentId: formulaOne.id,
+        imageUrl: logoUrl(team.asset),
+        position: teamPosition,
+        active: true,
+      },
+    });
+    teamCollectionIds.set(team.slug, teamCollection.id);
+    for (const [driverPosition, [name, slug, racingNumber, asset]] of team.drivers.entries()) {
+      const savedDriver = await prisma.driver.upsert({
         where: { slug },
         create: { name, slug, racingNumber, photoUrl: photoUrl(team.asset, asset), teamId: savedTeam.id },
         update: { name, racingNumber, photoUrl: photoUrl(team.asset, asset), teamId: savedTeam.id },
       });
+      driverIds.set(slug, savedDriver.id);
+      const driverCollection = await prisma.collection.upsert({
+        where: { slug },
+        create: {
+          name,
+          slug,
+          kind: "DRIVER",
+          parentId: driversCollection.id,
+          imageUrl: photoUrl(team.asset, asset),
+          position: teamPosition * 10 + driverPosition,
+        },
+        update: {
+          name,
+          kind: "DRIVER",
+          parentId: driversCollection.id,
+          imageUrl: photoUrl(team.asset, asset),
+          position: teamPosition * 10 + driverPosition,
+          active: true,
+        },
+      });
+      driverCollectionIds.set(slug, driverCollection.id);
     }
   }
-  console.log(`Seeded ${teams.length} teams and ${teams.reduce((total, team) => total + team.drivers.length, 0)} drivers`);
+
+  const headwear = await prisma.category.upsert({
+    where: { slug: "headwear" },
+    create: { name: "Headwear", slug: "headwear" },
+    update: { name: "Headwear" },
+  });
+  const cap = await prisma.product.upsert({
+    where: { slug: "mclaren-shared-driver-cap" },
+    create: {
+      name: "McLaren Shared Driver Cap",
+      slug: "mclaren-shared-driver-cap",
+      description: "An optionless cap related to both current McLaren drivers.",
+      priceIdr: 949_000,
+      status: "ACTIVE",
+      categoryId: headwear.id,
+      teamId: teamIds.get("mclaren"),
+      audience: "UNISEX",
+    },
+    update: {
+      name: "McLaren Shared Driver Cap",
+      description: "An optionless cap related to both current McLaren drivers.",
+      priceIdr: 949_000,
+      status: "ACTIVE",
+      categoryId: headwear.id,
+      teamId: teamIds.get("mclaren"),
+      audience: "UNISEX",
+    },
+  });
+  await prisma.productVariant.upsert({
+    where: { sku: "MCL-SHARED-CAP-DEFAULT" },
+    create: {
+      productId: cap.id,
+      sku: "MCL-SHARED-CAP-DEFAULT",
+      stockQuantity: 25,
+      packageLengthMm: 250,
+      packageWidthMm: 200,
+      packageHeightMm: 120,
+      packageWeightG: 220,
+    },
+    update: {
+      productId: cap.id,
+      size: null,
+      color: null,
+      stockQuantity: 25,
+      packageLengthMm: 250,
+      packageWidthMm: 200,
+      packageHeightMm: 120,
+      packageWeightG: 220,
+    },
+  });
+  const capDriverIds = [driverIds.get("lando-norris"), driverIds.get("oscar-piastri")].filter(
+    (id): id is string => Boolean(id),
+  );
+  const capCollectionIds = [
+    formulaOne.id,
+    driversCollection.id,
+    teamCollectionIds.get("mclaren"),
+    driverCollectionIds.get("lando-norris"),
+    driverCollectionIds.get("oscar-piastri"),
+  ].filter((id): id is string => Boolean(id));
+  await prisma.$transaction([
+    prisma.productDriver.deleteMany({ where: { productId: cap.id } }),
+    prisma.productCollection.deleteMany({ where: { productId: cap.id } }),
+    prisma.productDriver.createMany({ data: capDriverIds.map((driverId) => ({ productId: cap.id, driverId })) }),
+    prisma.productCollection.createMany({
+      data: capCollectionIds.map((collectionId, position) => ({ productId: cap.id, collectionId, position })),
+    }),
+  ]);
+  console.log(
+    `Seeded ${teams.length} teams, ${teams.reduce((total, team) => total + team.drivers.length, 0)} drivers, their collections, and a multi-driver optionless product`,
+  );
 }
 
 main().catch((error) => {

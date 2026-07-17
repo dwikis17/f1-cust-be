@@ -18,13 +18,21 @@ let categoryId = "";
 let teamId = "";
 let secondTeamId = "";
 let driverId = "";
+let historicalDriverId = "";
+let ferrariCollectionId = "";
+let driverCollectionId = "";
+let historicalDriverCollectionId = "";
 
 before(async () => {
   assert.match(config.databaseUrl, /f1_store_test/, "Tests must use the test database");
   await prisma.productPhoto.deleteMany();
   await prisma.productVariant.deleteMany();
   await prisma.productTag.deleteMany();
+  await prisma.productDriver.deleteMany();
+  await prisma.productCollection.deleteMany();
   await prisma.product.deleteMany();
+  await prisma.collection.deleteMany({ where: { parentId: { not: null } } });
+  await prisma.collection.deleteMany();
   await prisma.driver.deleteMany();
   await prisma.team.deleteMany();
   await prisma.category.deleteMany();
@@ -71,28 +79,38 @@ test("admin creates catalog data and public API hides drafts", async () => {
       teamId,
     }).expect(201);
   driverId = driver.body.id;
+  const historicalDriver = await request(app).post("/api/admin/drivers").set("authorization", `Bearer ${token}`)
+    .send({ name: "Niki Lauda", slug: "niki-lauda", racingNumber: 12, teamId: null }).expect(201);
+  historicalDriverId = historicalDriver.body.id;
   const category = await request(app).post("/api/admin/categories").set("authorization", `Bearer ${token}`)
     .send({ name: "Jerseys", slug: "jerseys" }).expect(201);
   categoryId = category.body.id;
   const tag = await request(app).post("/api/admin/tags").set("authorization", `Bearer ${token}`)
-    .send({ name: "Ferrari", slug: "ferrari" }).expect(201);
-  await request(app).post("/api/admin/products").set("authorization", `Bearer ${token}`)
+    .send({ name: "Limited Edition", slug: "limited-edition" }).expect(201);
+  const formulaOne = await request(app).post("/api/admin/collections").set("authorization", `Bearer ${token}`)
+    .send({ name: "Formula 1", slug: "formula-1", kind: "DOMAIN", position: 0 }).expect(201);
+  const drivers = await request(app).post("/api/admin/collections").set("authorization", `Bearer ${token}`)
+    .send({ name: "Drivers", slug: "drivers", kind: "DOMAIN", position: 1 }).expect(201);
+  const ferrariCollection = await request(app).post("/api/admin/collections").set("authorization", `Bearer ${token}`)
+    .send({ name: "Ferrari", slug: "ferrari", kind: "TEAM", parentId: formulaOne.body.id }).expect(201);
+  ferrariCollectionId = ferrariCollection.body.id;
+  const driverCollection = await request(app).post("/api/admin/collections").set("authorization", `Bearer ${token}`)
+    .send({ name: "Charles Leclerc", slug: "charles-leclerc", kind: "DRIVER", parentId: drivers.body.id }).expect(201);
+  driverCollectionId = driverCollection.body.id;
+  const historicalDriverCollection = await request(app).post("/api/admin/collections")
+    .set("authorization", `Bearer ${token}`)
+    .send({ name: "Niki Lauda", slug: "niki-lauda", kind: "DRIVER", parentId: drivers.body.id }).expect(201);
+  historicalDriverCollectionId = historicalDriverCollection.body.id;
+  const crossTeamProduct = await request(app).post("/api/admin/products").set("authorization", `Bearer ${token}`)
     .send({
-      name: "Invalid Driver Product",
-      slug: "invalid-driver-product",
+      name: "Historic Driver Product",
+      slug: "historic-driver-product",
       priceIdr: 1,
       categoryId,
       teamId: secondTeamId,
-      driverId,
-    }).expect(400);
-  await request(app).post("/api/admin/products").set("authorization", `Bearer ${token}`)
-    .send({
-      name: "Driver Without Team",
-      slug: "driver-without-team",
-      priceIdr: 1,
-      categoryId,
-      driverId,
-    }).expect(400);
+      driverIds: [driverId, historicalDriverId],
+    }).expect(201);
+  assert.equal(crossTeamProduct.body.drivers.length, 2);
   const product = await request(app).post("/api/admin/products").set("authorization", `Bearer ${token}`)
     .send({
       name: "Ferrari Team Jersey",
@@ -101,7 +119,9 @@ test("admin creates catalog data and public API hides drafts", async () => {
       priceIdr: 1_250_000,
       categoryId,
       teamId,
-      driverId,
+      driverIds: [driverId, historicalDriverId],
+      collectionIds: [ferrariCollectionId, driverCollectionId, historicalDriverCollectionId],
+      audience: "UNISEX",
       tagIds: [tag.body.id],
       variants: [{
         sku: "FER-JER-RED-M",
@@ -117,15 +137,14 @@ test("admin creates catalog data and public API hides drafts", async () => {
     }).expect(201);
   productId = product.body.id;
   assert.equal(product.body.team.slug, "ferrari");
-  assert.equal(product.body.driver.slug, "charles-leclerc");
-  await request(app).patch(`/api/admin/products/${productId}`).set("authorization", `Bearer ${token}`)
-    .send({ teamId: secondTeamId }).expect(400);
+  assert.deepEqual(product.body.drivers.map((driver: { slug: string }) => driver.slug), ["charles-leclerc", "niki-lauda"]);
+  assert.equal(product.body.collections.length, 3);
   const unassigned = await request(app).post("/api/admin/products").set("authorization", `Bearer ${token}`)
     .send({ name: "General F1 Cap", slug: "general-f1-cap", priceIdr: 300_000, categoryId }).expect(201);
   assert.equal(unassigned.body.team, null);
-  assert.equal(unassigned.body.driver, null);
+  assert.deepEqual(unassigned.body.drivers, []);
   const hidden = await request(app)
-    .get("/api/products?category=jerseys&tag=ferrari&team=ferrari&driver=charles-leclerc")
+    .get("/api/products?productType=jerseys&tag=limited-edition&team=ferrari&driver=charles-leclerc")
     .expect(200);
   assert.equal(hidden.body.total, 0);
   await request(app).get("/api/products/ferrari-team-jersey").expect(404);
@@ -189,17 +208,121 @@ test("active products are filterable without exposing exact stock", async () => 
   assert.equal(response.body.total, 1);
   assert.equal(response.body.data[0].priceIdr, 1_250_000);
   assert.equal(response.body.data[0].team.slug, "ferrari");
-  assert.equal(response.body.data[0].driver.slug, "charles-leclerc");
+  assert.deepEqual(
+    response.body.data[0].drivers.map((driver: { slug: string }) => driver.slug),
+    ["charles-leclerc", "niki-lauda"],
+  );
+  assert.equal(response.body.data[0].audience, "UNISEX");
   assert.equal(response.body.data[0].variants[0].available, true);
   assert.equal(response.body.data[0].variants[0].stockQuantity, undefined);
   const wrongTeam = await request(app).get("/api/products?team=mercedes&driver=charles-leclerc").expect(200);
   assert.equal(wrongTeam.body.total, 0);
+  const eitherDriver = await request(app).get("/api/products?driver=charles-leclerc,niki-lauda").expect(200);
+  assert.equal(eitherDriver.body.total, 1);
+  const multiFacetOr = await request(app)
+    .get("/api/products?team=ferrari,mercedes&driver=charles-leclerc,niki-lauda&productType=jerseys&audience=MEN,UNISEX")
+    .expect(200);
+  assert.equal(multiFacetOr.body.total, 1);
   await request(app).post(`/api/admin/products/${productId}/variants`).set("authorization", `Bearer ${token}`)
     .send({
       sku: "INVALID", size: "L", color: "Red", stockQuantity: -1,
       packageLengthMm: 300, packageWidthMm: 220, packageHeightMm: 40, packageWeightG: 450,
       sizingGuide: { unit: "cm", measurements: { chest: 55 } },
     }).expect(400);
+});
+
+test("collection hierarchy, memberships, and counted facets are public", async () => {
+  await request(app).put(`/api/admin/collections/${ferrariCollectionId}/products`)
+    .set("authorization", `Bearer ${token}`)
+    .send({ productIds: [productId], featuredProductIds: [productId] }).expect(200);
+  const managedCollection = await request(app).get(`/api/admin/collections/${ferrariCollectionId}`)
+    .set("authorization", `Bearer ${token}`).expect(200);
+  assert.equal(managedCollection.body.products[0].featured, true);
+  assert.equal(managedCollection.body.products[0].position, 0);
+  await request(app).put(`/api/admin/collections/${ferrariCollectionId}/products`)
+    .set("authorization", `Bearer ${token}`)
+    .send({ productIds: [productId], featuredProductIds: [randomUUID()] }).expect(400);
+  const tree = await request(app).get("/api/collections").expect(200);
+  assert.deepEqual(tree.body.map((collection: { slug: string }) => collection.slug), ["formula-1", "drivers"]);
+  assert.equal(tree.body[0].children[0].slug, "ferrari");
+
+  const response = await request(app)
+    .get("/api/collections/ferrari/products?driver=charles-leclerc&productType=jerseys&audience=UNISEX&availability=in_stock")
+    .expect(200);
+  assert.equal(response.body.collection.slug, "ferrari");
+  assert.equal(response.body.total, 1);
+  assert.equal(response.body.facets.teams[0].slug, "ferrari");
+  assert.deepEqual(
+    response.body.facets.drivers.map((driver: { slug: string; count: number }) => [driver.slug, driver.count]),
+    [["charles-leclerc", 1], ["niki-lauda", 1]],
+  );
+  assert.equal(response.body.facets.productTypes[0].slug, "jerseys");
+  assert.equal(response.body.facets.audiences[0].value, "UNISEX");
+  assert.equal(response.body.facets.availability.inStock, 1);
+  assert.deepEqual(response.body.facets.price, { min: 1_250_000, max: 1_250_000 });
+  const inclusivePrice = await request(app)
+    .get("/api/collections/ferrari/products?minPrice=1250000&maxPrice=1250000").expect(200);
+  assert.equal(inclusivePrice.body.total, 1);
+  const outsidePrice = await request(app).get("/api/collections/ferrari/products?minPrice=1250001").expect(200);
+  assert.equal(outsidePrice.body.total, 0);
+
+  const driverCollection = await request(app).get("/api/collections/charles-leclerc/products").expect(200);
+  const historicalCollection = await request(app).get("/api/collections/niki-lauda/products").expect(200);
+  assert.equal(driverCollection.body.total, 1);
+  assert.equal(historicalCollection.body.total, 1);
+  await request(app).delete(`/api/admin/collections/${ferrariCollectionId}`)
+    .set("authorization", `Bearer ${token}`).expect(409);
+});
+
+test("optionless products use a default SKU without fake size or color", async () => {
+  const cap = await request(app).post("/api/admin/products").set("authorization", `Bearer ${token}`)
+    .send({
+      name: "Ferrari Team Cap",
+      slug: "ferrari-team-cap",
+      priceIdr: 500_000,
+      status: "ACTIVE",
+      categoryId,
+      teamId,
+      audience: "UNISEX",
+      collectionIds: [ferrariCollectionId],
+      variants: [{
+        sku: "FER-CAP-DEFAULT",
+        stockQuantity: 3,
+        packageLengthMm: 250,
+        packageWidthMm: 200,
+        packageHeightMm: 120,
+        packageWeightG: 220,
+      }],
+    }).expect(201);
+  assert.equal(cap.body.variants[0].size, null);
+  assert.equal(cap.body.variants[0].color, null);
+  assert.equal(cap.body.variants[0].sizingGuide, null);
+  const publicCap = await request(app).get("/api/products/ferrari-team-cap").expect(200);
+  assert.equal(publicCap.body.variants[0].available, true);
+  await request(app).patch(`/api/admin/collections/${ferrariCollectionId}`)
+    .set("authorization", `Bearer ${token}`).send({ active: false }).expect(409);
+  const sizedProduct = await request(app).post("/api/admin/products").set("authorization", `Bearer ${token}`)
+    .send({
+      name: "Size-only Shirt",
+      slug: "size-only-shirt",
+      priceIdr: 700_000,
+      categoryId,
+      variants: [{
+        sku: "SIZE-ONLY-S",
+        size: "S",
+        stockQuantity: 2,
+        packageLengthMm: 300,
+        packageWidthMm: 220,
+        packageHeightMm: 40,
+        packageWeightG: 400,
+        sizingGuide: { unit: "cm", measurements: { chest: 48 } },
+      }],
+    }).expect(201);
+  assert.equal(sizedProduct.body.variants[0].color, null);
+  await request(app).delete(`/api/admin/products/${cap.body.id}/variants/${cap.body.variants[0].id}`)
+    .set("authorization", `Bearer ${token}`).expect(409);
+  await request(app).patch(`/api/admin/products/${cap.body.id}`).set("authorization", `Bearer ${token}`)
+    .send({ status: "ARCHIVED" }).expect(200);
 });
 
 test("database uniqueness and transactional tag updates are enforced", async () => {
@@ -213,7 +336,7 @@ test("database uniqueness and transactional tag updates are enforced", async () 
     .set("authorization", `Bearer ${token}`).expect(200);
   await request(app).post(`/api/admin/products/${productId}/variants`).set("authorization", `Bearer ${token}`)
     .send({
-      sku: "FER-JER-RED-L", size: "M", color: "Red", stockQuantity: 1,
+      sku: "FER-JER-RED-M", size: "L", color: "Red", stockQuantity: 1,
       packageLengthMm: 300, packageWidthMm: 220, packageHeightMm: 40, packageWeightG: 450,
       sizingGuide: { unit: "cm", measurements: { chest: 52 } },
     }).expect(409);
@@ -222,7 +345,7 @@ test("database uniqueness and transactional tag updates are enforced", async () 
   const afterRollback = await request(app).get(`/api/admin/products/${productId}`)
     .set("authorization", `Bearer ${token}`).expect(200);
   assert.equal(afterRollback.body.tags.length, current.body.tags.length);
-  assert.equal(afterRollback.body.tags[0].tag.slug, "ferrari");
+  assert.equal(afterRollback.body.tags[0].tag.slug, "limited-edition");
 });
 
 test("driver transfers preserve historical product teams and references", async () => {
@@ -231,10 +354,10 @@ test("driver transfers preserve historical product teams and references", async 
   const product = await request(app).get(`/api/admin/products/${productId}`)
     .set("authorization", `Bearer ${token}`).expect(200);
   assert.equal(product.body.team.id, teamId);
-  assert.equal(product.body.driver.teamId, secondTeamId);
+  assert.equal(product.body.drivers.find((driver: { id: string }) => driver.id === driverId).teamId, secondTeamId);
   const publicProduct = await request(app).get("/api/products/ferrari-team-jersey").expect(200);
   assert.equal(publicProduct.body.team.slug, "ferrari");
-  assert.equal(publicProduct.body.driver.teamId, secondTeamId);
+  assert.equal(publicProduct.body.drivers.find((driver: { id: string }) => driver.id === driverId).teamId, secondTeamId);
   const transferredDrivers = await request(app).get("/api/drivers?team=mercedes").expect(200);
   assert.equal(transferredDrivers.body[0].id, driverId);
   const pngHeader = Buffer.from([0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a]);

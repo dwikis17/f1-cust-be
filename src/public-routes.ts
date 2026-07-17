@@ -8,6 +8,9 @@ router.get("/categories", PublicCatalogController.listCategories);
 router.get("/tags", PublicCatalogController.listTags);
 router.get("/teams", PublicCatalogController.listTeams);
 router.get("/drivers", PublicCatalogController.listDrivers);
+router.get("/collections", PublicCatalogController.listCollections);
+router.get("/collections/:slug/products", PublicProductController.listCollectionProducts);
+router.get("/collections/:slug", PublicCatalogController.findCollection);
 router.get("/products", PublicProductController.listProducts);
 router.get("/products/:slug", PublicProductController.findProduct);
 

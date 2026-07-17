@@ -1,6 +1,6 @@
 import type { Request, Response } from "express";
 import { z } from "zod";
-import { parse } from "../../http.js";
+import { notFound, parse } from "../../http.js";
 import { slugSchema } from "../../schemas.js";
 import { PublicCatalogService } from "../../services/public/catalog-service.js";
 
@@ -19,5 +19,13 @@ export class PublicCatalogController {
   static async listDrivers(request: Request, response: Response) {
     const query = parse(driverQuerySchema, request.query);
     response.json(await PublicCatalogService.listDrivers(query.team));
+  }
+  static async listCollections(_request: Request, response: Response) {
+    response.json(await PublicCatalogService.listCollections());
+  }
+  static async findCollection(request: Request, response: Response) {
+    const collection = await PublicCatalogService.findCollection(String(request.params.slug));
+    if (!collection) notFound("Collection not found");
+    response.json(collection);
   }
 }

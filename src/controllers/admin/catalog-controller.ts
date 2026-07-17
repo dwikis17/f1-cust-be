@@ -3,6 +3,9 @@ import { parse } from "../../http.js";
 import {
   catalogEntityPatchSchema,
   catalogEntitySchema,
+  collectionMembershipSchema,
+  collectionPatchSchema,
+  collectionSchema,
   driverPatchSchema,
   driverSchema,
   idSchema,
@@ -66,5 +69,31 @@ export class CatalogController {
   static async deleteDriver(request: Request, response: Response) {
     await CatalogService.deleteDriver(parse(idSchema, request.params.id));
     response.status(204).send();
+  }
+
+  static async listCollections(_request: Request, response: Response) {
+    response.json(await CatalogService.listCollections());
+  }
+  static async findCollection(request: Request, response: Response) {
+    response.json(await CatalogService.findCollection(parse(idSchema, request.params.id)));
+  }
+  static async createCollection(request: Request, response: Response) {
+    response.status(201).json(await CatalogService.createCollection(parse(collectionSchema, request.body)));
+  }
+  static async updateCollection(request: Request, response: Response) {
+    response.json(await CatalogService.updateCollection(
+      parse(idSchema, request.params.id),
+      parse(collectionPatchSchema, request.body),
+    ));
+  }
+  static async deleteCollection(request: Request, response: Response) {
+    await CatalogService.deleteCollection(parse(idSchema, request.params.id));
+    response.status(204).send();
+  }
+  static async replaceCollectionProducts(request: Request, response: Response) {
+    response.json(await CatalogService.replaceCollectionProducts(
+      parse(idSchema, request.params.id),
+      parse(collectionMembershipSchema, request.body),
+    ));
   }
 }
