@@ -75,6 +75,34 @@ export class CatalogService {
     }
   }
 
+  private static async validateCollectionRelation(
+    kind: CollectionInput["kind"],
+    teamId: string | null | undefined,
+    driverId: string | null | undefined,
+  ) {
+    if (kind === "TEAM") {
+      if (!teamId || driverId) {
+        throw new HttpError(400, "INVALID_COLLECTION_RELATION", "Team collections require one team and no driver");
+      }
+      if (!await CatalogRepository.findTeam(teamId)) {
+        throw new HttpError(400, "UNKNOWN_TEAM", "Related team does not exist");
+      }
+      return;
+    }
+    if (kind === "DRIVER") {
+      if (!driverId || teamId) {
+        throw new HttpError(400, "INVALID_COLLECTION_RELATION", "Driver collections require one driver and no team");
+      }
+      if (!await CatalogRepository.findDriver(driverId)) {
+        throw new HttpError(400, "UNKNOWN_DRIVER", "Related driver does not exist");
+      }
+      return;
+    }
+    if (teamId || driverId) {
+      throw new HttpError(400, "INVALID_COLLECTION_RELATION", "Only team or driver collections can reference catalog entities");
+    }
+  }
+
   static listCollections() { return CatalogRepository.listCollections(); }
   static async findCollection(id: string) {
     const collection = await CatalogRepository.findCollection(id);
@@ -82,13 +110,23 @@ export class CatalogService {
     return collection;
   }
   static async createCollection(input: CollectionInput) {
-    await CatalogService.validateCollectionParent(undefined, input.parentId);
+    await Promise.all([
+      CatalogService.validateCollectionParent(undefined, input.parentId),
+      CatalogService.validateCollectionRelation(input.kind, input.teamId, input.driverId),
+    ]);
     return CatalogRepository.createCollection(input);
   }
   static async updateCollection(id: string, input: CollectionPatch) {
     const current = await CatalogRepository.findCollection(id);
     if (!current) notFound("Collection not found");
-    if (input.parentId !== undefined) await CatalogService.validateCollectionParent(id, input.parentId);
+    await Promise.all([
+      input.parentId !== undefined ? CatalogService.validateCollectionParent(id, input.parentId) : undefined,
+      CatalogService.validateCollectionRelation(
+        input.kind ?? current.kind,
+        input.teamId === undefined ? current.teamId : input.teamId,
+        input.driverId === undefined ? current.driverId : input.driverId,
+      ),
+    ]);
     if (current.active && input.active === false && await CatalogRepository.countActiveProductsDependingOnCollection(id)) {
       throw new HttpError(
         409,

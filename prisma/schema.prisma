@@ -80,14 +80,15 @@ model Tag {
 }
 
 model Team {
-  id        String    @id @default(uuid()) @db.Uuid
-  name      String    @unique
-  slug      String    @unique
-  logoUrl   String?
-  drivers   Driver[]
-  products  Product[]
-  createdAt DateTime  @default(now())
-  updatedAt DateTime  @updatedAt
+  id          String       @id @default(uuid()) @db.Uuid
+  name        String       @unique
+  slug        String       @unique
+  logoUrl     String?
+  drivers     Driver[]
+  products    Product[]
+  collections Collection[]
+  createdAt   DateTime     @default(now())
+  updatedAt   DateTime     @updatedAt
 }
 
 model Driver {
@@ -99,6 +100,7 @@ model Driver {
   teamId       String?   @db.Uuid
   team         Team?     @relation(fields: [teamId], references: [id], onDelete: Restrict)
   products     ProductDriver[]
+  collections  Collection[]
   createdAt    DateTime  @default(now())
   updatedAt    DateTime  @updatedAt
 
@@ -147,6 +149,10 @@ model Collection {
   name        String
   slug        String              @unique
   kind        CollectionKind
+  teamId      String?             @db.Uuid
+  team        Team?               @relation(fields: [teamId], references: [id], onDelete: Restrict)
+  driverId    String?             @db.Uuid
+  driver      Driver?             @relation(fields: [driverId], references: [id], onDelete: Restrict)
   parentId    String?             @db.Uuid
   parent      Collection?         @relation("CollectionTree", fields: [parentId], references: [id], onDelete: Restrict)
   children    Collection[]        @relation("CollectionTree")
@@ -160,6 +166,8 @@ model Collection {
 
   @@index([parentId, position])
   @@index([kind, active])
+  @@index([teamId])
+  @@index([driverId])
 }
 
 model ProductCollection {

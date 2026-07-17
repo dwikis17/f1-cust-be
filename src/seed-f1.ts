@@ -82,6 +82,7 @@ async function main() {
         name: team.name,
         slug: team.slug,
         kind: "TEAM",
+        teamId: savedTeam.id,
         parentId: formulaOne.id,
         imageUrl: logoUrl(team.asset),
         position: teamPosition,
@@ -89,6 +90,8 @@ async function main() {
       update: {
         name: team.name,
         kind: "TEAM",
+        teamId: savedTeam.id,
+        driverId: null,
         parentId: formulaOne.id,
         imageUrl: logoUrl(team.asset),
         position: teamPosition,
@@ -109,6 +112,7 @@ async function main() {
           name,
           slug,
           kind: "DRIVER",
+          driverId: savedDriver.id,
           parentId: driversCollection.id,
           imageUrl: photoUrl(team.asset, asset),
           position: teamPosition * 10 + driverPosition,
@@ -116,6 +120,8 @@ async function main() {
         update: {
           name,
           kind: "DRIVER",
+          teamId: null,
+          driverId: savedDriver.id,
           parentId: driversCollection.id,
           imageUrl: photoUrl(team.asset, asset),
           position: teamPosition * 10 + driverPosition,

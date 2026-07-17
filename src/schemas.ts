@@ -35,6 +35,8 @@ export const collectionSchema = z.object({
   name: nameSchema,
   slug: slugSchema,
   kind: collectionKindSchema,
+  teamId: idSchema.nullable().optional(),
+  driverId: idSchema.nullable().optional(),
   parentId: idSchema.nullable().optional(),
   imageUrl: urlSchema.nullable().optional(),
   description: z.string().trim().max(5_000).default(""),

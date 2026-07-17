@@ -34,7 +34,7 @@ export class CatalogRepository {
 
   static listCollections() {
     return prisma.collection.findMany({
-      include: { parent: true, _count: { select: { children: true, products: true } } },
+      include: { parent: true, team: true, driver: true, _count: { select: { children: true, products: true } } },
       orderBy: [{ position: "asc" }, { name: "asc" }],
     });
   }
@@ -46,6 +46,8 @@ export class CatalogRepository {
       where: { id },
       include: {
         parent: true,
+        team: true,
+        driver: true,
         products: { include: { product: true }, orderBy: [{ position: "asc" }, { product: { name: "asc" } }] },
         _count: { select: { children: true, products: true } },
       },
@@ -54,14 +56,14 @@ export class CatalogRepository {
   static createCollection(data: Prisma.CollectionUncheckedCreateInput) {
     return prisma.collection.create({
       data,
-      include: { parent: true, _count: { select: { children: true, products: true } } },
+      include: { parent: true, team: true, driver: true, _count: { select: { children: true, products: true } } },
     });
   }
   static updateCollection(id: string, data: Prisma.CollectionUncheckedUpdateInput) {
     return prisma.collection.update({
       where: { id },
       data,
-      include: { parent: true, _count: { select: { children: true, products: true } } },
+      include: { parent: true, team: true, driver: true, _count: { select: { children: true, products: true } } },
     });
   }
   static deleteCollection(id: string) { return prisma.collection.delete({ where: { id } }); }
@@ -97,6 +99,8 @@ export class CatalogRepository {
         where: { id: collectionId },
         include: {
           parent: true,
+          team: true,
+          driver: true,
           products: { include: { product: true }, orderBy: [{ position: "asc" }, { product: { name: "asc" } }] },
           _count: { select: { children: true, products: true } },
         },

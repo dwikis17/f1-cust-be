@@ -92,14 +92,23 @@ test("admin creates catalog data and public API hides drafts", async () => {
   const drivers = await request(app).post("/api/admin/collections").set("authorization", `Bearer ${token}`)
     .send({ name: "Drivers", slug: "drivers", kind: "DOMAIN", position: 1 }).expect(201);
   const ferrariCollection = await request(app).post("/api/admin/collections").set("authorization", `Bearer ${token}`)
-    .send({ name: "Ferrari", slug: "ferrari", kind: "TEAM", parentId: formulaOne.body.id }).expect(201);
+    .send({ name: "Ferrari", slug: "ferrari", kind: "TEAM", teamId, parentId: formulaOne.body.id }).expect(201);
+  assert.equal(ferrariCollection.body.team.id, teamId);
   ferrariCollectionId = ferrariCollection.body.id;
   const driverCollection = await request(app).post("/api/admin/collections").set("authorization", `Bearer ${token}`)
-    .send({ name: "Charles Leclerc", slug: "charles-leclerc", kind: "DRIVER", parentId: drivers.body.id }).expect(201);
+    .send({ name: "Charles Leclerc", slug: "charles-leclerc", kind: "DRIVER", driverId, parentId: drivers.body.id })
+    .expect(201);
+  assert.equal(driverCollection.body.driver.id, driverId);
   driverCollectionId = driverCollection.body.id;
   const historicalDriverCollection = await request(app).post("/api/admin/collections")
     .set("authorization", `Bearer ${token}`)
-    .send({ name: "Niki Lauda", slug: "niki-lauda", kind: "DRIVER", parentId: drivers.body.id }).expect(201);
+    .send({
+      name: "Niki Lauda",
+      slug: "niki-lauda",
+      kind: "DRIVER",
+      driverId: historicalDriverId,
+      parentId: drivers.body.id,
+    }).expect(201);
   historicalDriverCollectionId = historicalDriverCollection.body.id;
   const crossTeamProduct = await request(app).post("/api/admin/products").set("authorization", `Bearer ${token}`)
     .send({
@@ -148,6 +157,20 @@ test("admin creates catalog data and public API hides drafts", async () => {
     .expect(200);
   assert.equal(hidden.body.total, 0);
   await request(app).get("/api/products/ferrari-team-jersey").expect(404);
+});
+
+test("collection relations validate kind and allow multiple collections per entity", async () => {
+  await request(app).post("/api/admin/collections").set("authorization", `Bearer ${token}`)
+    .send({ name: "Missing Driver", slug: "missing-driver", kind: "DRIVER" }).expect(400);
+  await request(app).post("/api/admin/collections").set("authorization", `Bearer ${token}`)
+    .send({ name: "Unknown Driver", slug: "unknown-driver", kind: "DRIVER", driverId: randomUUID() }).expect(400);
+  await request(app).post("/api/admin/collections").set("authorization", `Bearer ${token}`)
+    .send({ name: "Wrong Relation", slug: "wrong-relation", kind: "TEAM", driverId }).expect(400);
+  const second = await request(app).post("/api/admin/collections").set("authorization", `Bearer ${token}`)
+    .send({ name: "Charles Leclerc Featured", slug: "charles-leclerc-featured", kind: "DRIVER", driverId })
+    .expect(201);
+  assert.equal(second.body.driver.id, driverId);
+  await request(app).delete(`/api/admin/collections/${second.body.id}`).set("authorization", `Bearer ${token}`).expect(204);
 });
 
 test("admin can update and delete unreferenced teams and drivers", async () => {
