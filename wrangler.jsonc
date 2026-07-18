@@ -12,6 +12,9 @@
     "PHOTO_PUBLIC_BASE_URL": "https://media.valydejersey.com",
     "BITESHIP_COURIERS": "jne,jnt,sicepat,anteraja",
     "BITESHIP_ORIGIN_POSTAL_CODE": "15318",
+    "BITESHIP_ORIGIN_CONTACT_NAME": "dwiki",
+    "BITESHIP_ORIGIN_CONTACT_PHONE": "081382854010",
+    "BITESHIP_ORIGIN_ADDRESS": "anggrek lok aaf 1",
     "MIDTRANS_ENV": "sandbox",
     "MIDTRANS_MERCHANT_ID": "M309500554",
     "STOREFRONT_URL": "https://valydejersey.com"
