@@ -9,6 +9,9 @@ const env = z.object({
   SESSION_TTL_HOURS: z.coerce.number().positive().default(168),
   MAX_UPLOAD_BYTES: z.coerce.number().int().positive().default(5_242_880),
   MAX_PHOTOS_PER_PRODUCT: z.coerce.number().int().positive().default(12),
+  BITESHIP_API_KEY: z.string().trim().optional(),
+  BITESHIP_ORIGIN_POSTAL_CODE: z.string().trim().regex(/^\d{5}$/).optional(),
+  BITESHIP_COURIERS: z.string().default("jne,jnt,sicepat,anteraja"),
 }).parse(process.env);
 
 export const config = {
@@ -19,6 +22,9 @@ export const config = {
   sessionTtlMs: env.SESSION_TTL_HOURS * 60 * 60 * 1000,
   maxUploadBytes: env.MAX_UPLOAD_BYTES,
   maxPhotosPerProduct: env.MAX_PHOTOS_PER_PRODUCT,
+  biteshipApiKey: env.BITESHIP_API_KEY,
+  biteshipOriginPostalCode: env.BITESHIP_ORIGIN_POSTAL_CODE,
+  biteshipCouriers: env.BITESHIP_COURIERS.split(",").map((courier) => courier.trim()).filter(Boolean),
 };
 
 export function requireDatabaseUrl() {

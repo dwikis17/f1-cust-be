@@ -254,6 +254,93 @@ test("active products are filterable without exposing exact stock", async () => 
     }).expect(400);
 });
 
+test("shipping rates use authoritative cart data and normalize Biteship responses", async () => {
+  const originalFetch = globalThis.fetch;
+  const originalShippingConfig = {
+    apiKey: config.biteshipApiKey,
+    originPostalCode: config.biteshipOriginPostalCode,
+    couriers: config.biteshipCouriers,
+  };
+  const product = await request(app).get("/api/products/ferrari-team-jersey").expect(200);
+  const variantId = product.body.variants[0].id as string;
+  config.biteshipApiKey = "biteship_test.test-key";
+  config.biteshipOriginPostalCode = "12440";
+  config.biteshipCouriers = ["jne", "sicepat"];
+
+  try {
+    let upstreamBody: Record<string, unknown> | undefined;
+    globalThis.fetch = async (_input, init) => {
+      assert.equal(init?.headers && (init.headers as Record<string, string>).authorization, "biteship_test.test-key");
+      upstreamBody = JSON.parse(String(init?.body)) as Record<string, unknown>;
+      return new Response(JSON.stringify({
+        pricing: [
+          {
+            courier_code: "sicepat", courier_name: "SiCepat", courier_service_code: "reg",
+            courier_service_name: "Reguler", description: "Regular service", duration: "1 - 2 days",
+            service_type: "standard", currency: "IDR", price: 32_000,
+          },
+          {
+            courier_code: "jne", courier_name: "JNE", courier_service_code: "reg",
+            courier_service_name: "Reguler", description: "Regular service", duration: "2 - 3 days",
+            service_type: "standard", currency: "IDR", price: 18_000,
+          },
+        ],
+      }), { status: 200, headers: { "content-type": "application/json" } });
+    };
+
+    const quote = await request(app).post("/api/shipping/rates").send({
+      destinationPostalCode: "12240",
+      items: [{ variantId, quantity: 2 }, { variantId, quantity: 1 }],
+    }).expect("cache-control", "no-store").expect(200);
+    assert.deepEqual(quote.body.rates.map((rate: { price: number }) => rate.price), [18_000, 32_000]);
+    assert.deepEqual(upstreamBody, {
+      origin_postal_code: 12440,
+      destination_postal_code: 12240,
+      couriers: "jne,sicepat",
+      items: [{
+        name: "Ferrari Team Jersey", category: "fashion", sku: "FER-JER-RED-M", value: 1_250_000,
+        quantity: 3, weight: 450, height: 4, length: 30, width: 22,
+      }],
+    });
+
+    await request(app).post("/api/shipping/rates")
+      .send({ destinationPostalCode: "123", items: [{ variantId, quantity: 1 }] }).expect(400);
+    await request(app).post("/api/shipping/rates")
+      .send({ destinationPostalCode: "12240", items: [{ variantId: randomUUID(), quantity: 1 }] }).expect(409);
+    await request(app).post("/api/shipping/rates")
+      .send({ destinationPostalCode: "12240", items: [{ variantId, quantity: 9 }] }).expect(409);
+
+    globalThis.fetch = async () => new Response(JSON.stringify({ code: 40001001, message: "Invalid postal code" }), {
+      status: 400,
+      headers: { "content-type": "application/json" },
+    });
+    await request(app).post("/api/shipping/rates")
+      .send({ destinationPostalCode: "99999", items: [{ variantId, quantity: 1 }] })
+      .expect(422, { error: { code: "INVALID_DESTINATION", message: "The destination postal code is not supported" } });
+
+    globalThis.fetch = async () => { throw new DOMException("Timed out", "TimeoutError"); };
+    await request(app).post("/api/shipping/rates")
+      .send({ destinationPostalCode: "12240", items: [{ variantId, quantity: 1 }] }).expect(504);
+
+    globalThis.fetch = async () => new Response(JSON.stringify({ pricing: [] }), {
+      status: 200,
+      headers: { "content-type": "application/json" },
+    });
+    const empty = await request(app).post("/api/shipping/rates")
+      .send({ destinationPostalCode: "12240", items: [{ variantId, quantity: 1 }] }).expect(200);
+    assert.deepEqual(empty.body.rates, []);
+
+    config.biteshipApiKey = undefined;
+    await request(app).post("/api/shipping/rates")
+      .send({ destinationPostalCode: "12240", items: [{ variantId, quantity: 1 }] }).expect(503);
+  } finally {
+    globalThis.fetch = originalFetch;
+    config.biteshipApiKey = originalShippingConfig.apiKey;
+    config.biteshipOriginPostalCode = originalShippingConfig.originPostalCode;
+    config.biteshipCouriers = originalShippingConfig.couriers;
+  }
+});
+
 test("collection hierarchy, memberships, and counted facets are public", async () => {
   await request(app).put(`/api/admin/collections/${ferrariCollectionId}/products`)
     .set("authorization", `Bearer ${token}`)

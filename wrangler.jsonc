@@ -9,7 +9,8 @@
     "SESSION_TTL_HOURS": "168",
     "MAX_UPLOAD_BYTES": "5242880",
     "MAX_PHOTOS_PER_PRODUCT": "12",
-    "PHOTO_PUBLIC_BASE_URL": "https://pub-1c63901953c44e498f00c2726b9b7ebd.r2.dev"
+    "PHOTO_PUBLIC_BASE_URL": "https://pub-1c63901953c44e498f00c2726b9b7ebd.r2.dev",
+    "BITESHIP_COURIERS": "jne,jnt,sicepat,anteraja"
   },
   "hyperdrive": [
     {
