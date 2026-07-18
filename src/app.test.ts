@@ -394,6 +394,16 @@ test("checkout verifies payment notifications, reserves stock, and books Biteshi
   let snapCalls = 0;
   let bookingCalls = 0;
   let failNextBooking = false;
+  const snapBodies: Array<{
+    transaction_details: { gross_amount: number };
+    item_details: Array<{ id: string; name: string; price: number; quantity: number }>;
+  }> = [];
+  const bookingBodies: Array<{
+    reference_id: string;
+    courier_company: string;
+    courier_type: string;
+    items: Array<{ name: string; description?: string; sku: string }>;
+  }> = [];
   globalThis.fetch = async (input, init) => {
     const url = String(input);
     if (url.endsWith("/v1/rates/couriers")) {
@@ -406,9 +416,12 @@ test("checkout verifies payment notifications, reserves stock, and books Biteshi
     }
     if (url.includes("midtrans.com/snap/v1/transactions")) {
       snapCalls += 1;
-      const body = JSON.parse(String(init?.body)) as { transaction_details: { gross_amount: number }; item_details: unknown[] };
-      assert.equal(body.transaction_details.gross_amount, 1_268_000);
-      assert.equal(body.item_details.length, 2);
+      const body = JSON.parse(String(init?.body)) as typeof snapBodies[number];
+      snapBodies.push(body);
+      assert.equal(
+        body.item_details.reduce((sum, item) => sum + item.price * item.quantity, 0),
+        body.transaction_details.gross_amount,
+      );
       return new Response(JSON.stringify({ token: `snap-${snapCalls}`, redirect_url: "https://app.sandbox.midtrans.com/snap/test" }), {
         status: 201,
         headers: { "content-type": "application/json" },
@@ -418,9 +431,11 @@ test("checkout verifies payment notifications, reserves stock, and books Biteshi
       bookingCalls += 1;
       if (failNextBooking) {
         failNextBooking = false;
+        bookingBodies.push(JSON.parse(String(init?.body)) as typeof bookingBodies[number]);
         return new Response(JSON.stringify({ code: 50000000 }), { status: 503, headers: { "content-type": "application/json" } });
       }
-      const body = JSON.parse(String(init?.body)) as { courier_company: string; courier_type: string; reference_id: string };
+      const body = JSON.parse(String(init?.body)) as typeof bookingBodies[number];
+      bookingBodies.push(body);
       assert.equal(body.courier_company, "jne");
       assert.equal(body.courier_type, "reg");
       return new Response(JSON.stringify({
@@ -472,6 +487,16 @@ test("checkout verifies payment notifications, reserves stock, and books Biteshi
     assert.equal(rateCalls, 1);
     assert.equal(snapCalls, 1);
     assert.equal((await prisma.productVariant.findUniqueOrThrow({ where: { id: variantId } })).stockQuantity, 7);
+    assert.deepEqual(snapBodies[0].item_details[0], {
+      id: "FER-JER-RED-M",
+      name: "Ferrari Team Jersey (Red / M)",
+      price: 1_250_000,
+      quantity: 1,
+    });
+    const itemSnapshot = await prisma.orderItem.findFirstOrThrow({ where: { orderId: checkout.body.orderId } });
+    assert.equal(itemSnapshot.sku, "FER-JER-RED-M");
+    assert.equal(itemSnapshot.color, "Red");
+    assert.equal(itemSnapshot.size, "M");
 
     const receipt = await request(app).get(`/api/orders/${checkout.body.orderId}`).expect(200);
     assert.equal(receipt.body.paymentStatus, "PENDING");
@@ -480,6 +505,8 @@ test("checkout verifies payment notifications, reserves stock, and books Biteshi
 
     await request(app).post("/api/payments/midtrans/notification")
       .send({ ...notification(checkout.body.orderId, "pending"), signature_key: "invalid" }).expect(401);
+    await request(app).post("/api/payments/midtrans/notification")
+      .send(notification(checkout.body.orderId, "pending", "1268001.00")).expect(400);
     await request(app).post("/api/payments/midtrans/notification")
       .send(notification(checkout.body.orderId, "pending")).expect(200);
     assert.equal(bookingCalls, 0);
@@ -492,6 +519,18 @@ test("checkout verifies payment notifications, reserves stock, and books Biteshi
     assert.equal(paid.body.paymentStatus, "PAID");
     assert.equal(paid.body.fulfillmentStatus, "BOOKED");
     assert.equal(paid.body.tracking.waybillId, "waybill-1");
+    assert.deepEqual(bookingBodies.find((body) => body.reference_id === checkout.body.orderId)?.items[0], {
+      name: "Ferrari Team Jersey (Red / M)",
+      description: "Color: Red / Size: M",
+      sku: "FER-JER-RED-M",
+      value: 1_250_000,
+      quantity: 1,
+      weight: 450,
+      height: 4,
+      length: 30,
+      width: 22,
+      category: "fashion",
+    });
 
     const expiring = await request(app).post("/api/checkout")
       .send({ ...payload, idempotencyKey: randomUUID() }).expect(201);
@@ -513,6 +552,107 @@ test("checkout verifies payment notifications, reserves stock, and books Biteshi
       .send(notification(retrying.body.orderId, "settlement")).expect(200);
     const bookedRetry = await request(app).get(`/api/orders/${retrying.body.orderId}`).expect(200);
     assert.equal(bookedRetry.body.fulfillmentStatus, "BOOKED");
+
+    const concurrent = await request(app).post("/api/checkout")
+      .send({ ...payload, idempotencyKey: randomUUID() }).expect(201);
+    const bookingsBeforeConcurrent = bookingCalls;
+    const [paidNotification, expireNotification] = await Promise.all([
+      request(app).post("/api/payments/midtrans/notification")
+        .send(notification(concurrent.body.orderId, "settlement")),
+      request(app).post("/api/payments/midtrans/notification")
+        .send(notification(concurrent.body.orderId, "expire")),
+    ]);
+    assert.equal(paidNotification.status, 200);
+    assert.equal(expireNotification.status, 200);
+    const concurrentOrder = await prisma.order.findUniqueOrThrow({ where: { id: concurrent.body.orderId } });
+    assert.equal(concurrentOrder.paymentStatus, "PAID");
+    assert.equal(concurrentOrder.fulfillmentStatus, "BOOKED");
+    assert.equal(concurrentOrder.stockReleasedAt, null);
+    assert.equal(bookingCalls, bookingsBeforeConcurrent + 1);
+    assert.equal((await prisma.productVariant.findUniqueOrThrow({ where: { id: variantId } })).stockQuantity, 5);
+
+    const latePaid = await request(app).post("/api/checkout")
+      .send({ ...payload, idempotencyKey: randomUUID() }).expect(201);
+    await request(app).post("/api/payments/midtrans/notification")
+      .send(notification(latePaid.body.orderId, "expire")).expect(200);
+    assert.equal((await prisma.productVariant.findUniqueOrThrow({ where: { id: variantId } })).stockQuantity, 5);
+    await request(app).post("/api/payments/midtrans/notification")
+      .send(notification(latePaid.body.orderId, "settlement")).expect(200);
+    const recovered = await prisma.order.findUniqueOrThrow({ where: { id: latePaid.body.orderId } });
+    assert.equal(recovered.paymentStatus, "PAID");
+    assert.equal(recovered.fulfillmentStatus, "BOOKED");
+    assert.equal(recovered.stockReleasedAt, null);
+    assert.equal((await prisma.productVariant.findUniqueOrThrow({ where: { id: variantId } })).stockQuantity, 4);
+
+    const optionless = await prisma.product.create({
+      data: {
+        name: "Checkout Cap",
+        slug: "checkout-cap",
+        priceIdr: 500_000,
+        status: "ACTIVE",
+        categoryId,
+        variants: { create: [{
+          sku: "CHECKOUT-CAP-DEFAULT",
+          stockQuantity: 2,
+          packageLengthMm: 250,
+          packageWidthMm: 200,
+          packageHeightMm: 120,
+          packageWeightG: 220,
+        }] },
+      },
+      include: { variants: true },
+    });
+    const optionlessCheckout = await request(app).post("/api/checkout").send({
+      ...payload,
+      idempotencyKey: randomUUID(),
+      items: [{ variantId: optionless.variants[0].id, quantity: 1 }],
+    }).expect(201);
+    const optionlessSnapItem = snapBodies.at(-1)?.item_details[0];
+    assert.deepEqual(optionlessSnapItem, {
+      id: "CHECKOUT-CAP-DEFAULT",
+      name: "Checkout Cap",
+      price: 500_000,
+      quantity: 1,
+    });
+    const optionlessSnapshot = await prisma.orderItem.findFirstOrThrow({ where: { orderId: optionlessCheckout.body.orderId } });
+    assert.equal(optionlessSnapshot.color, null);
+    assert.equal(optionlessSnapshot.size, null);
+    await request(app).post("/api/payments/midtrans/notification")
+      .send(notification(optionlessCheckout.body.orderId, "expire", "518000.00")).expect(200);
+    await prisma.product.update({ where: { id: optionless.id }, data: { status: "ARCHIVED" } });
+
+    const insufficient = await request(app).post("/api/checkout").send({
+      ...payload,
+      idempotencyKey: randomUUID(),
+      items: [{ variantId, quantity: 2 }],
+    }).expect(201);
+    await request(app).post("/api/payments/midtrans/notification")
+      .send(notification(insufficient.body.orderId, "expire", "2518000.00")).expect(200);
+    await prisma.productVariant.update({ where: { id: variantId }, data: { stockQuantity: 1 } });
+    const bookingsBeforeInsufficient = bookingCalls;
+    await request(app).post("/api/payments/midtrans/notification")
+      .send(notification(insufficient.body.orderId, "settlement", "2518000.00")).expect(503);
+    await request(app).post("/api/payments/midtrans/notification")
+      .send(notification(insufficient.body.orderId, "settlement", "2518000.00")).expect(503);
+    const unavailable = await prisma.order.findUniqueOrThrow({ where: { id: insufficient.body.orderId } });
+    assert.equal(unavailable.paymentStatus, "PAID");
+    assert.equal(unavailable.fulfillmentStatus, "BOOKING_FAILED");
+    assert.ok(unavailable.stockReleasedAt);
+    assert.equal((await prisma.productVariant.findUniqueOrThrow({ where: { id: variantId } })).stockQuantity, 1);
+    assert.equal(bookingCalls, bookingsBeforeInsufficient);
+    await prisma.productVariant.update({ where: { id: variantId }, data: { stockQuantity: 4 } });
+    await request(app).post("/api/payments/midtrans/notification")
+      .send(notification(insufficient.body.orderId, "settlement", "2518000.00")).expect(200);
+    const restocked = await prisma.order.findUniqueOrThrow({ where: { id: insufficient.body.orderId } });
+    assert.equal(restocked.fulfillmentStatus, "BOOKED");
+    assert.equal(restocked.stockReleasedAt, null);
+    assert.equal((await prisma.productVariant.findUniqueOrThrow({ where: { id: variantId } })).stockQuantity, 2);
+
+    await request(app).post("/api/payments/midtrans/notification")
+      .send(notification(checkout.body.orderId, "refund")).expect(200);
+    await request(app).post("/api/payments/midtrans/notification")
+      .send(notification(checkout.body.orderId, "settlement")).expect(200);
+    assert.equal((await prisma.order.findUniqueOrThrow({ where: { id: checkout.body.orderId } })).paymentStatus, "REFUNDED");
   } finally {
     globalThis.fetch = originalFetch;
     config.biteshipApiKey = originalConfig.apiKey;
