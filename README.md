@@ -44,6 +44,9 @@ Public endpoints:
 - `GET /api/products?page=1&limit=20&locale=en|id&search=&category=&tag=&team=&driver=&size=&color=`
 - `GET /api/products/:slug?locale=en|id`
 - `POST /api/shipping/rates`
+- `POST /api/checkout`
+- `GET /api/orders/:id`
+- `POST /api/payments/midtrans/notification`
 
 Admin authentication:
 
@@ -116,6 +119,12 @@ npx wrangler secret put BITESHIP_ORIGIN_POSTAL_CODE
 ```
 
 Before production traffic, add an edge rate-limit rule for `POST /api/shipping/rates` (default: 10 requests per minute per IP). Biteship Rates requests use paid live data even with a testing key, so automated tests mock Biteship and never make billable calls.
+
+### Checkout payments and fulfillment
+
+Guest checkout uses Midtrans Snap. The backend owns all price and stock calculations, verifies Midtrans notifications, and creates the Biteship shipment only after an accepted `capture` or `settlement`. Configure the local variables shown in `.env.example`; keep `MIDTRANS_SERVER_KEY` and `BITESHIP_API_KEY` as Worker secrets when deployed. Set the Midtrans Payment Notification URL to `https://<api-host>/api/payments/midtrans/notification`.
+
+The storefront loads Snap using `NEXT_PUBLIC_MIDTRANS_CLIENT_KEY`. Biteship booking also requires the full pickup contact and address variables; a paid order remains visible as `BOOKING_FAILED` and a replayed Midtrans notification safely retries it.
 
 ## Cloudflare Worker deployment
 

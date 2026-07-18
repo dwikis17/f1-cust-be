@@ -19,6 +19,7 @@ const biteshipResponseSchema = z.object({
     service_type: z.string().nullish(),
     currency: z.string().nullish(),
     price: z.number().nonnegative(),
+    available_collection_method: z.array(z.string()).default(["pickup"]),
   }).passthrough()),
 }).passthrough();
 
@@ -104,7 +105,7 @@ export class PublicShippingService {
     }
     return {
       destinationPostalCode: input.destinationPostalCode,
-      rates: parsed.data.pricing.map((rate) => ({
+      rates: parsed.data.pricing.filter((rate) => rate.available_collection_method.includes("pickup")).map((rate) => ({
         courierCode: rate.courier_code,
         courierName: rate.courier_name,
         serviceCode: rate.courier_service_code,

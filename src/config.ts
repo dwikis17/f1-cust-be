@@ -11,7 +11,14 @@ const env = z.object({
   MAX_PHOTOS_PER_PRODUCT: z.coerce.number().int().positive().default(12),
   BITESHIP_API_KEY: z.string().trim().optional(),
   BITESHIP_ORIGIN_POSTAL_CODE: z.string().trim().regex(/^\d{5}$/).optional(),
+  BITESHIP_ORIGIN_CONTACT_NAME: z.string().trim().min(1).optional(),
+  BITESHIP_ORIGIN_CONTACT_PHONE: z.string().trim().min(6).optional(),
+  BITESHIP_ORIGIN_ADDRESS: z.string().trim().min(5).optional(),
   BITESHIP_COURIERS: z.string().default("jne,jnt,sicepat,anteraja"),
+  MIDTRANS_ENV: z.enum(["sandbox", "production"]).default("sandbox"),
+  MIDTRANS_MERCHANT_ID: z.string().trim().optional(),
+  MIDTRANS_SERVER_KEY: z.string().trim().optional(),
+  STOREFRONT_URL: z.string().url().optional(),
 }).parse(process.env);
 
 export const config = {
@@ -24,7 +31,14 @@ export const config = {
   maxPhotosPerProduct: env.MAX_PHOTOS_PER_PRODUCT,
   biteshipApiKey: env.BITESHIP_API_KEY,
   biteshipOriginPostalCode: env.BITESHIP_ORIGIN_POSTAL_CODE,
+  biteshipOriginContactName: env.BITESHIP_ORIGIN_CONTACT_NAME,
+  biteshipOriginContactPhone: env.BITESHIP_ORIGIN_CONTACT_PHONE,
+  biteshipOriginAddress: env.BITESHIP_ORIGIN_ADDRESS,
   biteshipCouriers: env.BITESHIP_COURIERS.split(",").map((courier) => courier.trim()).filter(Boolean),
+  midtransEnv: env.MIDTRANS_ENV,
+  midtransMerchantId: env.MIDTRANS_MERCHANT_ID,
+  midtransServerKey: env.MIDTRANS_SERVER_KEY,
+  storefrontUrl: env.STOREFRONT_URL?.replace(/\/$/, ""),
 };
 
 export function requireDatabaseUrl() {

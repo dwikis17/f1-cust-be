@@ -1,5 +1,5 @@
 import assert from "node:assert/strict";
-import { randomUUID } from "node:crypto";
+import { createHash, randomUUID } from "node:crypto";
 import { access } from "node:fs/promises";
 import path from "node:path";
 import { after, before, test } from "node:test";
@@ -25,6 +25,7 @@ let historicalDriverCollectionId = "";
 
 before(async () => {
   assert.match(config.databaseUrl, /f1_store_test/, "Tests must use the test database");
+  await prisma.order.deleteMany();
   await prisma.productPhoto.deleteMany();
   await prisma.productVariant.deleteMany();
   await prisma.productTag.deleteMany();
@@ -359,6 +360,171 @@ test("shipping rates use authoritative cart data and normalize Biteship response
     config.biteshipApiKey = originalShippingConfig.apiKey;
     config.biteshipOriginPostalCode = originalShippingConfig.originPostalCode;
     config.biteshipCouriers = originalShippingConfig.couriers;
+  }
+});
+
+test("checkout verifies payment notifications, reserves stock, and books Biteship once", async () => {
+  const originalFetch = globalThis.fetch;
+  const originalConfig = {
+    apiKey: config.biteshipApiKey,
+    originPostalCode: config.biteshipOriginPostalCode,
+    originName: config.biteshipOriginContactName,
+    originPhone: config.biteshipOriginContactPhone,
+    originAddress: config.biteshipOriginAddress,
+    couriers: config.biteshipCouriers,
+    midtransEnv: config.midtransEnv,
+    merchantId: config.midtransMerchantId,
+    serverKey: config.midtransServerKey,
+    storefrontUrl: config.storefrontUrl,
+  };
+  const product = await request(app).get("/api/products/ferrari-team-jersey").expect(200);
+  const variantId = product.body.variants[0].id as string;
+  config.biteshipApiKey = "biteship_test.checkout";
+  config.biteshipOriginPostalCode = "12440";
+  config.biteshipOriginContactName = "Warehouse";
+  config.biteshipOriginContactPhone = "081234567890";
+  config.biteshipOriginAddress = "Jl. Warehouse 1, Jakarta";
+  config.biteshipCouriers = ["jne"];
+  config.midtransEnv = "sandbox";
+  config.midtransMerchantId = "merchant-test";
+  config.midtransServerKey = "server-test";
+  config.storefrontUrl = "http://localhost:3001";
+
+  let rateCalls = 0;
+  let snapCalls = 0;
+  let bookingCalls = 0;
+  let failNextBooking = false;
+  globalThis.fetch = async (input, init) => {
+    const url = String(input);
+    if (url.endsWith("/v1/rates/couriers")) {
+      rateCalls += 1;
+      return new Response(JSON.stringify({ pricing: [{
+        courier_code: "jne", courier_name: "JNE", courier_service_code: "reg", courier_service_name: "Reguler",
+        description: "Regular service", duration: "2 - 3 days", service_type: "standard", currency: "IDR",
+        price: 18_000, available_collection_method: ["pickup"],
+      }] }), { status: 200, headers: { "content-type": "application/json" } });
+    }
+    if (url.includes("midtrans.com/snap/v1/transactions")) {
+      snapCalls += 1;
+      const body = JSON.parse(String(init?.body)) as { transaction_details: { gross_amount: number }; item_details: unknown[] };
+      assert.equal(body.transaction_details.gross_amount, 1_268_000);
+      assert.equal(body.item_details.length, 2);
+      return new Response(JSON.stringify({ token: `snap-${snapCalls}`, redirect_url: "https://app.sandbox.midtrans.com/snap/test" }), {
+        status: 201,
+        headers: { "content-type": "application/json" },
+      });
+    }
+    if (url.endsWith("/v1/orders")) {
+      bookingCalls += 1;
+      if (failNextBooking) {
+        failNextBooking = false;
+        return new Response(JSON.stringify({ code: 50000000 }), { status: 503, headers: { "content-type": "application/json" } });
+      }
+      const body = JSON.parse(String(init?.body)) as { courier_company: string; courier_type: string; reference_id: string };
+      assert.equal(body.courier_company, "jne");
+      assert.equal(body.courier_type, "reg");
+      return new Response(JSON.stringify({
+        id: `biteship-${body.reference_id}`,
+        courier: { tracking_id: "tracking-1", waybill_id: "waybill-1" },
+        price: 18_000,
+        status: "confirmed",
+      }), { status: 200, headers: { "content-type": "application/json" } });
+    }
+    throw new Error(`Unexpected fetch ${url}`);
+  };
+
+  function notification(orderId: string, status: string, grossAmount = "1268000.00") {
+    const statusCode = status === "settlement" ? "200" : "201";
+    return {
+      order_id: orderId,
+      status_code: statusCode,
+      gross_amount: grossAmount,
+      merchant_id: "merchant-test",
+      transaction_status: status,
+      fraud_status: "accept",
+      transaction_id: `transaction-${orderId}`,
+      payment_type: "bank_transfer",
+      signature_key: createHash("sha512").update(`${orderId}${statusCode}${grossAmount}server-test`).digest("hex"),
+    };
+  }
+
+  const payload = {
+    idempotencyKey: randomUUID(),
+    email: "buyer@example.com",
+    firstName: "Ayu",
+    lastName: "Racer",
+    phone: "081234567890",
+    address: "Jl. Finish Line 1",
+    city: "Jakarta Selatan",
+    province: "DKI Jakarta",
+    postalCode: "12240",
+    items: [{ variantId, quantity: 1 }],
+    courierCode: "jne",
+    serviceCode: "reg",
+  };
+
+  try {
+    const checkout = await request(app).post("/api/checkout").send(payload).expect(201);
+    assert.equal(checkout.body.totalIdr, 1_268_000);
+    assert.equal(checkout.body.snapToken, "snap-1");
+    const repeated = await request(app).post("/api/checkout").send(payload).expect(201);
+    assert.equal(repeated.body.orderId, checkout.body.orderId);
+    assert.equal(rateCalls, 1);
+    assert.equal(snapCalls, 1);
+    assert.equal((await prisma.productVariant.findUniqueOrThrow({ where: { id: variantId } })).stockQuantity, 7);
+
+    const receipt = await request(app).get(`/api/orders/${checkout.body.orderId}`).expect(200);
+    assert.equal(receipt.body.paymentStatus, "PENDING");
+    assert.equal(receipt.body.midtransSnapToken, undefined);
+    assert.equal(receipt.body.address, undefined);
+
+    await request(app).post("/api/payments/midtrans/notification")
+      .send({ ...notification(checkout.body.orderId, "pending"), signature_key: "invalid" }).expect(401);
+    await request(app).post("/api/payments/midtrans/notification")
+      .send(notification(checkout.body.orderId, "pending")).expect(200);
+    assert.equal(bookingCalls, 0);
+    await request(app).post("/api/payments/midtrans/notification")
+      .send(notification(checkout.body.orderId, "settlement")).expect(200);
+    await request(app).post("/api/payments/midtrans/notification")
+      .send(notification(checkout.body.orderId, "settlement")).expect(200);
+    assert.equal(bookingCalls, 1);
+    const paid = await request(app).get(`/api/orders/${checkout.body.orderId}`).expect(200);
+    assert.equal(paid.body.paymentStatus, "PAID");
+    assert.equal(paid.body.fulfillmentStatus, "BOOKED");
+    assert.equal(paid.body.tracking.waybillId, "waybill-1");
+
+    const expiring = await request(app).post("/api/checkout")
+      .send({ ...payload, idempotencyKey: randomUUID() }).expect(201);
+    assert.equal((await prisma.productVariant.findUniqueOrThrow({ where: { id: variantId } })).stockQuantity, 6);
+    const expired = notification(expiring.body.orderId, "expire");
+    await request(app).post("/api/payments/midtrans/notification").send(expired).expect(200);
+    await request(app).post("/api/payments/midtrans/notification").send(expired).expect(200);
+    assert.equal((await prisma.productVariant.findUniqueOrThrow({ where: { id: variantId } })).stockQuantity, 7);
+
+    const retrying = await request(app).post("/api/checkout")
+      .send({ ...payload, idempotencyKey: randomUUID() }).expect(201);
+    failNextBooking = true;
+    await request(app).post("/api/payments/midtrans/notification")
+      .send(notification(retrying.body.orderId, "settlement")).expect(503);
+    const failedBooking = await request(app).get(`/api/orders/${retrying.body.orderId}`).expect(200);
+    assert.equal(failedBooking.body.paymentStatus, "PAID");
+    assert.equal(failedBooking.body.fulfillmentStatus, "BOOKING_FAILED");
+    await request(app).post("/api/payments/midtrans/notification")
+      .send(notification(retrying.body.orderId, "settlement")).expect(200);
+    const bookedRetry = await request(app).get(`/api/orders/${retrying.body.orderId}`).expect(200);
+    assert.equal(bookedRetry.body.fulfillmentStatus, "BOOKED");
+  } finally {
+    globalThis.fetch = originalFetch;
+    config.biteshipApiKey = originalConfig.apiKey;
+    config.biteshipOriginPostalCode = originalConfig.originPostalCode;
+    config.biteshipOriginContactName = originalConfig.originName;
+    config.biteshipOriginContactPhone = originalConfig.originPhone;
+    config.biteshipOriginAddress = originalConfig.originAddress;
+    config.biteshipCouriers = originalConfig.couriers;
+    config.midtransEnv = originalConfig.midtransEnv;
+    config.midtransMerchantId = originalConfig.merchantId;
+    config.midtransServerKey = originalConfig.serverKey;
+    config.storefrontUrl = originalConfig.storefrontUrl;
   }
 });
 
