@@ -25,7 +25,7 @@ type CollectionMembership = z.infer<typeof collectionMembershipSchema>;
 
 export class CatalogService {
   private static async deleteManagedImage(url?: string | null) {
-    const key = url?.startsWith("/uploads/") ? url.slice("/uploads/".length) : null;
+    const key = url ? CatalogRepository.storedPhotoKey(url) : null;
     if (!key) return;
     await CatalogRepository.deletePhoto(key).catch((error: NodeJS.ErrnoException) => {
       if (error.code !== "ENOENT") console.error("Could not remove image", error);

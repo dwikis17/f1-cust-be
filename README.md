@@ -18,7 +18,7 @@ npm run dev
 
 For non-interactive local setup or automation, provide `ADMIN_EMAIL`, `ADMIN_DISPLAY_NAME`, and `ADMIN_PASSWORD` when running `npm run admin:create`.
 
-The API starts at `http://localhost:3000`. PostgreSQL is available only on `127.0.0.1:5432`. Local Worker development writes product photos to the remote `f1-bucket` R2 bucket under `development/`, so Wrangler must be logged in; deployed Workers use `production/`. Run `npm run dev:node` only when you explicitly want filesystem uploads under `uploads/`.
+The API starts at `http://localhost:3000`. PostgreSQL is available only on `127.0.0.1:5432`. Local Worker development writes uploaded images to the remote `f1-bucket` R2 bucket under `development/`, so Wrangler must be logged in. Set `PHOTO_PUBLIC_BASE_URL` to the bucket's HTTPS public origin; development currently uses its `r2.dev` URL, while production should use an R2 custom domain. Deployed Workers use `production/`. Run `npm run dev:node` only when you explicitly want filesystem uploads and `/uploads/*` URLs.
 
 Useful commands:
 
@@ -26,6 +26,7 @@ Useful commands:
 npm run db:studio    # inspect local data
 npm run db:seed      # upsert the official 2026 F1 teams and drivers
 npm run db:deploy    # apply committed migrations
+npm run photos:rewrite-urls # preview managed image URL changes
 npm run build        # generate Prisma Client and compile TypeScript
 npm test             # migrate the isolated test DB and run integration tests
 npm run db:down      # stop local PostgreSQL
@@ -70,7 +71,7 @@ Send the login token as `Authorization: Bearer <token>` for all remaining admin 
 
 Products are removed from the storefront by setting `status` to `ARCHIVED`; there is intentionally no destructive product-delete endpoint.
 Product create and update payloads accept nullable `teamId` and `driverId`. Assigning a driver requires its current team, while unassigned products remain valid for general merchandise and backwards compatibility. Driver payloads use `{ name, slug, racingNumber, teamId }`, with unique racing numbers from 1 through 99. Driver transfers do not rewrite historical product team assignments.
-Team and driver payloads also expose nullable `logoUrl` and `photoUrl`. The idempotent seed uses the official 2026 roster, numbers, and media assets published by Formula 1. New product photo uploads store their complete Worker-served `/uploads/*` URL in `ProductPhoto.path`; existing rows containing raw object keys remain supported.
+Team and driver payloads also expose nullable `logoUrl` and `photoUrl`. The idempotent seed uses the official 2026 roster, numbers, and media assets published by Formula 1. R2 uploads store complete `PHOTO_PUBLIC_BASE_URL/<environment>/<object>` URLs in `Team.logoUrl`, `Driver.photoUrl`, and `ProductPhoto.path`; filesystem uploads and legacy rows containing `/uploads/*` URLs or raw product-photo keys remain supported.
 
 ### Example login
 
@@ -112,3 +113,14 @@ npm run worker:deploy
 ```
 
 Apply Prisma migrations to the production database separately with `npm run db:deploy` before deploying. Product photo upload and `/uploads` serving use the `PHOTO_BUCKET` R2 binding.
+
+### Changing the R2 public domain
+
+Attach the new custom domain before changing application configuration so both origins work during the transition. Set `PHOTO_PUBLIC_BASE_URL` to the new origin for the Worker and admin build, then preview and apply the database rewrite:
+
+```sh
+PHOTO_PUBLIC_BASE_URL=https://media.example.com PHOTO_PREVIOUS_PUBLIC_BASE_URL=https://pub-example.r2.dev npm run photos:rewrite-urls
+PHOTO_PUBLIC_BASE_URL=https://media.example.com PHOTO_PREVIOUS_PUBLIC_BASE_URL=https://pub-example.r2.dev npm run photos:rewrite-urls -- --apply
+```
+
+The command only rewrites managed team, driver, and product-photo values, preserves external image URLs, and is idempotent. Verify that no managed rows use the old origin before disabling it. Cloudflare's `r2.dev` public development URL exposes the entire bucket and is intended only for development; use a custom R2 domain in production.

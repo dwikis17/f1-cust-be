@@ -1,6 +1,6 @@
 import type { Prisma } from "../../generated/prisma/client.js";
 import { prisma } from "../../db.js";
-import { deletePhoto } from "../../photo-storage.js";
+import { deletePhoto, storedPhotoKey } from "../../photo-storage.js";
 
 export class CatalogRepository {
   static listCategories() { return prisma.category.findMany({ orderBy: { name: "asc" } }); }
@@ -109,4 +109,5 @@ export class CatalogRepository {
   }
 
   static deletePhoto(key: string) { return deletePhoto(key); }
+  static storedPhotoKey(value: string) { return storedPhotoKey(value); }
 }
