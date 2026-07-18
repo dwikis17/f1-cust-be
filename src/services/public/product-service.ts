@@ -8,6 +8,7 @@ import {
 import type { ProductWithRelations } from "../../repositories/admin/product-repository.js";
 
 type NamedFacetValue = { id: string; name: string; slug: string };
+type Locale = "en" | "id";
 
 function increment(map: Map<string, { value: NamedFacetValue; count: number }>, value: NamedFacetValue) {
   const current = map.get(value.id);
@@ -22,10 +23,12 @@ function namedFacet(map: Map<string, { value: NamedFacetValue; count: number }>)
 }
 
 export class PublicProductService {
-  private static publicProduct(product: ProductWithRelations) {
-    const { drivers, collections, variants, photos, category, ...value } = product;
+  private static publicProduct(product: ProductWithRelations, locale: Locale) {
+    const { drivers, collections, variants, photos, category, nameId, descriptionId, ...value } = product;
     return {
       ...value,
+      name: locale === "id" ? nameId ?? product.name : product.name,
+      description: locale === "id" ? descriptionId ?? product.description : product.description,
       category,
       productType: category,
       drivers: drivers.map(({ driver }) => driver),
@@ -73,9 +76,9 @@ export class PublicProductService {
     };
   }
 
-  static async listProducts(filters: ProductFilters, sort: ProductSort, page: number, limit: number) {
+  static async listProducts(filters: ProductFilters, sort: ProductSort, page: number, limit: number, locale: Locale) {
     const [total, products] = await PublicProductRepository.listProducts(filters, sort, page, limit);
-    return { data: products.map(PublicProductService.publicProduct), page, limit, total };
+    return { data: products.map((product) => PublicProductService.publicProduct(product, locale)), page, limit, total };
   }
 
   static async listCollectionProducts(
@@ -84,6 +87,7 @@ export class PublicProductService {
     sort: ProductSort,
     page: number,
     limit: number,
+    locale: Locale,
   ) {
     const collectionPromise = PublicCatalogRepository.findCollection(collectionSlug);
     const productsPromise = PublicProductRepository.listCollectionProducts(collectionSlug, filters, sort, page, limit);
@@ -96,7 +100,7 @@ export class PublicProductService {
     if (!collection) notFound("Collection not found");
     return {
       collection,
-      data: memberships.map(({ product }) => PublicProductService.publicProduct(product)),
+      data: memberships.map(({ product }) => PublicProductService.publicProduct(product, locale)),
       page,
       limit,
       total,
@@ -104,9 +108,9 @@ export class PublicProductService {
     };
   }
 
-  static async findProduct(slug: string) {
+  static async findProduct(slug: string, locale: Locale) {
     const product = await PublicProductRepository.findProduct(slug);
     if (!product) notFound("Product not found");
-    return PublicProductService.publicProduct(product);
+    return PublicProductService.publicProduct(product, locale);
   }
 }

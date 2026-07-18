@@ -41,8 +41,8 @@ Public endpoints:
 - `GET /api/tags`
 - `GET /api/teams`
 - `GET /api/drivers?team=<team-slug>`
-- `GET /api/products?page=1&limit=20&search=&category=&tag=&team=&driver=&size=&color=`
-- `GET /api/products/:slug`
+- `GET /api/products?page=1&limit=20&locale=en|id&search=&category=&tag=&team=&driver=&size=&color=`
+- `GET /api/products/:slug?locale=en|id`
 - `POST /api/shipping/rates`
 
 Admin authentication:
@@ -71,6 +71,7 @@ Send the login token as `Authorization: Bearer <token>` for all remaining admin 
 - `PATCH|DELETE /api/admin/products/:productId/photos/:id`
 
 Products are removed from the storefront by setting `status` to `ARCHIVED`; there is intentionally no destructive product-delete endpoint.
+Product create and update payloads use `name` and `description` for English copy and accept nullable `nameId` and `descriptionId` for optional Indonesian copy. Public product endpoints default to English; `locale=id` returns Indonesian copy with field-by-field English fallback and does not expose the raw translation fields.
 Product create and update payloads accept nullable `teamId` and `driverId`. Assigning a driver requires its current team, while unassigned products remain valid for general merchandise and backwards compatibility. Driver payloads use `{ name, slug, racingNumber, teamId }`, with unique racing numbers from 1 through 99. Driver transfers do not rewrite historical product team assignments.
 Team and driver payloads also expose nullable `logoUrl` and `photoUrl`. The idempotent seed uses the official 2026 roster, numbers, and media assets published by Formula 1. R2 uploads store complete `PHOTO_PUBLIC_BASE_URL/<environment>/<object>` URLs in `Team.logoUrl`, `Driver.photoUrl`, and `ProductPhoto.path`; filesystem uploads and legacy rows containing `/uploads/*` URLs or raw product-photo keys remain supported.
 

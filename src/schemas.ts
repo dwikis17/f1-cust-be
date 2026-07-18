@@ -22,6 +22,7 @@ export const driverSchema = z.object({
 export const driverPatchSchema = driverSchema.partial().refine((value) => Object.keys(value).length > 0);
 
 export const productAudienceSchema = z.enum(["MEN", "WOMEN", "KIDS", "UNISEX"]);
+export const localeSchema = z.enum(["en", "id"]);
 export const collectionKindSchema = z.enum([
   "DOMAIN",
   "TEAM",
@@ -83,8 +84,10 @@ export const variantPatchSchema = variantBaseSchema.partial().refine((value) => 
 
 export const productSchema = z.object({
   name: nameSchema,
+  nameId: nameSchema.nullable().optional(),
   slug: slugSchema,
   description: z.string().trim().max(10_000).default(""),
+  descriptionId: z.string().trim().max(10_000).nullable().optional(),
   priceIdr: z.number().int().nonnegative(),
   status: z.enum(["DRAFT", "ACTIVE", "ARCHIVED"]).default("DRAFT"),
   categoryId: idSchema,
@@ -107,8 +110,10 @@ export const productSchema = z.object({
 
 export const productPatchSchema = z.object({
   name: nameSchema.optional(),
+  nameId: nameSchema.nullable().optional(),
   slug: slugSchema.optional(),
   description: z.string().trim().max(10_000).optional(),
+  descriptionId: z.string().trim().max(10_000).nullable().optional(),
   priceIdr: z.number().int().nonnegative().optional(),
   status: z.enum(["DRAFT", "ACTIVE", "ARCHIVED"]).optional(),
   categoryId: idSchema.optional(),

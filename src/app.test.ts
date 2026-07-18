@@ -123,8 +123,10 @@ test("admin creates catalog data and public API hides drafts", async () => {
   const product = await request(app).post("/api/admin/products").set("authorization", `Bearer ${token}`)
     .send({
       name: "Ferrari Team Jersey",
+      nameId: "Jersey Tim Ferrari",
       slug: "ferrari-team-jersey",
       description: "Official red team jersey",
+      descriptionId: "Jersey tim merah resmi",
       priceIdr: 1_250_000,
       categoryId,
       teamId,
@@ -145,6 +147,8 @@ test("admin creates catalog data and public API hides drafts", async () => {
       }],
     }).expect(201);
   productId = product.body.id;
+  assert.equal(product.body.nameId, "Jersey Tim Ferrari");
+  assert.equal(product.body.descriptionId, "Jersey tim merah resmi");
   assert.equal(product.body.team.slug, "ferrari");
   assert.deepEqual(product.body.drivers.map((driver: { slug: string }) => driver.slug), ["charles-leclerc", "niki-lauda"]);
   assert.equal(product.body.collections.length, 3);
@@ -238,6 +242,23 @@ test("active products are filterable without exposing exact stock", async () => 
   assert.equal(response.body.data[0].audience, "UNISEX");
   assert.equal(response.body.data[0].variants[0].available, true);
   assert.equal(response.body.data[0].variants[0].stockQuantity, undefined);
+  assert.equal(response.body.data[0].name, "Ferrari Team Jersey");
+  assert.equal(response.body.data[0].nameId, undefined);
+  assert.equal(response.body.data[0].descriptionId, undefined);
+  const indonesian = await request(app).get("/api/products/ferrari-team-jersey?locale=id").expect(200);
+  assert.equal(indonesian.body.name, "Jersey Tim Ferrari");
+  assert.equal(indonesian.body.description, "Jersey tim merah resmi");
+  assert.equal(indonesian.body.nameId, undefined);
+  assert.equal(indonesian.body.descriptionId, undefined);
+  const indonesianSearch = await request(app).get("/api/products?locale=id&search=merah").expect(200);
+  assert.equal(indonesianSearch.body.total, 1);
+  assert.equal(indonesianSearch.body.data[0].name, "Jersey Tim Ferrari");
+  await request(app).get("/api/products?locale=fr").expect(400);
+  await request(app).patch(`/api/admin/products/${productId}`).set("authorization", `Bearer ${token}`)
+    .send({ descriptionId: null }).expect(200);
+  const fallback = await request(app).get("/api/products/ferrari-team-jersey?locale=id").expect(200);
+  assert.equal(fallback.body.name, "Jersey Tim Ferrari");
+  assert.equal(fallback.body.description, "Official red team jersey");
   const wrongTeam = await request(app).get("/api/products?team=mercedes&driver=charles-leclerc").expect(200);
   assert.equal(wrongTeam.body.total, 0);
   const eitherDriver = await request(app).get("/api/products?driver=charles-leclerc,niki-lauda").expect(200);
@@ -370,6 +391,8 @@ test("collection hierarchy, memberships, and counted facets are public", async (
   assert.equal(response.body.facets.audiences[0].value, "UNISEX");
   assert.equal(response.body.facets.availability.inStock, 1);
   assert.deepEqual(response.body.facets.price, { min: 1_250_000, max: 1_250_000 });
+  const indonesian = await request(app).get("/api/collections/ferrari/products?locale=id").expect(200);
+  assert.equal(indonesian.body.data[0].name, "Jersey Tim Ferrari");
   const inclusivePrice = await request(app)
     .get("/api/collections/ferrari/products?minPrice=1250000&maxPrice=1250000").expect(200);
   assert.equal(inclusivePrice.body.total, 1);

@@ -41,7 +41,9 @@ function productWhere(filters: ProductFilters, omit?: FacetName): Prisma.Product
     ...(filters.search && {
       OR: [
         { name: { contains: filters.search, mode: "insensitive" } },
+        { nameId: { contains: filters.search, mode: "insensitive" } },
         { description: { contains: filters.search, mode: "insensitive" } },
+        { descriptionId: { contains: filters.search, mode: "insensitive" } },
       ],
     }),
     ...(omit !== "productType" && filters.productTypes?.length && {

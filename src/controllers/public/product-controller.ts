@@ -2,7 +2,7 @@ import type { Request, Response } from "express";
 import { z } from "zod";
 import { parse } from "../../http.js";
 import type { ProductFilters, ProductSort } from "../../repositories/public/product-repository.js";
-import { productAudienceSchema, slugSchema } from "../../schemas.js";
+import { localeSchema, productAudienceSchema, slugSchema } from "../../schemas.js";
 import { PublicProductService } from "../../services/public/product-service.js";
 
 function listValue(value: unknown) {
@@ -24,6 +24,7 @@ const sortSchema = z.enum([
 ]);
 
 const listQuerySchema = z.object({
+  locale: localeSchema.default("en"),
   page: z.coerce.number().int().min(1).default(1),
   limit: z.coerce.number().int().min(1).max(100).default(20),
   search: z.string().trim().max(100).optional(),
@@ -69,6 +70,7 @@ export class PublicProductController {
       (query.sort ?? "newest") as ProductSort,
       query.page,
       query.limit,
+      query.locale,
     ));
   }
   static async listCollectionProducts(request: Request, response: Response) {
@@ -79,9 +81,11 @@ export class PublicProductController {
       (query.sort ?? "featured") as ProductSort,
       query.page,
       query.limit,
+      query.locale,
     ));
   }
   static async findProduct(request: Request, response: Response) {
-    response.json(await PublicProductService.findProduct(String(request.params.slug)));
+    const query = parse(z.object({ locale: localeSchema.default("en") }).strict(), request.query);
+    response.json(await PublicProductService.findProduct(String(request.params.slug), query.locale));
   }
 }
