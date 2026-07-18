@@ -36,7 +36,6 @@ export class MediaController {
       request.file,
       image,
       metadata,
-      `${request.protocol}://${request.get("host")}`,
     ));
   }
   static async updateProductPhoto(request: Request, response: Response) {

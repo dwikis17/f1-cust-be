@@ -26,7 +26,7 @@ export class MediaService {
   }
 
   private static async deleteManagedImage(url?: string | null) {
-    const key = url?.startsWith("/uploads/") ? url.slice("/uploads/".length) : null;
+    const key = url ? MediaRepository.storedPhotoKey(url) : null;
     if (!key) return;
     await MediaRepository.deletePhoto(key).catch((error: NodeJS.ErrnoException) => {
       if (error.code !== "ENOENT") console.error("Could not remove image", error);
@@ -40,7 +40,7 @@ export class MediaService {
     const key = MediaRepository.photoKey(`team-${randomUUID()}.${image.extension}`);
     await MediaRepository.storePhoto(key, file!.buffer, image.contentType);
     try {
-      const updated = await MediaRepository.updateTeam(id, { logoUrl: `/uploads/${key}` });
+      const updated = await MediaRepository.updateTeam(id, { logoUrl: MediaRepository.photoUrl(key) });
       await MediaService.deleteManagedImage(team.logoUrl);
       return updated;
     } catch (error) {
@@ -62,7 +62,7 @@ export class MediaService {
     const key = MediaRepository.photoKey(`driver-${randomUUID()}.${image.extension}`);
     await MediaRepository.storePhoto(key, file!.buffer, image.contentType);
     try {
-      const updated = await MediaRepository.updateDriver(id, { photoUrl: `/uploads/${key}` });
+      const updated = await MediaRepository.updateDriver(id, { photoUrl: MediaRepository.photoUrl(key) });
       await MediaService.deleteManagedImage(driver.photoUrl);
       return updated;
     } catch (error) {
@@ -82,7 +82,6 @@ export class MediaService {
     file: { buffer: Buffer },
     image: ValidImage,
     metadata: PhotoMetadata,
-    baseUrl: string,
   ) {
     const product = await MediaRepository.findProduct(productId);
     if (!product) notFound("Product not found");
@@ -92,14 +91,14 @@ export class MediaService {
     if (metadata.color && !await MediaRepository.findProductColor(productId, metadata.color)) {
       throw new HttpError(400, "UNKNOWN_COLOR", "Photo color must match a product variant");
     }
-    const filename = MediaRepository.photoKey(`${randomUUID()}.${image.extension}`);
-    const url = new URL(`/uploads/${filename}`, baseUrl).toString();
-    await MediaRepository.storePhoto(filename, file.buffer, image.contentType);
+    const key = MediaRepository.photoKey(`${randomUUID()}.${image.extension}`);
+    const url = MediaRepository.photoUrl(key);
+    await MediaRepository.storePhoto(key, file.buffer, image.contentType);
     try {
       const photo = await MediaRepository.createProductPhoto({ productId, path: url, ...metadata });
       return { ...photo, url };
     } catch (error) {
-      await MediaRepository.deletePhoto(filename).catch(() => undefined);
+      await MediaRepository.deletePhoto(key).catch(() => undefined);
       throw error;
     }
   }
@@ -114,7 +113,9 @@ export class MediaService {
     const photo = await MediaRepository.findProductPhoto(id, productId);
     if (!photo) notFound("Photo not found");
     await MediaRepository.deleteProductPhoto(id);
-    await MediaRepository.deletePhoto(MediaRepository.storedPhotoKey(photo.path)).catch((error: NodeJS.ErrnoException) => {
+    const key = MediaRepository.storedPhotoKey(photo.path);
+    if (!key) return;
+    await MediaRepository.deletePhoto(key).catch((error: NodeJS.ErrnoException) => {
       if (error.code !== "ENOENT") console.error("Could not remove photo file", error);
     });
   }

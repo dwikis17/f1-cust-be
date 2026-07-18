@@ -9,33 +9,70 @@ export type PhotoBucket = {
   delete(key: string): Promise<void>;
 };
 
-type PhotoStorageContext = { bucket: PhotoBucket; prefix: string };
+type PhotoStorageContext = { bucket: PhotoBucket; prefix: string; publicBaseUrl: string };
 type StoredPhoto = { body: Uint8Array; contentType: string; etag: string };
 
 const requestStorage = new AsyncLocalStorage<PhotoStorageContext>();
 
-export function runWithPhotoBucket<T>(bucket: PhotoBucket, prefix: string, callback: () => T) {
-  return requestStorage.run({ bucket, prefix }, callback);
+export function normalizePhotoPublicBaseUrl(value: string) {
+  const url = new URL(value);
+  if (
+    url.protocol !== "https:" ||
+    url.username ||
+    url.password ||
+    url.pathname !== "/" ||
+    url.search ||
+    url.hash
+  ) {
+    throw new Error("PHOTO_PUBLIC_BASE_URL must be an HTTPS origin without a path, query, or fragment");
+  }
+  return url.origin;
+}
+
+export function runWithPhotoBucket<T>(
+  bucket: PhotoBucket,
+  prefix: string,
+  publicBaseUrl: string,
+  callback: () => T,
+) {
+  return requestStorage.run({ bucket, prefix, publicBaseUrl: normalizePhotoPublicBaseUrl(publicBaseUrl) }, callback);
 }
 
 export function photoKey(filename: string) {
   return `${requestStorage.getStore()?.prefix ?? ""}${filename}`;
 }
 
-export function storedPhotoKey(value: string) {
+export function photoUrl(key: string, publicBaseUrl = requestStorage.getStore()?.publicBaseUrl) {
+  return publicBaseUrl
+    ? new URL(key, `${normalizePhotoPublicBaseUrl(publicBaseUrl)}/`).toString()
+    : `/uploads/${key}`;
+}
+
+export function storedPhotoKey(value: string, publicBaseUrl = requestStorage.getStore()?.publicBaseUrl) {
   if (value.startsWith("/uploads/")) return value.slice("/uploads/".length);
+  const publicOrigin = publicBaseUrl ? normalizePhotoPublicBaseUrl(publicBaseUrl) : undefined;
   try {
     const url = new URL(value);
     if (url.pathname.startsWith("/uploads/")) return url.pathname.slice("/uploads/".length);
+    if (publicOrigin && url.origin === publicOrigin) {
+      return url.pathname.length > 1 ? url.pathname.slice(1) : null;
+    }
+    return null;
   } catch {
     // Legacy rows contain the R2 key directly.
+    return value.startsWith("/") ? null : value;
   }
-  return value;
 }
 
 export function storedPhotoUrl(value: string) {
-  if (value.startsWith("http://") || value.startsWith("https://") || value.startsWith("/uploads/")) return value;
-  return `/uploads/${value}`;
+  if (value.startsWith("http://") || value.startsWith("https://")) return value;
+  const key = storedPhotoKey(value);
+  return key ? photoUrl(key) : value;
+}
+
+export function rewrittenPhotoUrl(value: string, publicBaseUrl: string, previousPublicBaseUrl?: string) {
+  const key = storedPhotoKey(value, previousPublicBaseUrl);
+  return key ? photoUrl(key, publicBaseUrl) : value;
 }
 
 export async function storePhoto(key: string, body: Uint8Array, contentType: string) {

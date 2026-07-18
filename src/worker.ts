@@ -15,7 +15,7 @@ export default {
     const hostname = new URL(request.url).hostname;
     const photoPrefix = hostname === "localhost" || hostname === "127.0.0.1" ? "development/" : "production/";
     try {
-      return await runWithPhotoBucket(env.PHOTO_BUCKET, photoPrefix, () =>
+      return await runWithPhotoBucket(env.PHOTO_BUCKET, photoPrefix, env.PHOTO_PUBLIC_BASE_URL, () =>
         runWithPrisma(prisma, async () => {
           if (!expressHandler.fetch) throw new Error("Express Worker handler is unavailable");
           return expressHandler.fetch.call(expressHandler, request, env, ctx);

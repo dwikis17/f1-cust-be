@@ -411,12 +411,12 @@ test("photo uploads validate signatures and clean up files", async () => {
   const upload = await request(app).post(`/api/admin/products/${productId}/photos`).set("authorization", `Bearer ${token}`)
     .field("altText", "Red Ferrari jersey").field("color", "Red").field("position", "0")
     .attach("photo", pngHeader, "jersey.png").expect(201);
-  assert.match(upload.body.path, /^http:\/\/127\.0\.0\.1:\d+\/uploads\//);
+  assert.match(upload.body.path, /^\/uploads\//);
   assert.equal(upload.body.url, upload.body.path);
-  const storedKey = new URL(upload.body.path).pathname.replace("/uploads/", "");
+  const storedKey = upload.body.path.replace("/uploads/", "");
   const storedPath = path.join(config.uploadDir, storedKey);
   await access(storedPath);
-  await request(app).get(new URL(upload.body.path).pathname).expect("content-type", /image\/png/).expect(200);
+  await request(app).get(upload.body.path).expect("content-type", /image\/png/).expect(200);
   const publicProduct = await request(app).get("/api/products/ferrari-team-jersey").expect(200);
   assert.equal(publicProduct.body.photos[0].url, upload.body.path);
   await request(app).delete(`/api/admin/products/${productId}/photos/${upload.body.id}`)

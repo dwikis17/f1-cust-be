@@ -1,6 +1,6 @@
 import type { Prisma } from "../../generated/prisma/client.js";
 import { prisma } from "../../db.js";
-import { deletePhoto, photoKey, storedPhotoKey, storePhoto } from "../../photo-storage.js";
+import { deletePhoto, photoKey, photoUrl, storedPhotoKey, storePhoto } from "../../photo-storage.js";
 
 export class MediaRepository {
   static findTeam(id: string) { return prisma.team.findUnique({ where: { id } }); }
@@ -21,5 +21,6 @@ export class MediaRepository {
   static storePhoto(key: string, body: Uint8Array, contentType: string) { return storePhoto(key, body, contentType); }
   static deletePhoto(key: string) { return deletePhoto(key); }
   static photoKey(filename: string) { return photoKey(filename); }
+  static photoUrl(key: string) { return photoUrl(key); }
   static storedPhotoKey(value: string) { return storedPhotoKey(value); }
 }

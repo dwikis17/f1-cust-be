@@ -24,6 +24,7 @@
     "db:generate": "prisma generate",
     "db:seed": "tsx src/seed-f1.ts",
     "db:studio": "prisma studio",
+    "photos:rewrite-urls": "tsx src/rewrite-photo-urls.ts",
     "admin:create": "tsx src/create-admin.ts"
   },
   "dependencies": {
