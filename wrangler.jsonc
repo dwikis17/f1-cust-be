@@ -5,12 +5,16 @@
   "compatibility_date": "2026-07-15",
   "compatibility_flags": ["nodejs_compat"],
   "vars": {
-    "CORS_ORIGINS": "http://localhost:5173,http://localhost:3001",
+    "CORS_ORIGINS": "http://localhost:5173,http://localhost:3001,https://valydejersey.com",
     "SESSION_TTL_HOURS": "168",
     "MAX_UPLOAD_BYTES": "5242880",
     "MAX_PHOTOS_PER_PRODUCT": "12",
     "PHOTO_PUBLIC_BASE_URL": "https://media.valydejersey.com",
-    "BITESHIP_COURIERS": "jne,jnt,sicepat,anteraja"
+    "BITESHIP_COURIERS": "jne,jnt,sicepat,anteraja",
+    "BITESHIP_ORIGIN_POSTAL_CODE": "15318",
+    "MIDTRANS_ENV": "sandbox",
+    "MIDTRANS_MERCHANT_ID": "M309500554",
+    "STOREFRONT_URL": "https://valydejersey.com"
   },
   "hyperdrive": [
     {
