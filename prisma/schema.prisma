@@ -46,6 +46,12 @@ enum PaymentStatus {
   REFUNDED
 }
 
+enum PaymentEventProcessingResult {
+  RECEIVED
+  PROCESSED
+  REJECTED
+}
+
 enum FulfillmentStatus {
   UNFULFILLED
   BOOKED
@@ -263,11 +269,31 @@ model Order {
   biteshipPriceIdr       Int?
   biteshipStatus         String?
   items                  OrderItem[]
+  paymentEvents          MidtransPaymentEvent[]
   createdAt              DateTime           @default(now())
   updatedAt              DateTime           @updatedAt
 
   @@index([paymentStatus, createdAt])
   @@index([fulfillmentStatus, createdAt])
+}
+
+model MidtransPaymentEvent {
+  id                String                       @id @default(uuid()) @db.Uuid
+  orderId           String                       @db.Uuid
+  order             Order                        @relation(fields: [orderId], references: [id], onDelete: Cascade)
+  statusCode        String
+  grossAmount       String
+  transactionStatus String
+  transactionId     String?
+  fraudStatus       String?
+  paymentType       String?
+  payload           Json
+  processingResult  PaymentEventProcessingResult @default(RECEIVED)
+  processingError   String?
+  receivedAt        DateTime                     @default(now())
+  processedAt       DateTime?
+
+  @@index([orderId, receivedAt])
 }
 
 model OrderItem {

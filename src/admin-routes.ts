@@ -4,6 +4,7 @@ import { config } from "./config.js";
 import { AuthController } from "./controllers/admin/auth-controller.js";
 import { CatalogController } from "./controllers/admin/catalog-controller.js";
 import { MediaController } from "./controllers/admin/media-controller.js";
+import { OrderController } from "./controllers/admin/order-controller.js";
 import { ProductController } from "./controllers/admin/product-controller.js";
 
 const router = Router();
@@ -13,6 +14,8 @@ router.post("/auth/login", AuthController.login);
 router.use(AuthController.requireAdmin);
 router.post("/auth/logout", AuthController.logout);
 router.get("/auth/me", AuthController.me);
+
+router.get("/orders/:id/payment-events", OrderController.listPaymentEvents);
 
 router.get("/categories", CatalogController.listCategories);
 router.post("/categories", CatalogController.createCategory);

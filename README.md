@@ -68,6 +68,7 @@ Send the login token as `Authorization: Bearer <token>` for all remaining admin 
 - `POST|DELETE /api/admin/drivers/:id/photo` using multipart field `image`
 - `GET|POST /api/admin/products`
 - `GET|PATCH /api/admin/products/:id`
+- `GET /api/admin/orders/:id/payment-events`
 - `POST /api/admin/products/:productId/variants`
 - `PATCH|DELETE /api/admin/products/:productId/variants/:id`
 - `POST /api/admin/products/:productId/photos` using multipart fields `photo`, `altText`, optional `color`, and optional `position`

@@ -387,6 +387,31 @@ export class PublicCheckoutService {
       throw new HttpError(401, "INVALID_NOTIFICATION", "Payment notification could not be verified");
     }
 
+    const order = await prisma.order.findUnique({ where: { id: input.order_id }, select: { totalIdr: true } });
+    if (!order) notFound("Order not found");
+    const { signature_key: _signatureKey, ...redactedPayload } = input;
+    const event = await prisma.midtransPaymentEvent.create({
+      data: {
+        orderId: input.order_id,
+        statusCode: input.status_code,
+        grossAmount: input.gross_amount,
+        transactionStatus: input.transaction_status,
+        transactionId: input.transaction_id,
+        fraudStatus: input.fraud_status,
+        paymentType: input.payment_type,
+        payload: redactedPayload as Prisma.InputJsonObject,
+      },
+    });
+
+    const amount = Number(input.gross_amount);
+    if (!Number.isInteger(amount) || amount !== order.totalIdr) {
+      await prisma.midtransPaymentEvent.update({
+        where: { id: event.id },
+        data: { processingResult: "REJECTED", processingError: "PAYMENT_AMOUNT_MISMATCH", processedAt: new Date() },
+      });
+      throw new HttpError(400, "PAYMENT_AMOUNT_MISMATCH", "Payment amount does not match the order");
+    }
+
     const transaction = {
       midtransStatus: input.transaction_status,
       midtransTransactionId: input.transaction_id,
@@ -406,10 +431,6 @@ export class PublicCheckoutService {
       `;
       if (!locked.length) notFound("Order not found");
       let order = await tx.order.findUniqueOrThrow({ where: { id: input.order_id }, include: { items: true } });
-      const amount = Number(input.gross_amount);
-      if (!Number.isInteger(amount) || amount !== order.totalIdr) {
-        throw new HttpError(400, "PAYMENT_AMOUNT_MISMATCH", "Payment amount does not match the order");
-      }
 
       if (paid && order.paymentStatus !== "REFUNDED") {
         if (order.stockReleasedAt) {
@@ -419,6 +440,10 @@ export class PublicCheckoutService {
               await tx.order.update({
                 where: { id: order.id },
                 data: { ...transaction, paymentStatus: "PAID", fulfillmentStatus: "BOOKING_FAILED" },
+              });
+              await tx.midtransPaymentEvent.update({
+                where: { id: event.id },
+                data: { processingResult: "PROCESSED", processedAt: new Date() },
               });
               return { bookingFailed: true, stockUnavailable: true };
             }
@@ -436,6 +461,10 @@ export class PublicCheckoutService {
             await tx.order.update({
               where: { id: order.id },
               data: { ...transaction, paymentStatus: "PAID", fulfillmentStatus: "BOOKING_FAILED" },
+            });
+            await tx.midtransPaymentEvent.update({
+              where: { id: event.id },
+              data: { processingResult: "PROCESSED", processedAt: new Date() },
             });
             return { bookingFailed: true, stockUnavailable: true };
           }
@@ -483,6 +512,10 @@ export class PublicCheckoutService {
       const bookingFailed = order.paymentStatus === "PAID" && order.fulfillmentStatus !== "BOOKED"
         ? await bookShipment(tx, order)
         : false;
+      await tx.midtransPaymentEvent.update({
+        where: { id: event.id },
+        data: { processingResult: "PROCESSED", processedAt: new Date() },
+      });
       return { bookingFailed, stockUnavailable: false };
     }, { timeout: 10_000 });
 

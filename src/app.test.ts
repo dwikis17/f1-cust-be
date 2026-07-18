@@ -459,6 +459,7 @@ test("checkout verifies payment notifications, reserves stock, and books Biteshi
       fraud_status: "accept",
       transaction_id: `transaction-${orderId}`,
       payment_type: "bank_transfer",
+      settlement_time: "2026-07-18 12:00:00",
       signature_key: createHash("sha512").update(`${orderId}${statusCode}${grossAmount}server-test`).digest("hex"),
     };
   }
@@ -505,8 +506,15 @@ test("checkout verifies payment notifications, reserves stock, and books Biteshi
 
     await request(app).post("/api/payments/midtrans/notification")
       .send({ ...notification(checkout.body.orderId, "pending"), signature_key: "invalid" }).expect(401);
+    assert.equal(await prisma.midtransPaymentEvent.count({ where: { orderId: checkout.body.orderId } }), 0);
     await request(app).post("/api/payments/midtrans/notification")
       .send(notification(checkout.body.orderId, "pending", "1268001.00")).expect(400);
+    const rejectedEvent = await prisma.midtransPaymentEvent.findFirstOrThrow({ where: { orderId: checkout.body.orderId } });
+    assert.equal(rejectedEvent.processingResult, "REJECTED");
+    assert.equal(rejectedEvent.processingError, "PAYMENT_AMOUNT_MISMATCH");
+    assert.ok(rejectedEvent.processedAt);
+    assert.equal((rejectedEvent.payload as Record<string, unknown>).settlement_time, "2026-07-18 12:00:00");
+    assert.equal((rejectedEvent.payload as Record<string, unknown>).signature_key, undefined);
     await request(app).post("/api/payments/midtrans/notification")
       .send(notification(checkout.body.orderId, "pending")).expect(200);
     assert.equal(bookingCalls, 0);
@@ -515,6 +523,21 @@ test("checkout verifies payment notifications, reserves stock, and books Biteshi
     await request(app).post("/api/payments/midtrans/notification")
       .send(notification(checkout.body.orderId, "settlement")).expect(200);
     assert.equal(bookingCalls, 1);
+    await request(app).get(`/api/admin/orders/${checkout.body.orderId}/payment-events`).expect(401);
+    await request(app).get(`/api/admin/orders/${randomUUID()}/payment-events`)
+      .set("authorization", `Bearer ${token}`).expect(404);
+    const paymentEvents = await request(app).get(`/api/admin/orders/${checkout.body.orderId}/payment-events`)
+      .set("authorization", `Bearer ${token}`).expect("cache-control", "no-store").expect(200);
+    assert.deepEqual(paymentEvents.body.map((event: { transactionStatus: string }) => event.transactionStatus), [
+      "pending", "pending", "settlement", "settlement",
+    ]);
+    assert.deepEqual(paymentEvents.body.map((event: { processingResult: string }) => event.processingResult), [
+      "REJECTED", "PROCESSED", "PROCESSED", "PROCESSED",
+    ]);
+    assert.ok(paymentEvents.body.every((event: { processedAt?: string }) => event.processedAt));
+    assert.ok(paymentEvents.body.every((event: { payload: Record<string, unknown> }) => event.payload.signature_key === undefined));
+    assert.ok(paymentEvents.body.every((event: { payload: Record<string, unknown> }) =>
+      event.payload.settlement_time === "2026-07-18 12:00:00"));
     const paid = await request(app).get(`/api/orders/${checkout.body.orderId}`).expect(200);
     assert.equal(paid.body.paymentStatus, "PAID");
     assert.equal(paid.body.fulfillmentStatus, "BOOKED");
