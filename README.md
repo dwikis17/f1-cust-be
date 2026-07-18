@@ -43,6 +43,7 @@ Public endpoints:
 - `GET /api/drivers?team=<team-slug>`
 - `GET /api/products?page=1&limit=20&search=&category=&tag=&team=&driver=&size=&color=`
 - `GET /api/products/:slug`
+- `POST /api/shipping/rates`
 
 Admin authentication:
 
@@ -101,6 +102,19 @@ curl -X POST http://localhost:3000/api/admin/auth/login \
 ```
 
 Prices use integer Indonesian rupiah. Public product responses expose `available` for each variant but do not expose exact stock quantities.
+
+### Biteship shipping estimates
+
+`POST /api/shipping/rates` accepts a five-digit destination postal code and cart lines shaped as `{ variantId, quantity }`. The API resolves price, stock, weight, and package dimensions from the database before requesting live Biteship courier rates, so clients cannot supply shipping measurements.
+
+For local development, set `BITESHIP_API_KEY`, `BITESHIP_ORIGIN_POSTAL_CODE`, and optionally `BITESHIP_COURIERS` in `.env`. The courier list defaults to `jne,jnt,sicepat,anteraja`. For the deployed Worker, keep the API key secret and set the origin independently for each environment:
+
+```sh
+npx wrangler secret put BITESHIP_API_KEY
+npx wrangler secret put BITESHIP_ORIGIN_POSTAL_CODE
+```
+
+Before production traffic, add an edge rate-limit rule for `POST /api/shipping/rates` (default: 10 requests per minute per IP). Biteship Rates requests use paid live data even with a testing key, so automated tests mock Biteship and never make billable calls.
 
 ## Cloudflare Worker deployment
 
