@@ -1,5 +1,5 @@
 import { Buffer } from "node:buffer";
-import { createHash, timingSafeEqual } from "node:crypto";
+import { createHash, randomUUID, timingSafeEqual } from "node:crypto";
 import { z } from "zod";
 import { config } from "../../config.js";
 import { prisma } from "../../db.js";
@@ -47,6 +47,18 @@ const biteshipDuplicateSchema = z.object({
   code: z.literal(40002060),
   details: z.object({ order_id: z.string(), waybill_id: z.string().nullish() }).passthrough(),
 }).passthrough();
+const biteshipTrackingSchema = z.object({
+  success: z.literal(true),
+  id: z.string(),
+  waybill_id: z.string(),
+  history: z.array(z.object({
+    note: z.string(),
+    updated_at: z.string(),
+    status: z.string(),
+  }).passthrough()),
+  link: z.string().url().nullish(),
+  status: z.string(),
+}).passthrough();
 
 type OrderWithItems = Prisma.OrderGetPayload<{ include: { items: true } }>;
 type VariantSnapshot = Pick<OrderWithItems["items"][number], "productName" | "sku" | "color" | "size">;
@@ -57,6 +69,7 @@ function prismaCode(error: unknown) {
 
 function publicOrder(order: {
   id: string;
+  orderNumber: string;
   subtotalIdr: number;
   discountIdr: number;
   shippingIdr: number;
@@ -77,6 +90,7 @@ function publicOrder(order: {
 }) {
   return {
     id: order.id,
+    orderNumber: order.orderNumber,
     subtotalIdr: order.subtotalIdr,
     discountIdr: order.discountIdr,
     shippingIdr: order.shippingIdr,
@@ -103,6 +117,7 @@ function publicOrder(order: {
 
 function checkoutResponse(order: {
   id: string;
+  orderNumber: string;
   midtransSnapToken: string | null;
   paymentStatus: string;
   subtotalIdr: number;
@@ -114,6 +129,7 @@ function checkoutResponse(order: {
   if (!order.midtransSnapToken) throw new HttpError(409, "CHECKOUT_IN_PROGRESS", "Checkout is still being prepared");
   return {
     orderId: order.id,
+    orderNumber: order.orderNumber,
     snapToken: order.midtransSnapToken,
     paymentStatus: order.paymentStatus,
     subtotalIdr: order.subtotalIdr,
@@ -122,6 +138,11 @@ function checkoutResponse(order: {
     totalIdr: order.totalIdr,
     promoCode: order.promoCode?.code ?? null,
   };
+}
+
+function createOrderNumber(id: string) {
+  const value = id.replaceAll("-", "").slice(0, 12).toUpperCase();
+  return `VLD-${value.slice(0, 4)}-${value.slice(4, 8)}-${value.slice(8, 12)}`;
 }
 
 function requirePaymentConfig() {
@@ -326,6 +347,7 @@ export class PublicCheckoutService {
     const quantities = new Map<string, number>();
     for (const item of input.items) quantities.set(item.variantId, (quantities.get(item.variantId) ?? 0) + item.quantity);
 
+    const orderId = randomUUID();
     let order;
     try {
       order = await prisma.$transaction(async (tx) => {
@@ -359,6 +381,8 @@ export class PublicCheckoutService {
         const discountIdr = promoCode ? calculatePromoDiscount(subtotalIdr, promoCode) : 0;
         return tx.order.create({
           data: {
+            id: orderId,
+            orderNumber: createOrderNumber(orderId),
             idempotencyKey: input.idempotencyKey,
             email: input.email,
             firstName: input.firstName,
@@ -426,6 +450,81 @@ export class PublicCheckoutService {
     const order = await prisma.order.findUnique({ where: { id }, include: { promoCode: true } });
     if (!order) notFound("Order not found");
     return publicOrder(order);
+  }
+
+  static async track(input: { orderNumber: string; email: string }) {
+    const legacyId = z.string().uuid().safeParse(input.orderNumber);
+    const order = await prisma.order.findFirst({
+      where: {
+        ...(legacyId.success ? { id: legacyId.data } : { orderNumber: input.orderNumber }),
+        email: { equals: input.email, mode: "insensitive" },
+      },
+      include: { items: true },
+    });
+    if (!order) throw new HttpError(404, "TRACKING_NOT_FOUND", "No order matches those details");
+
+    const result = {
+      orderNumber: order.orderNumber,
+      createdAt: order.createdAt,
+      paymentStatus: order.paymentStatus,
+      fulfillmentStatus: order.fulfillmentStatus,
+      destination: { city: order.city, province: order.province },
+      courier: {
+        name: order.courierName,
+        serviceName: order.courierServiceName,
+        duration: order.courierDuration,
+      },
+      items: order.items.map((item) => ({
+        name: item.productName,
+        sku: item.sku,
+        color: item.color,
+        size: item.size,
+        unitPriceIdr: item.unitPriceIdr,
+        quantity: item.quantity,
+      })),
+    };
+    if (order.fulfillmentStatus !== "BOOKED" || !order.biteshipTrackingId) {
+      return { ...result, tracking: null };
+    }
+    if (!config.biteshipApiKey) {
+      throw new HttpError(503, "TRACKING_UNAVAILABLE", "Shipment tracking is not configured");
+    }
+
+    let upstream: Response;
+    try {
+      upstream = await fetch(`https://api.biteship.com/v1/trackings/${encodeURIComponent(order.biteshipTrackingId)}`, {
+        headers: { authorization: config.biteshipApiKey },
+        signal: AbortSignal.timeout(10_000),
+      });
+    } catch {
+      throw new HttpError(502, "TRACKING_UPSTREAM_ERROR", "Shipment tracking is temporarily unavailable");
+    }
+    let body: unknown;
+    try {
+      body = await upstream.json();
+    } catch {
+      throw new HttpError(502, "TRACKING_UPSTREAM_ERROR", "Biteship returned an unexpected response");
+    }
+    if (!upstream.ok) {
+      const code = z.object({ code: z.number().optional() }).passthrough().safeParse(body);
+      if (code.success && code.data.code === 40003002) return { ...result, tracking: null };
+      throw new HttpError(502, "TRACKING_UPSTREAM_ERROR", "Shipment tracking is temporarily unavailable");
+    }
+    const tracking = biteshipTrackingSchema.safeParse(body);
+    if (!tracking.success) {
+      throw new HttpError(502, "TRACKING_UPSTREAM_ERROR", "Biteship returned an unexpected response");
+    }
+    return {
+      ...result,
+      tracking: {
+        waybillId: tracking.data.waybill_id,
+        status: tracking.data.status,
+        link: tracking.data.link ?? null,
+        history: tracking.data.history
+          .map((event) => ({ status: event.status, note: event.note, updatedAt: event.updated_at }))
+          .sort((left, right) => left.updatedAt.localeCompare(right.updatedAt)),
+      },
+    };
   }
 
   static async notification(input: MidtransNotification) {

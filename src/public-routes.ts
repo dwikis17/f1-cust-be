@@ -21,6 +21,7 @@ router.get("/faqs", FaqController.listPublic);
 router.post("/shipping/rates", PublicShippingController.rates);
 router.post("/promo-codes/preview", PromoCodeController.preview);
 router.post("/checkout", PublicCheckoutController.create);
+router.post("/orders/track", PublicCheckoutController.track);
 router.get("/orders/:id", PublicCheckoutController.find);
 router.post("/payments/midtrans/notification", PublicCheckoutController.midtransNotification);
 

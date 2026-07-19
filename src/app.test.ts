@@ -521,6 +521,8 @@ test("checkout verifies payment notifications, reserves stock, and books Biteshi
   let rateCalls = 0;
   let snapCalls = 0;
   let bookingCalls = 0;
+  let trackingCalls = 0;
+  let trackingMode: "success" | "unavailable" | "malformed" = "success";
   let failNextBooking = false;
   const snapBodies: Array<{
     transaction_details: { gross_amount: number };
@@ -571,6 +573,36 @@ test("checkout verifies payment notifications, reserves stock, and books Biteshi
         courier: { tracking_id: "tracking-1", waybill_id: "waybill-1" },
         price: 18_000,
         status: "confirmed",
+      }), { status: 200, headers: { "content-type": "application/json" } });
+    }
+    if (url.endsWith("/v1/trackings/tracking-1")) {
+      trackingCalls += 1;
+      assert.equal(init?.headers && (init.headers as Record<string, string>).authorization, "biteship_test.checkout");
+      if (trackingMode === "unavailable") {
+        return new Response(JSON.stringify({ code: 40003002, message: "Courier tracking not available" }), {
+          status: 400,
+          headers: { "content-type": "application/json" },
+        });
+      }
+      if (trackingMode === "malformed") {
+        return new Response(JSON.stringify({ success: true, status: "in_transit" }), {
+          status: 200,
+          headers: { "content-type": "application/json" },
+        });
+      }
+      return new Response(JSON.stringify({
+        success: true,
+        id: "tracking-1",
+        waybill_id: "waybill-1",
+        courier: { company: "jne", driver_name: "Private Driver", driver_phone: "0811111111" },
+        origin: { address: "Private warehouse address" },
+        destination: { address: "Private customer address" },
+        history: [
+          { note: "Package is moving", updated_at: "2026-07-20T10:00:00+07:00", status: "in_transit" },
+          { note: "Package collected", updated_at: "2026-07-19T09:00:00+07:00", status: "picked" },
+        ],
+        link: "https://example.com/track/waybill-1",
+        status: "in_transit",
       }), { status: 200, headers: { "content-type": "application/json" } });
     }
     throw new Error(`Unexpected fetch ${url}`);
@@ -648,11 +680,21 @@ test("checkout verifies payment notifications, reserves stock, and books Biteshi
       .set("authorization", `Bearer ${token}`).send({ active: true }).expect(200);
 
     const receipt = await request(app).get(`/api/orders/${checkout.body.orderId}`).expect(200);
+    assert.match(receipt.body.orderNumber, /^VLD-[0-9A-F]{4}-[0-9A-F]{4}-[0-9A-F]{4}$/);
+    assert.equal(receipt.body.orderNumber, checkout.body.orderNumber);
     assert.equal(receipt.body.paymentStatus, "PENDING");
     assert.equal(receipt.body.promoCode, "GRID20");
     assert.equal(receipt.body.discountIdr, 100_000);
     assert.equal(receipt.body.midtransSnapToken, undefined);
     assert.equal(receipt.body.address, undefined);
+    const missingTracking = await request(app).post("/api/orders/track")
+      .send({ orderNumber: receipt.body.orderNumber, email: "wrong@example.com" })
+      .expect(404, { error: { code: "TRACKING_NOT_FOUND", message: "No order matches those details" } });
+    assert.equal(missingTracking.body.error.fields, undefined);
+    const pendingTracking = await request(app).post("/api/orders/track")
+      .send({ orderNumber: receipt.body.orderNumber.toLowerCase(), email: "BUYER@EXAMPLE.COM" }).expect(200);
+    assert.equal(pendingTracking.body.tracking, null);
+    assert.equal(trackingCalls, 0);
 
     await request(app).post("/api/payments/midtrans/notification")
       .send({ ...notification(checkout.body.orderId, "pending"), signature_key: "invalid" }).expect(401);
@@ -692,6 +734,31 @@ test("checkout verifies payment notifications, reserves stock, and books Biteshi
     assert.equal(paid.body.paymentStatus, "PAID");
     assert.equal(paid.body.fulfillmentStatus, "BOOKED");
     assert.equal(paid.body.tracking.waybillId, "waybill-1");
+    const tracked = await request(app).post("/api/orders/track")
+      .send({ orderNumber: paid.body.orderNumber.toLowerCase(), email: "BUYER@EXAMPLE.COM" }).expect(200);
+    assert.equal(tracked.body.orderNumber, paid.body.orderNumber);
+    assert.deepEqual(tracked.body.destination, { city: "Jakarta Selatan", province: "DKI Jakarta" });
+    assert.deepEqual(tracked.body.courier, { name: "JNE", serviceName: "Reguler", duration: "2 - 3 days" });
+    assert.deepEqual(tracked.body.items[0], {
+      name: "Ferrari Team Jersey", sku: "FER-JER-RED-M", color: "Red", size: "M", unitPriceIdr: 1_250_000, quantity: 1,
+    });
+    assert.deepEqual(tracked.body.tracking.history.map((event: { status: string }) => event.status), ["picked", "in_transit"]);
+    assert.equal(tracked.body.tracking.link, "https://example.com/track/waybill-1");
+    assert.equal(tracked.body.address, undefined);
+    assert.equal(tracked.body.tracking.courier, undefined);
+    assert.equal(tracked.body.tracking.origin, undefined);
+    const legacyTracked = await request(app).post("/api/orders/track")
+      .send({ orderNumber: checkout.body.orderId, email: "buyer@example.com" }).expect(200);
+    assert.equal(legacyTracked.body.orderNumber, paid.body.orderNumber);
+    trackingMode = "unavailable";
+    const unavailableTracking = await request(app).post("/api/orders/track")
+      .send({ orderNumber: paid.body.orderNumber, email: "buyer@example.com" }).expect(200);
+    assert.equal(unavailableTracking.body.tracking, null);
+    trackingMode = "malformed";
+    await request(app).post("/api/orders/track")
+      .send({ orderNumber: paid.body.orderNumber, email: "buyer@example.com" })
+      .expect(502, { error: { code: "TRACKING_UPSTREAM_ERROR", message: "Biteship returned an unexpected response" } });
+    trackingMode = "success";
     assert.deepEqual(bookingBodies.find((body) => body.reference_id === checkout.body.orderId)?.items[0], {
       name: "Ferrari Team Jersey (Red / M)",
       description: "Color: Red / Size: M",

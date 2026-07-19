@@ -267,6 +267,7 @@ model Faq {
 
 model Order {
   id                     String            @id @default(uuid()) @db.Uuid
+  orderNumber            String            @unique
   idempotencyKey         String            @unique @db.Uuid
   email                  String
   firstName              String

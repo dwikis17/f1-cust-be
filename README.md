@@ -45,6 +45,7 @@ Public endpoints:
 - `GET /api/products/:slug?locale=en|id`
 - `POST /api/shipping/rates`
 - `POST /api/checkout`
+- `POST /api/orders/track`
 - `GET /api/orders/:id`
 - `POST /api/payments/midtrans/notification`
 
@@ -120,6 +121,12 @@ npx wrangler secret put BITESHIP_ORIGIN_POSTAL_CODE
 ```
 
 Before production traffic, add an edge rate-limit rule for `POST /api/shipping/rates` (default: 10 requests per minute per IP). Biteship Rates requests use paid live data even with a testing key, so automated tests mock Biteship and never make billable calls.
+
+### Shipment tracking
+
+`POST /api/orders/track` accepts `{ orderNumber, email }`. It matches both values before requesting the latest status and history from Biteship with the stored tracking ID. The response includes only customer-safe order, destination city/province, courier, package snapshot, waybill, link, and history fields; Biteship driver and full-address data are not forwarded.
+
+New and migrated orders use public numbers shaped like `VLD-AB12-CD34-EF56`. Existing UUID order IDs remain accepted by the tracking endpoint for compatibility. Add an edge rate limit for this public lookup endpoint before production traffic.
 
 ### Checkout payments and fulfillment
 

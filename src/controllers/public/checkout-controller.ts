@@ -32,6 +32,11 @@ const notificationSchema = z.object({
   payment_type: z.string().max(80).optional(),
 }).passthrough();
 
+const trackingLookupSchema = z.object({
+  orderNumber: z.string().trim().min(1).max(40).transform((value) => value.toUpperCase()),
+  email: z.string().trim().email().max(254),
+}).strict();
+
 export class PublicCheckoutController {
   static async create(request: Request, response: Response) {
     response.set("cache-control", "no-store");
@@ -41,6 +46,11 @@ export class PublicCheckoutController {
   static async find(request: Request, response: Response) {
     response.set("cache-control", "no-store");
     response.json(await PublicCheckoutService.find(parse(idSchema, String(request.params.id))));
+  }
+
+  static async track(request: Request, response: Response) {
+    response.set("cache-control", "no-store");
+    response.json(await PublicCheckoutService.track(parse(trackingLookupSchema, request.body)));
   }
 
   static async midtransNotification(request: Request, response: Response) {
