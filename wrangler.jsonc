@@ -17,8 +17,17 @@
     "BITESHIP_ORIGIN_ADDRESS": "anggrek lok aaf 1",
     "MIDTRANS_ENV": "sandbox",
     "MIDTRANS_MERCHANT_ID": "M309500554",
-    "STOREFRONT_URL": "https://valydejersey.com"
+    "STOREFRONT_URL": "https://valydejersey.com",
+    "EMAIL_FROM_ADDRESS": "orders@valydejersey.com",
+    "EMAIL_FROM_NAME": "Valyde Jersey",
+    "EMAIL_REPLY_TO": "support@valydejersey.com"
   },
+  "send_email": [
+    {
+      "name": "EMAIL",
+      "allowed_sender_addresses": ["orders@valydejersey.com"]
+    }
+  ],
   "hyperdrive": [
     {
       "binding": "HYPERDRIVE",
