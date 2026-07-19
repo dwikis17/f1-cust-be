@@ -135,6 +135,7 @@ model Product {
   slug          String           @unique
   description   String           @default("")
   descriptionId String?
+  sizingNote    String?
   priceIdr      Int
   status        ProductStatus    @default(DRAFT)
   categoryId    String           @db.Uuid

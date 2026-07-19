@@ -67,8 +67,14 @@ export const collectionMembershipSchema = z.object({
 
 export const sizingGuideSchema = z.object({
   unit: z.enum(["cm", "in"]),
-  measurements: z.record(z.string().trim().min(1).max(50), z.number().positive()).refine((value) => Object.keys(value).length > 0),
+  measurements: z.object({
+    length: z.number().positive(),
+    chestWidth: z.number().positive(),
+    waistWidth: z.number().positive(),
+  }).strict(),
 }).strict();
+
+const sizingNoteSchema = z.string().trim().max(2_000).nullable();
 
 const variantBaseSchema = z.object({
   sku: z.string().trim().min(1).max(80),
@@ -94,6 +100,7 @@ export const productSchema = z.object({
   slug: slugSchema,
   description: z.string().trim().max(10_000).default(""),
   descriptionId: z.string().trim().max(10_000).nullable().optional(),
+  sizingNote: sizingNoteSchema.optional(),
   priceIdr: z.number().int().nonnegative(),
   status: z.enum(["DRAFT", "ACTIVE", "ARCHIVED"]).default("DRAFT"),
   categoryId: idSchema,
@@ -120,6 +127,7 @@ export const productPatchSchema = z.object({
   slug: slugSchema.optional(),
   description: z.string().trim().max(10_000).optional(),
   descriptionId: z.string().trim().max(10_000).nullable().optional(),
+  sizingNote: sizingNoteSchema.optional(),
   priceIdr: z.number().int().nonnegative().optional(),
   status: z.enum(["DRAFT", "ACTIVE", "ARCHIVED"]).optional(),
   categoryId: idSchema.optional(),

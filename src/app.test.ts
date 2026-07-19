@@ -130,6 +130,7 @@ test("admin creates catalog data and public API hides drafts", async () => {
       slug: "ferrari-team-jersey",
       description: "Official red team jersey",
       descriptionId: "Jersey tim merah resmi",
+      sizingNote: "Measured flat across the garment.",
       priceIdr: 1_250_000,
       categoryId,
       teamId,
@@ -146,12 +147,13 @@ test("admin creates catalog data and public API hides drafts", async () => {
         packageWidthMm: 220,
         packageHeightMm: 40,
         packageWeightG: 450,
-        sizingGuide: { unit: "cm", measurements: { chest: 52, length: 72 } },
+        sizingGuide: { unit: "cm", measurements: { length: 72, chestWidth: 52, waistWidth: 50 } },
       }],
     }).expect(201);
   productId = product.body.id;
   assert.equal(product.body.nameId, "Jersey Tim Ferrari");
   assert.equal(product.body.descriptionId, "Jersey tim merah resmi");
+  assert.equal(product.body.sizingNote, "Measured flat across the garment.");
   assert.equal(product.body.team.slug, "ferrari");
   assert.deepEqual(product.body.drivers.map((driver: { slug: string }) => driver.slug), ["charles-leclerc", "niki-lauda"]);
   assert.equal(product.body.collections.length, 3);
@@ -231,12 +233,13 @@ test("public team and driver references support catalog filters", async () => {
 
 test("active products are filterable without exposing exact stock", async () => {
   await request(app).patch(`/api/admin/products/${productId}`).set("authorization", `Bearer ${token}`)
-    .send({ status: "ACTIVE" }).expect(200);
+    .send({ status: "ACTIVE", sizingNote: "  Allow a 1 cm tolerance.  " }).expect(200);
   const response = await request(app)
     .get("/api/products?search=team&size=M&color=Red&team=ferrari&driver=charles-leclerc")
     .expect(200);
   assert.equal(response.body.total, 1);
   assert.equal(response.body.data[0].priceIdr, 1_250_000);
+  assert.equal(response.body.data[0].sizingNote, "Allow a 1 cm tolerance.");
   assert.equal(response.body.data[0].team.slug, "ferrari");
   assert.deepEqual(
     response.body.data[0].drivers.map((driver: { slug: string }) => driver.slug),
@@ -274,7 +277,27 @@ test("active products are filterable without exposing exact stock", async () => 
     .send({
       sku: "INVALID", size: "L", color: "Red", stockQuantity: -1,
       packageLengthMm: 300, packageWidthMm: 220, packageHeightMm: 40, packageWeightG: 450,
-      sizingGuide: { unit: "cm", measurements: { chest: 55 } },
+      sizingGuide: { unit: "cm", measurements: { length: 74, chestWidth: 55, waistWidth: 53 } },
+    }).expect(400);
+  const invalidVariant = {
+    sku: "INVALID-GUIDE",
+    size: "L",
+    color: "Blue",
+    stockQuantity: 1,
+    packageLengthMm: 300,
+    packageWidthMm: 220,
+    packageHeightMm: 40,
+    packageWeightG: 450,
+  };
+  await request(app).post(`/api/admin/products/${productId}/variants`).set("authorization", `Bearer ${token}`)
+    .send({
+      ...invalidVariant,
+      sizingGuide: { unit: "cm", measurements: { length: 74, chestWidth: 55 } },
+    }).expect(400);
+  await request(app).post(`/api/admin/products/${productId}/variants`).set("authorization", `Bearer ${token}`)
+    .send({
+      ...invalidVariant,
+      sizingGuide: { unit: "cm", measurements: { length: 74, chestWidth: 55, waistWidth: 0 } },
     }).expect(400);
 });
 
@@ -873,7 +896,7 @@ test("optionless products use a default SKU without fake size or color", async (
         packageWidthMm: 220,
         packageHeightMm: 40,
         packageWeightG: 400,
-        sizingGuide: { unit: "cm", measurements: { chest: 48 } },
+        sizingGuide: { unit: "cm", measurements: { length: 68, chestWidth: 48, waistWidth: 46 } },
       }],
     }).expect(201);
   assert.equal(sizedProduct.body.variants[0].color, null);
@@ -896,7 +919,7 @@ test("database uniqueness and transactional tag updates are enforced", async () 
     .send({
       sku: "FER-JER-RED-M", size: "L", color: "Red", stockQuantity: 1,
       packageLengthMm: 300, packageWidthMm: 220, packageHeightMm: 40, packageWeightG: 450,
-      sizingGuide: { unit: "cm", measurements: { chest: 52 } },
+      sizingGuide: { unit: "cm", measurements: { length: 72, chestWidth: 52, waistWidth: 50 } },
     }).expect(409);
   await request(app).patch(`/api/admin/products/${productId}`).set("authorization", `Bearer ${token}`)
     .send({ tagIds: [randomUUID()] }).expect(400);
