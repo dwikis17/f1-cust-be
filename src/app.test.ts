@@ -67,6 +67,206 @@ test("health and admin authentication", async () => {
   await request(app).get("/api/admin/auth/me").set("authorization", `Bearer ${token}`).expect(200);
 });
 
+test("admin dashboard aggregates real commerce data and handles empty periods", async () => {
+  await request(app).get("/api/admin/dashboard").expect(401);
+  await request(app).get("/api/admin/dashboard?period=365d")
+    .set("authorization", `Bearer ${token}`).expect(400);
+
+  const category = await prisma.category.create({
+    data: { name: "Dashboard Products", slug: "dashboard-products" },
+  });
+  const activeProduct = await prisma.product.create({
+    data: {
+      name: "Dashboard Jersey",
+      slug: "dashboard-jersey",
+      priceIdr: 100_000,
+      status: "ACTIVE",
+      categoryId: category.id,
+      variants: {
+        create: [
+          {
+            sku: "DASH-HEALTHY",
+            stockQuantity: 10,
+            packageLengthMm: 100,
+            packageWidthMm: 100,
+            packageHeightMm: 100,
+            packageWeightG: 100,
+          },
+          {
+            sku: "DASH-LOW",
+            stockQuantity: 5,
+            packageLengthMm: 100,
+            packageWidthMm: 100,
+            packageHeightMm: 100,
+            packageWeightG: 100,
+          },
+          {
+            sku: "DASH-OUT",
+            stockQuantity: 0,
+            packageLengthMm: 100,
+            packageWidthMm: 100,
+            packageHeightMm: 100,
+            packageWeightG: 100,
+          },
+        ],
+      },
+    },
+  });
+  await prisma.product.create({
+    data: {
+      name: "Dashboard Draft",
+      slug: "dashboard-draft",
+      priceIdr: 100_000,
+      status: "DRAFT",
+      categoryId: category.id,
+      variants: {
+        create: {
+          sku: "DASH-DRAFT-OUT",
+          stockQuantity: 0,
+          packageLengthMm: 100,
+          packageWidthMm: 100,
+          packageHeightMm: 100,
+          packageWeightG: 100,
+        },
+      },
+    },
+  });
+
+  type DashboardPaymentStatus = "PENDING" | "PAID" | "FAILED" | "EXPIRED" | "CANCELLED" | "REFUNDED";
+  type DashboardFulfillmentStatus = "UNFULFILLED" | "BOOKED" | "BOOKING_FAILED";
+  const dayMs = 24 * 60 * 60 * 1_000;
+  const now = Date.now();
+  const createOrder = (
+    orderNumber: string,
+    paymentStatus: DashboardPaymentStatus,
+    createdAt: Date,
+    totalIdr: number,
+    email: string,
+    fulfillmentStatus: DashboardFulfillmentStatus = "UNFULFILLED",
+    item?: { quantity: number; unitPriceIdr: number },
+  ) => prisma.order.create({
+    data: {
+      orderNumber,
+      idempotencyKey: randomUUID(),
+      email,
+      firstName: "Dashboard",
+      lastName: "Buyer",
+      phone: "+628123456789",
+      address: "Dashboard Street 1",
+      city: "Jakarta",
+      province: "DKI Jakarta",
+      postalCode: "12345",
+      subtotalIdr: totalIdr,
+      shippingIdr: 0,
+      totalIdr,
+      courierCode: "jne",
+      courierName: "JNE",
+      courierServiceCode: "reg",
+      courierServiceName: "Regular",
+      courierDuration: "1 - 2 days",
+      paymentStatus,
+      fulfillmentStatus,
+      createdAt,
+      updatedAt: createdAt,
+      ...(item ? {
+        items: {
+          create: {
+            productName: activeProduct.name,
+            sku: "DASH-SOLD",
+            unitPriceIdr: item.unitPriceIdr,
+            quantity: item.quantity,
+            packageLengthMm: 100,
+            packageWidthMm: 100,
+            packageHeightMm: 100,
+            packageWeightG: 100,
+          },
+        },
+      } : {}),
+    },
+  });
+
+  const [latestOrder] = await Promise.all([
+    createOrder("DASH-PENDING", "PENDING", new Date(now - dayMs / 2), 50_000, "pending@example.com"),
+    createOrder(
+      "DASH-PAID-1",
+      "PAID",
+      new Date(now - dayMs),
+      100_000,
+      "Buyer@Example.com",
+      "BOOKED",
+      { quantity: 2, unitPriceIdr: 50_000 },
+    ),
+    createOrder(
+      "DASH-PAID-2",
+      "PAID",
+      new Date(now - 2 * dayMs),
+      300_000,
+      "buyer@example.com",
+      "BOOKING_FAILED",
+      { quantity: 1, unitPriceIdr: 100_000 },
+    ),
+    createOrder("DASH-FAILED", "FAILED", new Date(now - 3 * dayMs), 75_000, "failed@example.com"),
+    createOrder("DASH-REFUNDED", "REFUNDED", new Date(now - 4 * dayMs), 125_000, "refund@example.com"),
+    createOrder("DASH-PREVIOUS", "PAID", new Date(now - 35 * dayMs), 200_000, "previous@example.com"),
+  ]);
+
+  const response = await request(app).get("/api/admin/dashboard")
+    .set("authorization", `Bearer ${token}`).expect("cache-control", "no-store").expect(200);
+  assert.equal(response.body.period.value, "30d");
+  assert.equal(response.body.period.timezone, "Asia/Jakarta");
+  assert.deepEqual(response.body.kpis.paidRevenueIdr, { value: 400_000, previousValue: 200_000, changePercent: 100 });
+  assert.deepEqual(response.body.kpis.paidOrders, { value: 2, previousValue: 1, changePercent: 100 });
+  assert.deepEqual(response.body.kpis.uniqueBuyers, { value: 1, previousValue: 1, changePercent: 0 });
+  assert.deepEqual(response.body.kpis.averageOrderValueIdr, { value: 200_000, previousValue: 200_000, changePercent: 0 });
+  assert.equal(response.body.salesSeries.length, 30);
+  assert.equal(response.body.salesSeries.reduce((sum: number, item: { revenueIdr: number }) => sum + item.revenueIdr, 0), 400_000);
+  assert.deepEqual(response.body.paymentStatuses, {
+    PENDING: 1,
+    PAID: 2,
+    FAILED: 1,
+    EXPIRED: 0,
+    CANCELLED: 0,
+    REFUNDED: 1,
+  });
+  assert.deepEqual(response.body.fulfillmentStatuses, { UNFULFILLED: 3, BOOKED: 1, BOOKING_FAILED: 1 });
+  assert.deepEqual(
+    {
+      totalUnits: response.body.inventory.totalUnits,
+      totalVariants: response.body.inventory.totalVariants,
+      healthyVariants: response.body.inventory.healthyVariants,
+      lowStockVariants: response.body.inventory.lowStockVariants,
+      outOfStockVariants: response.body.inventory.outOfStockVariants,
+    },
+    { totalUnits: 15, totalVariants: 3, healthyVariants: 1, lowStockVariants: 1, outOfStockVariants: 1 },
+  );
+  assert.deepEqual(response.body.inventory.lowStockItems.map((item: { sku: string }) => item.sku), [
+    "DASH-OUT",
+    "DASH-LOW",
+  ]);
+  assert.deepEqual(response.body.topProducts[0], {
+    name: "Dashboard Jersey",
+    unitsSold: 3,
+    grossMerchandiseIdr: 200_000,
+  });
+  assert.equal(response.body.recentOrders[0].id, latestOrder.id);
+
+  await request(app).get("/api/admin/dashboard?period=7d").set("authorization", `Bearer ${token}`).expect(200);
+  await request(app).get("/api/admin/dashboard?period=90d").set("authorization", `Bearer ${token}`).expect(200);
+
+  await prisma.order.deleteMany({ where: { orderNumber: { startsWith: "DASH-" } } });
+  await prisma.product.deleteMany({ where: { categoryId: category.id } });
+  await prisma.category.delete({ where: { id: category.id } });
+
+  const empty = await request(app).get("/api/admin/dashboard?period=7d")
+    .set("authorization", `Bearer ${token}`).expect(200);
+  assert.equal(empty.body.salesSeries.length, 7);
+  assert.ok(empty.body.salesSeries.every((item: { paidOrders: number; revenueIdr: number }) =>
+    item.paidOrders === 0 && item.revenueIdr === 0));
+  assert.deepEqual(empty.body.kpis.paidRevenueIdr, { value: 0, previousValue: 0, changePercent: null });
+  assert.deepEqual(empty.body.topProducts, []);
+  assert.deepEqual(empty.body.recentOrders, []);
+});
+
 test("admins manage ordered bilingual FAQs and the public API exposes published localized copy", async () => {
   await request(app).get("/api/admin/faqs").expect(401);
   await request(app).post("/api/admin/faqs").set("authorization", `Bearer ${token}`)
