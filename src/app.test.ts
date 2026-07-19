@@ -7,6 +7,7 @@ import request from "supertest";
 import { createApp } from "./app.js";
 import { config } from "./config.js";
 import { prisma } from "./db-node.js";
+import { setDefaultEmailSender } from "./email-service.js";
 import { storePhoto } from "./photo-storage.js";
 
 const app = createApp();
@@ -704,6 +705,9 @@ test("checkout verifies payment notifications, reserves stock, and books Biteshi
     merchantId: config.midtransMerchantId,
     serverKey: config.midtransServerKey,
     storefrontUrl: config.storefrontUrl,
+    emailFromAddress: config.emailFromAddress,
+    emailFromName: config.emailFromName,
+    emailReplyTo: config.emailReplyTo,
   };
   const product = await request(app).get("/api/products/ferrari-team-jersey").expect(200);
   const variantId = product.body.variants[0].id as string;
@@ -717,6 +721,9 @@ test("checkout verifies payment notifications, reserves stock, and books Biteshi
   config.midtransMerchantId = "merchant-test";
   config.midtransServerKey = "server-test";
   config.storefrontUrl = "http://localhost:3001";
+  config.emailFromAddress = "orders@valydejersey.com";
+  config.emailFromName = "Valyde Jersey";
+  config.emailReplyTo = "support@valydejersey.com";
 
   let rateCalls = 0;
   let snapCalls = 0;
@@ -724,6 +731,13 @@ test("checkout verifies payment notifications, reserves stock, and books Biteshi
   let trackingCalls = 0;
   let trackingMode: "success" | "unavailable" | "malformed" = "success";
   let failNextBooking = false;
+  const sentEmails: EmailMessageBuilder[] = [];
+  setDefaultEmailSender({
+    async send(message) {
+      sentEmails.push(message);
+      return { messageId: `email-${sentEmails.length}` };
+    },
+  });
   const snapBodies: Array<{
     transaction_details: { gross_amount: number };
     item_details: Array<{ id: string; name: string; price: number; quantity: number }>;
@@ -915,6 +929,15 @@ test("checkout verifies payment notifications, reserves stock, and books Biteshi
     await request(app).post("/api/payments/midtrans/notification")
       .send(notification(checkout.body.orderId, "settlement", "1168000.00")).expect(200);
     assert.equal(bookingCalls, 1);
+    assert.equal(sentEmails.length, 1);
+    assert.deepEqual(sentEmails[0].to, { email: "buyer@example.com", name: "Ayu Racer" });
+    assert.deepEqual(sentEmails[0].from, { email: "orders@valydejersey.com", name: "Valyde Jersey" });
+    assert.equal(sentEmails[0].replyTo, "support@valydejersey.com");
+    assert.equal(sentEmails[0].subject, `Payment received — ${checkout.body.orderNumber}`);
+    assert.match(sentEmails[0].text ?? "", /Ferrari Team Jersey \(Color: Red \/ Size: M\) x1/);
+    assert.match(sentEmails[0].text ?? "", /Total paid: Rp\s?1\.168\.000/);
+    assert.match(sentEmails[0].html ?? "", /Track your order/);
+    assert.ok((await prisma.order.findUniqueOrThrow({ where: { id: checkout.body.orderId } })).paymentConfirmationEmailSentAt);
     await request(app).get(`/api/admin/orders/${checkout.body.orderId}/payment-events`).expect(401);
     await request(app).get(`/api/admin/orders/${randomUUID()}/payment-events`)
       .set("authorization", `Bearer ${token}`).expect(404);
@@ -1127,6 +1150,10 @@ test("checkout verifies payment notifications, reserves stock, and books Biteshi
     config.midtransMerchantId = originalConfig.merchantId;
     config.midtransServerKey = originalConfig.serverKey;
     config.storefrontUrl = originalConfig.storefrontUrl;
+    config.emailFromAddress = originalConfig.emailFromAddress;
+    config.emailFromName = originalConfig.emailFromName;
+    config.emailReplyTo = originalConfig.emailReplyTo;
+    setDefaultEmailSender();
   }
 });
 

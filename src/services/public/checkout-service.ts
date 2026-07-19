@@ -3,6 +3,7 @@ import { createHash, randomUUID, timingSafeEqual } from "node:crypto";
 import { z } from "zod";
 import { config } from "../../config.js";
 import { prisma } from "../../db.js";
+import { sendPaymentConfirmationEmail } from "../../email-service.js";
 import type { Prisma } from "../../generated/prisma/client.js";
 import { HttpError, notFound } from "../../http.js";
 import { calculatePromoDiscount } from "../promo-code-service.js";
@@ -673,12 +674,23 @@ export class PublicCheckoutService {
       return { bookingFailed, stockUnavailable: false };
     }, { timeout: 10_000 });
 
+    let emailDeliveryFailed = false;
+    try {
+      await sendPaymentConfirmationEmail(input.order_id);
+    } catch (error) {
+      emailDeliveryFailed = true;
+      console.error(`Payment confirmation email failed for order ${input.order_id}`, error);
+    }
+
     if (result.bookingFailed) {
       throw new HttpError(
         503,
         result.stockUnavailable ? "FULFILLMENT_STOCK_UNAVAILABLE" : "FULFILLMENT_UPSTREAM_ERROR",
         result.stockUnavailable ? "Paid order is waiting for stock" : "Shipment booking will be retried",
       );
+    }
+    if (emailDeliveryFailed) {
+      throw new HttpError(503, "EMAIL_DELIVERY_ERROR", "Payment received; confirmation email will be retried");
     }
     return { received: true };
   }

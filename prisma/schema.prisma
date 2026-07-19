@@ -113,43 +113,43 @@ model Team {
 }
 
 model Driver {
-  id           String    @id @default(uuid()) @db.Uuid
-  name         String    @unique
-  slug         String    @unique
-  racingNumber Int       @unique
+  id           String          @id @default(uuid()) @db.Uuid
+  name         String          @unique
+  slug         String          @unique
+  racingNumber Int             @unique
   photoUrl     String?
-  teamId       String?   @db.Uuid
-  team         Team?     @relation(fields: [teamId], references: [id], onDelete: Restrict)
+  teamId       String?         @db.Uuid
+  team         Team?           @relation(fields: [teamId], references: [id], onDelete: Restrict)
   products     ProductDriver[]
   collections  Collection[]
-  createdAt    DateTime  @default(now())
-  updatedAt    DateTime  @updatedAt
+  createdAt    DateTime        @default(now())
+  updatedAt    DateTime        @updatedAt
 
   @@index([teamId])
 }
 
 model Product {
-  id            String           @id @default(uuid()) @db.Uuid
+  id            String              @id @default(uuid()) @db.Uuid
   name          String
   nameId        String?
-  slug          String           @unique
-  description   String           @default("")
+  slug          String              @unique
+  description   String              @default("")
   descriptionId String?
   sizingNote    String?
   priceIdr      Int
-  status        ProductStatus    @default(DRAFT)
-  categoryId    String           @db.Uuid
-  category      Category         @relation(fields: [categoryId], references: [id], onDelete: Restrict)
-  teamId        String?          @db.Uuid
-  team          Team?            @relation(fields: [teamId], references: [id], onDelete: Restrict)
+  status        ProductStatus       @default(DRAFT)
+  categoryId    String              @db.Uuid
+  category      Category            @relation(fields: [categoryId], references: [id], onDelete: Restrict)
+  teamId        String?             @db.Uuid
+  team          Team?               @relation(fields: [teamId], references: [id], onDelete: Restrict)
   audience      ProductAudience?
   drivers       ProductDriver[]
   collections   ProductCollection[]
   tags          ProductTag[]
   variants      ProductVariant[]
   photos        ProductPhoto[]
-  createdAt     DateTime         @default(now())
-  updatedAt     DateTime         @updatedAt
+  createdAt     DateTime            @default(now())
+  updatedAt     DateTime            @updatedAt
 
   @@index([categoryId])
   @@index([teamId])
@@ -195,12 +195,12 @@ model Collection {
 }
 
 model ProductCollection {
-  productId   String     @db.Uuid
-  collectionId String   @db.Uuid
-  product     Product    @relation(fields: [productId], references: [id], onDelete: Cascade)
-  collection  Collection @relation(fields: [collectionId], references: [id], onDelete: Cascade)
-  position    Int?
-  featured    Boolean    @default(false)
+  productId    String     @db.Uuid
+  collectionId String     @db.Uuid
+  product      Product    @relation(fields: [productId], references: [id], onDelete: Cascade)
+  collection   Collection @relation(fields: [collectionId], references: [id], onDelete: Cascade)
+  position     Int?
+  featured     Boolean    @default(false)
 
   @@id([productId, collectionId])
   @@index([collectionId, position])
@@ -217,21 +217,21 @@ model ProductTag {
 }
 
 model ProductVariant {
-  id              String   @id @default(uuid()) @db.Uuid
-  productId       String   @db.Uuid
-  product         Product  @relation(fields: [productId], references: [id], onDelete: Cascade)
-  sku             String   @unique
+  id              String      @id @default(uuid()) @db.Uuid
+  productId       String      @db.Uuid
+  product         Product     @relation(fields: [productId], references: [id], onDelete: Cascade)
+  sku             String      @unique
   size            String?
   color           String?
-  stockQuantity   Int      @default(0)
+  stockQuantity   Int         @default(0)
   packageLengthMm Int
   packageWidthMm  Int
   packageHeightMm Int
   packageWeightG  Int
   sizingGuide     Json?
   orderItems      OrderItem[]
-  createdAt       DateTime @default(now())
-  updatedAt       DateTime @updatedAt
+  createdAt       DateTime    @default(now())
+  updatedAt       DateTime    @updatedAt
 
   @@index([productId])
   @@index([size])
@@ -266,45 +266,47 @@ model Faq {
 }
 
 model Order {
-  id                     String            @id @default(uuid()) @db.Uuid
-  orderNumber            String            @unique
-  idempotencyKey         String            @unique @db.Uuid
-  email                  String
-  firstName              String
-  lastName               String
-  phone                  String
-  address                String
-  city                   String
-  province               String
-  postalCode             String
-  subtotalIdr            Int
-  discountIdr            Int               @default(0)
-  shippingIdr            Int
-  totalIdr               Int
-  promoCodeId            String?            @db.Uuid
-  promoCode              PromoCode?         @relation(fields: [promoCodeId], references: [id], onDelete: Restrict)
-  promoRedeemedAt        DateTime?
-  courierCode            String
-  courierName            String
-  courierServiceCode     String
-  courierServiceName     String
-  courierDuration        String
-  paymentStatus          PaymentStatus     @default(PENDING)
-  midtransStatus         String            @default("pending")
-  midtransTransactionId  String?
-  midtransPaymentType    String?
-  midtransSnapToken      String?
-  stockReleasedAt        DateTime?
-  fulfillmentStatus      FulfillmentStatus @default(UNFULFILLED)
-  biteshipOrderId        String?            @unique
-  biteshipTrackingId     String?
-  biteshipWaybillId      String?
-  biteshipPriceIdr       Int?
-  biteshipStatus         String?
-  items                  OrderItem[]
-  paymentEvents          MidtransPaymentEvent[]
-  createdAt              DateTime           @default(now())
-  updatedAt              DateTime           @updatedAt
+  id                                String                 @id @default(uuid()) @db.Uuid
+  orderNumber                       String                 @unique
+  idempotencyKey                    String                 @unique @db.Uuid
+  email                             String
+  firstName                         String
+  lastName                          String
+  phone                             String
+  address                           String
+  city                              String
+  province                          String
+  postalCode                        String
+  subtotalIdr                       Int
+  discountIdr                       Int                    @default(0)
+  shippingIdr                       Int
+  totalIdr                          Int
+  promoCodeId                       String?                @db.Uuid
+  promoCode                         PromoCode?             @relation(fields: [promoCodeId], references: [id], onDelete: Restrict)
+  promoRedeemedAt                   DateTime?
+  courierCode                       String
+  courierName                       String
+  courierServiceCode                String
+  courierServiceName                String
+  courierDuration                   String
+  paymentStatus                     PaymentStatus          @default(PENDING)
+  midtransStatus                    String                 @default("pending")
+  midtransTransactionId             String?
+  midtransPaymentType               String?
+  midtransSnapToken                 String?
+  paymentConfirmationEmailSendingAt DateTime?
+  paymentConfirmationEmailSentAt    DateTime?
+  stockReleasedAt                   DateTime?
+  fulfillmentStatus                 FulfillmentStatus      @default(UNFULFILLED)
+  biteshipOrderId                   String?                @unique
+  biteshipTrackingId                String?
+  biteshipWaybillId                 String?
+  biteshipPriceIdr                  Int?
+  biteshipStatus                    String?
+  items                             OrderItem[]
+  paymentEvents                     MidtransPaymentEvent[]
+  createdAt                         DateTime               @default(now())
+  updatedAt                         DateTime               @updatedAt
 
   @@index([paymentStatus, createdAt])
   @@index([fulfillmentStatus, createdAt])

@@ -19,6 +19,9 @@ const env = z.object({
   MIDTRANS_MERCHANT_ID: z.string().trim().optional(),
   MIDTRANS_SERVER_KEY: z.string().trim().optional(),
   STOREFRONT_URL: z.string().url().optional(),
+  EMAIL_FROM_ADDRESS: z.string().trim().email().optional(),
+  EMAIL_FROM_NAME: z.string().trim().min(1).max(100).default("Valyde Jersey"),
+  EMAIL_REPLY_TO: z.string().trim().email().optional(),
 }).parse(process.env);
 
 export const config = {
@@ -39,6 +42,9 @@ export const config = {
   midtransMerchantId: env.MIDTRANS_MERCHANT_ID,
   midtransServerKey: env.MIDTRANS_SERVER_KEY,
   storefrontUrl: env.STOREFRONT_URL?.replace(/\/$/, ""),
+  emailFromAddress: env.EMAIL_FROM_ADDRESS,
+  emailFromName: env.EMAIL_FROM_NAME,
+  emailReplyTo: env.EMAIL_REPLY_TO,
 };
 
 export function requireDatabaseUrl() {

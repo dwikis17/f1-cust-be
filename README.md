@@ -134,6 +134,8 @@ Guest checkout uses Midtrans Snap. The backend owns all price and stock calculat
 
 The storefront loads Snap using `NEXT_PUBLIC_MIDTRANS_CLIENT_KEY`. Biteship booking also requires the full pickup contact and address variables; a paid order remains visible as `BOOKING_FAILED` and a replayed Midtrans notification safely retries it.
 
+Accepted `capture` and `settlement` notifications also send a payment confirmation through the Worker `EMAIL` binding. The message contains the order lines, totals, delivery service, destination, tracking number when available, and a link to `/track-order`. Delivery is idempotent across repeated Midtrans notifications and is retried when Cloudflare temporarily rejects a send. Configure `EMAIL_FROM_ADDRESS`, `EMAIL_FROM_NAME`, and optional `EMAIL_REPLY_TO`; the sender domain must first be onboarded in Cloudflare Email Service.
+
 ## Cloudflare Worker deployment
 
 The Express API can run on Cloudflare Workers through `cloudflare:node`. Production PostgreSQL traffic uses the `HYPERDRIVE` binding configured in `wrangler.jsonc`; local Node development continues to use `DATABASE_URL`.
