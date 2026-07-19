@@ -251,6 +251,20 @@ model PromoCode {
   @@index([active, createdAt])
 }
 
+model Faq {
+  id         String   @id @default(uuid()) @db.Uuid
+  question   String
+  questionId String?
+  answer     String
+  answerId   String?
+  position   Int      @default(0)
+  active     Boolean  @default(true)
+  createdAt  DateTime @default(now())
+  updatedAt  DateTime @updatedAt
+
+  @@index([active, position, createdAt])
+}
+
 model Order {
   id                     String            @id @default(uuid()) @db.Uuid
   idempotencyKey         String            @unique @db.Uuid

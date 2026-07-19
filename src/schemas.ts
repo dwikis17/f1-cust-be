@@ -152,6 +152,25 @@ export const promoCodePatchSchema = z.object({
   active: z.boolean().optional(),
 }).strict().refine((value) => Object.keys(value).length > 0);
 
+const faqQuestionSchema = z.string().trim().min(1).max(240);
+const faqAnswerSchema = z.string().trim().min(1).max(5_000);
+export const faqSchema = z.object({
+  question: faqQuestionSchema,
+  questionId: faqQuestionSchema.nullable().optional(),
+  answer: faqAnswerSchema,
+  answerId: faqAnswerSchema.nullable().optional(),
+  position: z.number().int().nonnegative().default(0),
+  active: z.boolean().default(true),
+}).strict();
+export const faqPatchSchema = z.object({
+  question: faqQuestionSchema.optional(),
+  questionId: faqQuestionSchema.nullable().optional(),
+  answer: faqAnswerSchema.optional(),
+  answerId: faqAnswerSchema.nullable().optional(),
+  position: z.number().int().nonnegative().optional(),
+  active: z.boolean().optional(),
+}).strict().refine((value) => Object.keys(value).length > 0);
+
 export const photoPatchSchema = z.object({
   color: z.string().trim().min(1).max(60).nullable().optional(),
   altText: z.string().trim().min(1).max(240).optional(),

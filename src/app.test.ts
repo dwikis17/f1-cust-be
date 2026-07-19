@@ -28,6 +28,7 @@ before(async () => {
   assert.match(config.databaseUrl, /f1_store_test/, "Tests must use the test database");
   await prisma.order.deleteMany();
   await prisma.promoCode.deleteMany();
+  await prisma.faq.deleteMany();
   await prisma.productPhoto.deleteMany();
   await prisma.productVariant.deleteMany();
   await prisma.productTag.deleteMany();
@@ -64,6 +65,58 @@ test("health and admin authentication", async () => {
   token = login.body.token;
   assert.ok(token);
   await request(app).get("/api/admin/auth/me").set("authorization", `Bearer ${token}`).expect(200);
+});
+
+test("admins manage ordered bilingual FAQs and the public API exposes published localized copy", async () => {
+  await request(app).get("/api/admin/faqs").expect(401);
+  await request(app).post("/api/admin/faqs").set("authorization", `Bearer ${token}`)
+    .send({ question: "", answer: "Missing question" }).expect(400);
+
+  const fallback = await request(app).post("/api/admin/faqs").set("authorization", `Bearer ${token}`)
+    .send({
+      question: "How long does delivery take?",
+      answer: "Delivery timing appears at checkout.",
+      answerId: "Waktu pengiriman tampil saat checkout.",
+      position: 20,
+    }).expect(201);
+  const hidden = await request(app).post("/api/admin/faqs").set("authorization", `Bearer ${token}`)
+    .send({ question: "Hidden question", answer: "Hidden answer", position: 0, active: false }).expect(201);
+  const translated = await request(app).post("/api/admin/faqs").set("authorization", `Bearer ${token}`)
+    .send({
+      question: "Can I return an item?",
+      questionId: "Apakah produk dapat dikembalikan?",
+      answer: "Unused items can be returned within 14 days.",
+      answerId: "Produk yang belum digunakan dapat dikembalikan dalam 14 hari.",
+      position: 10,
+    }).expect(201);
+
+  const managed = await request(app).get("/api/admin/faqs")
+    .set("authorization", `Bearer ${token}`).expect(200);
+  assert.deepEqual(managed.body.map((faq: { id: string }) => faq.id), [hidden.body.id, translated.body.id, fallback.body.id]);
+
+  const english = await request(app).get("/api/faqs").expect(200);
+  assert.deepEqual(english.body.map((faq: { question: string }) => faq.question), [
+    "Can I return an item?",
+    "How long does delivery take?",
+  ]);
+  assert.equal(english.body[0].active, undefined);
+  const indonesian = await request(app).get("/api/faqs?locale=id").expect(200);
+  assert.equal(indonesian.body[0].question, "Apakah produk dapat dikembalikan?");
+  assert.equal(indonesian.body[1].question, "How long does delivery take?");
+  assert.equal(indonesian.body[1].answer, "Waktu pengiriman tampil saat checkout.");
+  await request(app).get("/api/faqs?locale=fr").expect(400);
+
+  const updated = await request(app).patch(`/api/admin/faqs/${fallback.body.id}`)
+    .set("authorization", `Bearer ${token}`).send({ position: 5, active: false }).expect(200);
+  assert.equal(updated.body.position, 5);
+  assert.equal(updated.body.active, false);
+  const afterUpdate = await request(app).get("/api/faqs").expect(200);
+  assert.deepEqual(afterUpdate.body.map((faq: { id: string }) => faq.id), [translated.body.id]);
+
+  await request(app).delete(`/api/admin/faqs/${hidden.body.id}`)
+    .set("authorization", `Bearer ${token}`).expect(204);
+  await request(app).patch(`/api/admin/faqs/${hidden.body.id}`)
+    .set("authorization", `Bearer ${token}`).send({ active: true }).expect(404);
 });
 
 test("admin creates catalog data and public API hides drafts", async () => {
