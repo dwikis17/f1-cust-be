@@ -6,6 +6,7 @@ import { CatalogController } from "./controllers/admin/catalog-controller.js";
 import { MediaController } from "./controllers/admin/media-controller.js";
 import { OrderController } from "./controllers/admin/order-controller.js";
 import { ProductController } from "./controllers/admin/product-controller.js";
+import { PromoCodeController } from "./controllers/promo-code-controller.js";
 
 const router = Router();
 const upload = multer({ storage: multer.memoryStorage(), limits: { fileSize: config.maxUploadBytes, files: 1 } });
@@ -16,6 +17,11 @@ router.post("/auth/logout", AuthController.logout);
 router.get("/auth/me", AuthController.me);
 
 router.get("/orders/:id/payment-events", OrderController.listPaymentEvents);
+
+router.get("/promo-codes", PromoCodeController.list);
+router.post("/promo-codes", PromoCodeController.create);
+router.patch("/promo-codes/:id", PromoCodeController.update);
+router.get("/promo-codes/:id/usages", PromoCodeController.usages);
 
 router.get("/categories", CatalogController.listCategories);
 router.post("/categories", CatalogController.createCategory);

@@ -3,6 +3,12 @@ import { z } from "zod";
 export const idSchema = z.string().uuid();
 export const slugSchema = z.string().trim().min(2).max(100).regex(/^[a-z0-9]+(?:-[a-z0-9]+)*$/);
 export const nameSchema = z.string().trim().min(1).max(120);
+export const promoCodeValueSchema = z.string()
+  .trim()
+  .min(3)
+  .max(40)
+  .regex(/^[a-zA-Z0-9_-]+$/)
+  .transform((value) => value.toUpperCase());
 const urlSchema = z.union([
   z.string().url().max(2048),
   z.string().max(2048).regex(/^\/uploads\/[a-zA-Z0-9][a-zA-Z0-9/_-]*\.(?:jpe?g|png|webp)$/),
@@ -122,6 +128,20 @@ export const productPatchSchema = z.object({
   collectionIds: z.array(idSchema).max(100).optional(),
   audience: productAudienceSchema.nullable().optional(),
   tagIds: z.array(idSchema).max(30).optional(),
+}).strict().refine((value) => Object.keys(value).length > 0);
+
+const discountPercentageSchema = z.number().int().min(1).max(100);
+const maxDiscountIdrSchema = z.number().int().positive().nullable();
+export const promoCodeSchema = z.object({
+  code: promoCodeValueSchema,
+  discountPercentage: discountPercentageSchema,
+  maxDiscountIdr: maxDiscountIdrSchema.optional(),
+  active: z.boolean().default(true),
+}).strict();
+export const promoCodePatchSchema = z.object({
+  discountPercentage: discountPercentageSchema.optional(),
+  maxDiscountIdr: maxDiscountIdrSchema.optional(),
+  active: z.boolean().optional(),
 }).strict().refine((value) => Object.keys(value).length > 0);
 
 export const photoPatchSchema = z.object({

@@ -237,6 +237,19 @@ model ProductVariant {
   @@index([color])
 }
 
+model PromoCode {
+  id                 String   @id @default(uuid()) @db.Uuid
+  code               String   @unique
+  discountPercentage Int
+  maxDiscountIdr     Int?
+  active             Boolean  @default(true)
+  orders             Order[]
+  createdAt          DateTime @default(now())
+  updatedAt          DateTime @updatedAt
+
+  @@index([active, createdAt])
+}
+
 model Order {
   id                     String            @id @default(uuid()) @db.Uuid
   idempotencyKey         String            @unique @db.Uuid
@@ -249,8 +262,12 @@ model Order {
   province               String
   postalCode             String
   subtotalIdr            Int
+  discountIdr            Int               @default(0)
   shippingIdr            Int
   totalIdr               Int
+  promoCodeId            String?            @db.Uuid
+  promoCode              PromoCode?         @relation(fields: [promoCodeId], references: [id], onDelete: Restrict)
+  promoRedeemedAt        DateTime?
   courierCode            String
   courierName            String
   courierServiceCode     String
@@ -275,6 +292,8 @@ model Order {
 
   @@index([paymentStatus, createdAt])
   @@index([fulfillmentStatus, createdAt])
+  @@index([promoCodeId, createdAt])
+  @@index([promoRedeemedAt])
 }
 
 model MidtransPaymentEvent {

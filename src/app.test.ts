@@ -22,10 +22,12 @@ let historicalDriverId = "";
 let ferrariCollectionId = "";
 let driverCollectionId = "";
 let historicalDriverCollectionId = "";
+let promoCodeId = "";
 
 before(async () => {
   assert.match(config.databaseUrl, /f1_store_test/, "Tests must use the test database");
   await prisma.order.deleteMany();
+  await prisma.promoCode.deleteMany();
   await prisma.productPhoto.deleteMany();
   await prisma.productVariant.deleteMany();
   await prisma.productTag.deleteMany();
@@ -363,6 +365,56 @@ test("shipping rates use authoritative cart data and normalize Biteship response
   }
 });
 
+test("promo codes are normalized, validated, previewed, and managed by admins", async () => {
+  const product = await request(app).get("/api/products/ferrari-team-jersey").expect(200);
+  const variantId = product.body.variants[0].id as string;
+  await request(app).get("/api/admin/promo-codes").expect(401);
+  const created = await request(app).post("/api/admin/promo-codes")
+    .set("authorization", `Bearer ${token}`)
+    .send({ code: "grid20", discountPercentage: 20, maxDiscountIdr: 100_000, active: true })
+    .expect(201);
+  promoCodeId = created.body.id;
+  assert.equal(created.body.code, "GRID20");
+  await request(app).post("/api/admin/promo-codes")
+    .set("authorization", `Bearer ${token}`)
+    .send({ code: "GRID20", discountPercentage: 10, active: true })
+    .expect(409);
+  await request(app).post("/api/admin/promo-codes")
+    .set("authorization", `Bearer ${token}`)
+    .send({ code: "BAD", discountPercentage: 0, active: true })
+    .expect(400);
+
+  const preview = await request(app).post("/api/promo-codes/preview")
+    .send({ code: "grid20", items: [{ variantId, quantity: 1 }] })
+    .expect(200);
+  assert.deepEqual(preview.body, {
+    code: "GRID20",
+    discountPercentage: 20,
+    maxDiscountIdr: 100_000,
+    subtotalIdr: 1_250_000,
+    discountIdr: 100_000,
+    discountedSubtotalIdr: 1_150_000,
+  });
+
+  await request(app).patch(`/api/admin/promo-codes/${promoCodeId}`)
+    .set("authorization", `Bearer ${token}`).send({ maxDiscountIdr: null }).expect(200);
+  const uncapped = await request(app).post("/api/promo-codes/preview")
+    .send({ code: "GRID20", items: [{ variantId, quantity: 1 }] }).expect(200);
+  assert.equal(uncapped.body.discountIdr, 250_000);
+
+  await request(app).patch(`/api/admin/promo-codes/${promoCodeId}`)
+    .set("authorization", `Bearer ${token}`).send({ maxDiscountIdr: 100_000, active: false }).expect(200);
+  await request(app).post("/api/promo-codes/preview")
+    .send({ code: "GRID20", items: [{ variantId, quantity: 1 }] })
+    .expect(409, { error: { code: "PROMO_CODE_UNAVAILABLE", message: "Promo code is invalid or inactive" } });
+  await request(app).patch(`/api/admin/promo-codes/${promoCodeId}`)
+    .set("authorization", `Bearer ${token}`).send({ active: true }).expect(200);
+  const listed = await request(app).get("/api/admin/promo-codes")
+    .set("authorization", `Bearer ${token}`).expect(200);
+  assert.equal(listed.body[0].redemptionCount, 0);
+  assert.equal(listed.body[0].redeemedDiscountIdr, 0);
+});
+
 test("checkout verifies payment notifications, reserves stock, and books Biteship once", async () => {
   const originalFetch = globalThis.fetch;
   const originalConfig = {
@@ -480,10 +532,15 @@ test("checkout verifies payment notifications, reserves stock, and books Biteshi
   };
 
   try {
-    const checkout = await request(app).post("/api/checkout").send(payload).expect(201);
-    assert.equal(checkout.body.totalIdr, 1_268_000);
+    const promoPayload = { ...payload, promoCode: "grid20" };
+    const checkout = await request(app).post("/api/checkout").send(promoPayload).expect(201);
+    assert.equal(checkout.body.subtotalIdr, 1_250_000);
+    assert.equal(checkout.body.discountIdr, 100_000);
+    assert.equal(checkout.body.shippingIdr, 18_000);
+    assert.equal(checkout.body.totalIdr, 1_168_000);
+    assert.equal(checkout.body.promoCode, "GRID20");
     assert.equal(checkout.body.snapToken, "snap-1");
-    const repeated = await request(app).post("/api/checkout").send(payload).expect(201);
+    const repeated = await request(app).post("/api/checkout").send(promoPayload).expect(201);
     assert.equal(repeated.body.orderId, checkout.body.orderId);
     assert.equal(rateCalls, 1);
     assert.equal(snapCalls, 1);
@@ -494,13 +551,30 @@ test("checkout verifies payment notifications, reserves stock, and books Biteshi
       price: 1_250_000,
       quantity: 1,
     });
+    assert.deepEqual(snapBodies[0].item_details[1], {
+      id: "promo-discount",
+      name: "Promo GRID20",
+      price: -100_000,
+      quantity: 1,
+    });
     const itemSnapshot = await prisma.orderItem.findFirstOrThrow({ where: { orderId: checkout.body.orderId } });
     assert.equal(itemSnapshot.sku, "FER-JER-RED-M");
     assert.equal(itemSnapshot.color, "Red");
     assert.equal(itemSnapshot.size, "M");
 
+    await request(app).patch(`/api/admin/promo-codes/${promoCodeId}`)
+      .set("authorization", `Bearer ${token}`).send({ active: false }).expect(200);
+    await request(app).post("/api/checkout")
+      .send({ ...promoPayload, idempotencyKey: randomUUID() }).expect(409, {
+        error: { code: "PROMO_CODE_UNAVAILABLE", message: "Promo code is invalid or inactive" },
+      });
+    await request(app).patch(`/api/admin/promo-codes/${promoCodeId}`)
+      .set("authorization", `Bearer ${token}`).send({ active: true }).expect(200);
+
     const receipt = await request(app).get(`/api/orders/${checkout.body.orderId}`).expect(200);
     assert.equal(receipt.body.paymentStatus, "PENDING");
+    assert.equal(receipt.body.promoCode, "GRID20");
+    assert.equal(receipt.body.discountIdr, 100_000);
     assert.equal(receipt.body.midtransSnapToken, undefined);
     assert.equal(receipt.body.address, undefined);
 
@@ -516,12 +590,12 @@ test("checkout verifies payment notifications, reserves stock, and books Biteshi
     assert.equal((rejectedEvent.payload as Record<string, unknown>).settlement_time, "2026-07-18 12:00:00");
     assert.equal((rejectedEvent.payload as Record<string, unknown>).signature_key, undefined);
     await request(app).post("/api/payments/midtrans/notification")
-      .send(notification(checkout.body.orderId, "pending")).expect(200);
+      .send(notification(checkout.body.orderId, "pending", "1168000.00")).expect(200);
     assert.equal(bookingCalls, 0);
     await request(app).post("/api/payments/midtrans/notification")
-      .send(notification(checkout.body.orderId, "settlement")).expect(200);
+      .send(notification(checkout.body.orderId, "settlement", "1168000.00")).expect(200);
     await request(app).post("/api/payments/midtrans/notification")
-      .send(notification(checkout.body.orderId, "settlement")).expect(200);
+      .send(notification(checkout.body.orderId, "settlement", "1168000.00")).expect(200);
     assert.equal(bookingCalls, 1);
     await request(app).get(`/api/admin/orders/${checkout.body.orderId}/payment-events`).expect(401);
     await request(app).get(`/api/admin/orders/${randomUUID()}/payment-events`)
@@ -554,9 +628,29 @@ test("checkout verifies payment notifications, reserves stock, and books Biteshi
       width: 22,
       category: "fashion",
     });
+    const redeemed = await prisma.order.findUniqueOrThrow({ where: { id: checkout.body.orderId } });
+    assert.ok(redeemed.promoRedeemedAt);
+    const promoTotals = await request(app).get("/api/admin/promo-codes")
+      .set("authorization", `Bearer ${token}`).expect(200);
+    assert.equal(promoTotals.body[0].redemptionCount, 1);
+    assert.equal(promoTotals.body[0].redeemedDiscountIdr, 100_000);
+
+    const promoExpiring = await request(app).post("/api/checkout")
+      .send({ ...promoPayload, idempotencyKey: randomUUID() }).expect(201);
+    await request(app).post("/api/payments/midtrans/notification")
+      .send(notification(promoExpiring.body.orderId, "expire", "1168000.00")).expect(200);
+    const usages = await request(app).get(`/api/admin/promo-codes/${promoCodeId}/usages?page=1&limit=50`)
+      .set("authorization", `Bearer ${token}`).expect(200);
+    assert.equal(usages.body.total, 2);
+    assert.equal(usages.body.data.filter((usage: { promoRedeemedAt: string | null }) => usage.promoRedeemedAt).length, 1);
+    const totalsAfterExpired = await request(app).get("/api/admin/promo-codes")
+      .set("authorization", `Bearer ${token}`).expect(200);
+    assert.equal(totalsAfterExpired.body[0].redemptionCount, 1);
 
     const expiring = await request(app).post("/api/checkout")
       .send({ ...payload, idempotencyKey: randomUUID() }).expect(201);
+    assert.equal(expiring.body.discountIdr, 0);
+    assert.equal(expiring.body.totalIdr, 1_268_000);
     assert.equal((await prisma.productVariant.findUniqueOrThrow({ where: { id: variantId } })).stockQuantity, 6);
     const expired = notification(expiring.body.orderId, "expire");
     await request(app).post("/api/payments/midtrans/notification").send(expired).expect(200);
@@ -672,10 +766,12 @@ test("checkout verifies payment notifications, reserves stock, and books Biteshi
     assert.equal((await prisma.productVariant.findUniqueOrThrow({ where: { id: variantId } })).stockQuantity, 2);
 
     await request(app).post("/api/payments/midtrans/notification")
-      .send(notification(checkout.body.orderId, "refund")).expect(200);
+      .send(notification(checkout.body.orderId, "refund", "1168000.00")).expect(200);
     await request(app).post("/api/payments/midtrans/notification")
-      .send(notification(checkout.body.orderId, "settlement")).expect(200);
-    assert.equal((await prisma.order.findUniqueOrThrow({ where: { id: checkout.body.orderId } })).paymentStatus, "REFUNDED");
+      .send(notification(checkout.body.orderId, "settlement", "1168000.00")).expect(200);
+    const refunded = await prisma.order.findUniqueOrThrow({ where: { id: checkout.body.orderId } });
+    assert.equal(refunded.paymentStatus, "REFUNDED");
+    assert.ok(refunded.promoRedeemedAt);
   } finally {
     globalThis.fetch = originalFetch;
     config.biteshipApiKey = originalConfig.apiKey;

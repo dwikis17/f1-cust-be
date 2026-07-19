@@ -5,6 +5,7 @@ import { config } from "../../config.js";
 import { prisma } from "../../db.js";
 import type { Prisma } from "../../generated/prisma/client.js";
 import { HttpError, notFound } from "../../http.js";
+import { calculatePromoDiscount } from "../promo-code-service.js";
 import { PublicShippingService } from "./shipping-service.js";
 
 export type CheckoutInput = {
@@ -20,6 +21,7 @@ export type CheckoutInput = {
   items: Array<{ variantId: string; quantity: number }>;
   courierCode: string;
   serviceCode: string;
+  promoCode?: string;
 };
 
 export type MidtransNotification = {
@@ -56,8 +58,10 @@ function prismaCode(error: unknown) {
 function publicOrder(order: {
   id: string;
   subtotalIdr: number;
+  discountIdr: number;
   shippingIdr: number;
   totalIdr: number;
+  promoCode: { code: string } | null;
   paymentStatus: string;
   fulfillmentStatus: string;
   courierCode: string;
@@ -74,8 +78,10 @@ function publicOrder(order: {
   return {
     id: order.id,
     subtotalIdr: order.subtotalIdr,
+    discountIdr: order.discountIdr,
     shippingIdr: order.shippingIdr,
     totalIdr: order.totalIdr,
+    promoCode: order.promoCode?.code ?? null,
     paymentStatus: order.paymentStatus,
     fulfillmentStatus: order.fulfillmentStatus,
     courier: {
@@ -95,9 +101,27 @@ function publicOrder(order: {
   };
 }
 
-function checkoutResponse(order: Awaited<ReturnType<typeof prisma.order.findUniqueOrThrow>>) {
+function checkoutResponse(order: {
+  id: string;
+  midtransSnapToken: string | null;
+  paymentStatus: string;
+  subtotalIdr: number;
+  discountIdr: number;
+  shippingIdr: number;
+  totalIdr: number;
+  promoCode: { code: string } | null;
+}) {
   if (!order.midtransSnapToken) throw new HttpError(409, "CHECKOUT_IN_PROGRESS", "Checkout is still being prepared");
-  return { orderId: order.id, snapToken: order.midtransSnapToken, paymentStatus: order.paymentStatus, totalIdr: order.totalIdr };
+  return {
+    orderId: order.id,
+    snapToken: order.midtransSnapToken,
+    paymentStatus: order.paymentStatus,
+    subtotalIdr: order.subtotalIdr,
+    discountIdr: order.discountIdr,
+    shippingIdr: order.shippingIdr,
+    totalIdr: order.totalIdr,
+    promoCode: order.promoCode?.code ?? null,
+  };
 }
 
 function requirePaymentConfig() {
@@ -146,6 +170,7 @@ function variantDescription(item: VariantSnapshot) {
 
 async function createSnapToken(order: Awaited<ReturnType<typeof prisma.order.findUniqueOrThrow>> & {
   items: Array<VariantSnapshot & { unitPriceIdr: number; quantity: number }>;
+  promoCode: { code: string } | null;
 }) {
   const payment = requirePaymentConfig();
   const response = await fetch(payment.snapUrl, {
@@ -164,6 +189,12 @@ async function createSnapToken(order: Awaited<ReturnType<typeof prisma.order.fin
           quantity: item.quantity,
           name: variantName(item).slice(0, 50),
         })),
+        ...(order.discountIdr > 0 ? [{
+          id: "promo-discount",
+          price: -order.discountIdr,
+          quantity: 1,
+          name: `Promo ${order.promoCode?.code ?? "discount"}`.slice(0, 50),
+        }] : []),
         { id: "shipping", price: order.shippingIdr, quantity: 1, name: `${order.courierName} ${order.courierServiceName}`.slice(0, 50) },
       ],
       customer_details: {
@@ -279,7 +310,10 @@ function secureEqual(left: string, right: string) {
 export class PublicCheckoutService {
   static async create(input: CheckoutInput) {
     requirePaymentConfig();
-    const previous = await prisma.order.findUnique({ where: { idempotencyKey: input.idempotencyKey } });
+    const previous = await prisma.order.findUnique({
+      where: { idempotencyKey: input.idempotencyKey },
+      include: { promoCode: true },
+    });
     if (previous) return checkoutResponse(previous);
 
     const quote = await PublicShippingService.rates({
@@ -307,6 +341,12 @@ export class PublicCheckoutService {
           variant.product.status !== "ACTIVE" || variant.stockQuantity < (quantities.get(variant.id) ?? 0))) {
           throw new HttpError(409, "CART_CHANGED", "One or more cart items are unavailable");
         }
+        const promoCode = input.promoCode
+          ? await tx.promoCode.findUnique({ where: { code: input.promoCode } })
+          : null;
+        if (input.promoCode && !promoCode?.active) {
+          throw new HttpError(409, "PROMO_CODE_UNAVAILABLE", "Promo code is invalid or inactive");
+        }
         for (const variant of variants) {
           const quantity = quantities.get(variant.id) ?? 0;
           const updated = await tx.productVariant.updateMany({
@@ -316,6 +356,7 @@ export class PublicCheckoutService {
           if (updated.count !== 1) throw new HttpError(409, "CART_CHANGED", "One or more cart items are unavailable");
         }
         const subtotalIdr = variants.reduce((sum, variant) => sum + variant.product.priceIdr * (quantities.get(variant.id) ?? 0), 0);
+        const discountIdr = promoCode ? calculatePromoDiscount(subtotalIdr, promoCode) : 0;
         return tx.order.create({
           data: {
             idempotencyKey: input.idempotencyKey,
@@ -328,8 +369,10 @@ export class PublicCheckoutService {
             province: input.province,
             postalCode: input.postalCode,
             subtotalIdr,
+            discountIdr,
             shippingIdr: rate.price,
-            totalIdr: subtotalIdr + rate.price,
+            totalIdr: subtotalIdr - discountIdr + rate.price,
+            promoCodeId: promoCode?.id,
             courierCode: rate.courierCode,
             courierName: rate.courierName,
             courierServiceCode: rate.serviceCode,
@@ -351,12 +394,15 @@ export class PublicCheckoutService {
               })),
             },
           },
-          include: { items: true },
+          include: { items: true, promoCode: true },
         });
       });
     } catch (error) {
       if (prismaCode(error) === "P2002") {
-        const existing = await prisma.order.findUnique({ where: { idempotencyKey: input.idempotencyKey } });
+        const existing = await prisma.order.findUnique({
+          where: { idempotencyKey: input.idempotencyKey },
+          include: { promoCode: true },
+        });
         if (existing) return checkoutResponse(existing);
       }
       throw error;
@@ -364,7 +410,11 @@ export class PublicCheckoutService {
 
     try {
       const snapToken = await createSnapToken(order);
-      const ready = await prisma.order.update({ where: { id: order.id }, data: { midtransSnapToken: snapToken } });
+      const ready = await prisma.order.update({
+        where: { id: order.id },
+        data: { midtransSnapToken: snapToken },
+        include: { promoCode: true },
+      });
       return checkoutResponse(ready);
     } catch (error) {
       await releaseStock(order.id, "FAILED", "token_failure");
@@ -373,7 +423,7 @@ export class PublicCheckoutService {
   }
 
   static async find(id: string) {
-    const order = await prisma.order.findUnique({ where: { id } });
+    const order = await prisma.order.findUnique({ where: { id }, include: { promoCode: true } });
     if (!order) notFound("Order not found");
     return publicOrder(order);
   }
@@ -433,13 +483,14 @@ export class PublicCheckoutService {
       let order = await tx.order.findUniqueOrThrow({ where: { id: input.order_id }, include: { items: true } });
 
       if (paid && order.paymentStatus !== "REFUNDED") {
+        const redemption = order.promoCodeId && !order.promoRedeemedAt ? { promoRedeemedAt: new Date() } : {};
         if (order.stockReleasedAt) {
           const quantities = new Map<string, number>();
           for (const item of order.items) {
             if (!item.variantId) {
               await tx.order.update({
                 where: { id: order.id },
-                data: { ...transaction, paymentStatus: "PAID", fulfillmentStatus: "BOOKING_FAILED" },
+                data: { ...transaction, ...redemption, paymentStatus: "PAID", fulfillmentStatus: "BOOKING_FAILED" },
               });
               await tx.midtransPaymentEvent.update({
                 where: { id: event.id },
@@ -460,7 +511,7 @@ export class PublicCheckoutService {
           if (!stockAvailable) {
             await tx.order.update({
               where: { id: order.id },
-              data: { ...transaction, paymentStatus: "PAID", fulfillmentStatus: "BOOKING_FAILED" },
+              data: { ...transaction, ...redemption, paymentStatus: "PAID", fulfillmentStatus: "BOOKING_FAILED" },
             });
             await tx.midtransPaymentEvent.update({
               where: { id: event.id },
@@ -478,13 +529,17 @@ export class PublicCheckoutService {
             where: { id: order.id },
             data: {
               ...transaction,
+              ...redemption,
               paymentStatus: "PAID",
               fulfillmentStatus: order.fulfillmentStatus === "BOOKED" ? "BOOKED" : "UNFULFILLED",
               stockReleasedAt: null,
             },
           });
         } else {
-          await tx.order.update({ where: { id: order.id }, data: { ...transaction, paymentStatus: "PAID" } });
+          await tx.order.update({
+            where: { id: order.id },
+            data: { ...transaction, ...redemption, paymentStatus: "PAID" },
+          });
         }
       } else if (terminal && order.paymentStatus === "PENDING") {
         if (!order.stockReleasedAt) {
