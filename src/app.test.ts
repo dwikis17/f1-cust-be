@@ -134,7 +134,7 @@ test("admin dashboard aggregates real commerce data and handles empty periods", 
   });
 
   type DashboardPaymentStatus = "PENDING" | "PAID" | "FAILED" | "EXPIRED" | "CANCELLED" | "REFUNDED";
-  type DashboardFulfillmentStatus = "UNFULFILLED" | "BOOKED" | "BOOKING_FAILED";
+  type DashboardShipmentBookingStatus = "UNFULFILLED" | "BOOKED" | "BOOKING_FAILED";
   const dayMs = 24 * 60 * 60 * 1_000;
   const now = Date.now();
   const createOrder = (
@@ -143,7 +143,7 @@ test("admin dashboard aggregates real commerce data and handles empty periods", 
     createdAt: Date,
     totalIdr: number,
     email: string,
-    fulfillmentStatus: DashboardFulfillmentStatus = "UNFULFILLED",
+    shipmentBookingStatus: DashboardShipmentBookingStatus = "UNFULFILLED",
     item?: { quantity: number; unitPriceIdr: number },
   ) => prisma.order.create({
     data: {
@@ -166,7 +166,12 @@ test("admin dashboard aggregates real commerce data and handles empty periods", 
       courierServiceName: "Regular",
       courierDuration: "1 - 2 days",
       paymentStatus,
-      fulfillmentStatus,
+      shipmentBookingStatus,
+      lifecycleStatus: shipmentBookingStatus === "BOOKED"
+        ? "FULFILLED"
+        : shipmentBookingStatus === "BOOKING_FAILED"
+          ? "PROCESSING"
+          : "UNFULFILLED",
       createdAt,
       updatedAt: createdAt,
       ...(item ? {
@@ -229,7 +234,8 @@ test("admin dashboard aggregates real commerce data and handles empty periods", 
     CANCELLED: 0,
     REFUNDED: 1,
   });
-  assert.deepEqual(response.body.fulfillmentStatuses, { UNFULFILLED: 3, BOOKED: 1, BOOKING_FAILED: 1 });
+  assert.deepEqual(response.body.shipmentBookingStatuses, { UNFULFILLED: 3, BOOKED: 1, BOOKING_FAILED: 1 });
+  assert.deepEqual(response.body.orderQueues, { READY_TO_PROCESS: 1, PACKING: 0, BOOKING_FAILED: 1 });
   assert.deepEqual(
     {
       totalUnits: response.body.inventory.totalUnits,
@@ -266,6 +272,360 @@ test("admin dashboard aggregates real commerce data and handles empty periods", 
   assert.deepEqual(empty.body.kpis.paidRevenueIdr, { value: 0, previousValue: 0, changePercent: null });
   assert.deepEqual(empty.body.topProducts, []);
   assert.deepEqual(empty.body.recentOrders, []);
+});
+
+test("admins search, operate, audit, export, and invoice orders safely", async () => {
+  await request(app).get("/api/admin/orders").expect(401);
+
+  const category = await prisma.category.create({ data: { name: "Operations", slug: "operations" } });
+  const product = await prisma.product.create({
+    data: {
+      name: "Operations Jersey",
+      slug: "operations-jersey",
+      priceIdr: 250_000,
+      status: "ACTIVE",
+      categoryId: category.id,
+      variants: {
+        create: {
+          sku: "OPS-JER-M",
+          stockQuantity: 5,
+          packageLengthMm: 300,
+          packageWidthMm: 220,
+          packageHeightMm: 40,
+          packageWeightG: 450,
+        },
+      },
+    },
+    include: { variants: true },
+  });
+  const variant = product.variants[0];
+  const createOperationsOrder = (input: {
+    number: string;
+    createdAt: Date;
+    paymentStatus?: "PENDING" | "PAID";
+    lifecycleStatus?: "UNFULFILLED" | "PROCESSING" | "FULFILLED" | "CANCELLED";
+    shipmentBookingStatus?: "UNFULFILLED" | "BOOKED" | "BOOKING_FAILED";
+    firstName?: string;
+    biteshipOrderId?: string;
+  }) => prisma.order.create({
+    data: {
+      orderNumber: input.number,
+      idempotencyKey: randomUUID(),
+      email: `${input.number.toLowerCase()}@example.com`,
+      firstName: input.firstName ?? "Operations",
+      lastName: "Buyer",
+      phone: "+628123456789",
+      address: "Jl. Operations 1",
+      city: "Jakarta Selatan",
+      province: "DKI Jakarta",
+      postalCode: "12240",
+      subtotalIdr: 250_000,
+      shippingIdr: 20_000,
+      totalIdr: 270_000,
+      courierCode: "jne",
+      courierName: "JNE",
+      courierServiceCode: "reg",
+      courierServiceName: "Regular",
+      courierDuration: "1 - 2 days",
+      paymentStatus: input.paymentStatus ?? "PAID",
+      lifecycleStatus: input.lifecycleStatus ?? "UNFULFILLED",
+      shipmentBookingStatus: input.shipmentBookingStatus ?? "UNFULFILLED",
+      biteshipOrderId: input.biteshipOrderId,
+      createdAt: input.createdAt,
+      updatedAt: input.createdAt,
+      items: {
+        create: {
+          variantId: variant.id,
+          productName: product.name,
+          sku: variant.sku,
+          color: "Red",
+          size: "M",
+          unitPriceIdr: 250_000,
+          quantity: 1,
+          packageLengthMm: 300,
+          packageWidthMm: 220,
+          packageHeightMm: 40,
+          packageWeightG: 450,
+        },
+      },
+    },
+  });
+
+  const beforeJakartaDay = await createOperationsOrder({
+    number: "OPS-BEFORE",
+    createdAt: new Date("2026-07-19T16:59:59.999Z"),
+  });
+  const searchable = await createOperationsOrder({
+    number: "OPS-SEARCH",
+    createdAt: new Date("2026-07-19T17:00:00.000Z"),
+    firstName: "=FORMULA",
+  });
+  const lifecycle = await createOperationsOrder({
+    number: "OPS-LIFECYCLE",
+    createdAt: new Date("2026-07-20T04:00:00.000Z"),
+  });
+  const retry = await createOperationsOrder({
+    number: "OPS-RETRY",
+    createdAt: new Date("2026-07-20T05:00:00.000Z"),
+    shipmentBookingStatus: "BOOKING_FAILED",
+    lifecycleStatus: "PROCESSING",
+  });
+  const pending = await createOperationsOrder({
+    number: "OPS-PENDING",
+    createdAt: new Date("2026-07-20T06:00:00.000Z"),
+    paymentStatus: "PENDING",
+  });
+  const booked = await createOperationsOrder({
+    number: "OPS-BOOKED",
+    createdAt: new Date("2026-07-20T07:00:00.000Z"),
+    shipmentBookingStatus: "BOOKED",
+    lifecycleStatus: "FULFILLED",
+    biteshipOrderId: "biteship-ops-booked",
+  });
+  const refund = await createOperationsOrder({
+    number: "OPS-REFUND",
+    createdAt: new Date("2026-07-20T08:00:00.000Z"),
+  });
+
+  const list = await request(app).get("/api/admin/orders?from=2026-07-20&to=2026-07-20&sort=createdAt_asc&limit=2")
+    .set("authorization", `Bearer ${token}`).expect("cache-control", "no-store").expect(200);
+  assert.equal(list.body.total, 6);
+  assert.deepEqual(list.body.data.map((order: { orderNumber: string }) => order.orderNumber), ["OPS-SEARCH", "OPS-LIFECYCLE"]);
+  assert.ok(!list.body.data.some((order: { id: string }) => order.id === beforeJakartaDay.id));
+  const search = await request(app).get("/api/admin/orders?search=formula&paymentStatus=PAID")
+    .set("authorization", `Bearer ${token}`).expect(200);
+  assert.deepEqual(search.body.data.map((order: { id: string }) => order.id), [searchable.id]);
+  await request(app).get("/api/admin/orders?limit=101").set("authorization", `Bearer ${token}`).expect(400);
+
+  const detail = await request(app).get(`/api/admin/orders/${searchable.id}`)
+    .set("authorization", `Bearer ${token}`).expect(200);
+  assert.equal(detail.body.idempotencyKey, undefined);
+  assert.equal(detail.body.midtransSnapToken, undefined);
+  assert.equal(detail.body.refundState, "NONE");
+
+  await request(app).patch(`/api/admin/orders/${lifecycle.id}/lifecycle`)
+    .set("authorization", `Bearer ${token}`).send({ status: "FULFILLED" }).expect(400);
+  await request(app).patch(`/api/admin/orders/${pending.id}/lifecycle`)
+    .set("authorization", `Bearer ${token}`).send({ status: "PROCESSING" }).expect(409);
+  await request(app).patch(`/api/admin/orders/${lifecycle.id}/lifecycle`)
+    .set("authorization", `Bearer ${token}`).send({ status: "PROCESSING" }).expect(200);
+  await request(app).patch(`/api/admin/orders/${lifecycle.id}/lifecycle`)
+    .set("authorization", `Bearer ${token}`).send({ status: "PROCESSING" }).expect(409);
+  const failedQueue = await request(app).get("/api/admin/orders?queue=BOOKING_FAILED")
+    .set("authorization", `Bearer ${token}`).expect(200);
+  assert.deepEqual(failedQueue.body.data.map((order: { id: string }) => order.id), [retry.id]);
+  assert.deepEqual(failedQueue.body.queueCounts, { READY_TO_PROCESS: 3, PACKING: 1, BOOKING_FAILED: 1 });
+
+  const previousFetch = globalThis.fetch;
+  const previousSenderMessages: EmailMessageBuilder[] = [];
+  const shipmentBookingBodies: Array<{
+    reference_id: string;
+    origin_collection_method: string;
+    delivery_type: string;
+  }> = [];
+  let rejectShipmentCancellation = true;
+  config.biteshipApiKey = "biteship_test.operations";
+  config.biteshipOriginPostalCode = "12240";
+  config.biteshipOriginContactName = "Valyde Jersey";
+  config.biteshipOriginContactPhone = "081382854010";
+  config.biteshipOriginAddress = "Jl. Origin 1";
+  config.midtransMerchantId = "merchant-operations";
+  config.midtransServerKey = "server-operations";
+  config.storefrontUrl = "http://localhost:3001";
+  config.emailFromAddress = "orders@valydejersey.com";
+  const operationsSender = {
+    async send(message) {
+      previousSenderMessages.push(message);
+      await new Promise((resolve) => setTimeout(resolve, 25));
+      return { messageId: `operations-${previousSenderMessages.length}` };
+    },
+  } satisfies Parameters<typeof setDefaultEmailSender>[0];
+  setDefaultEmailSender(operationsSender);
+  globalThis.fetch = async (input, init) => {
+    const url = String(input);
+    if (url.endsWith("/v1/orders")) {
+      const body = JSON.parse(String(init?.body)) as typeof shipmentBookingBodies[number];
+      shipmentBookingBodies.push(body);
+      return new Response(JSON.stringify({
+        id: `biteship-${body.reference_id}`,
+        courier: { tracking_id: "tracking-ops", waybill_id: "waybill-ops" },
+        price: 20_000,
+        status: "confirmed",
+      }), { status: 200, headers: { "content-type": "application/json" } });
+    }
+    if (url.includes("api.sandbox.midtrans.com") && url.endsWith("/cancel")) {
+      return new Response(JSON.stringify({ status_code: "200", transaction_status: "cancel" }), {
+        status: 200,
+        headers: { "content-type": "application/json" },
+      });
+    }
+    if (url.endsWith("/v1/orders/biteship-ops-booked/cancel")) {
+      if (rejectShipmentCancellation) {
+        return new Response(JSON.stringify({ error: "Courier already collected the parcel" }), {
+          status: 409,
+          headers: { "content-type": "application/json" },
+        });
+      }
+      return new Response(JSON.stringify({ success: true, status: "cancelled" }), {
+        status: 200,
+        headers: { "content-type": "application/json" },
+      });
+    }
+    throw new Error(`Unexpected operations fetch ${url}`);
+  };
+
+  try {
+    setDefaultEmailSender({ async send() { throw new Error("Simulated confirmation delivery failure"); } });
+    const failedEmailSignature = createHash("sha512")
+      .update(`${searchable.id}200270000.00server-operations`)
+      .digest("hex");
+    await request(app).post("/api/payments/midtrans/notification").send({
+      order_id: searchable.id,
+      status_code: "200",
+      gross_amount: "270000.00",
+      merchant_id: "merchant-operations",
+      transaction_status: "settlement",
+      fraud_status: "accept",
+      transaction_id: `email-failure-${searchable.id}`,
+      payment_type: "bank_transfer",
+      signature_key: failedEmailSignature,
+    }).expect(200);
+    assert.equal((await prisma.order.findUniqueOrThrow({ where: { id: searchable.id } })).paymentStatus, "PAID");
+    setDefaultEmailSender(operationsSender);
+
+    const firstBooking = await request(app).post(`/api/admin/orders/${lifecycle.id}/shipment/book`)
+      .set("authorization", `Bearer ${token}`).expect(200);
+    assert.equal(firstBooking.body.lifecycleStatus, "FULFILLED");
+    assert.equal(firstBooking.body.shipmentBookingStatus, "BOOKED");
+    assert.equal(shipmentBookingBodies[0].origin_collection_method, "pickup");
+    assert.equal(shipmentBookingBodies[0].delivery_type, "now");
+    assert.match(previousSenderMessages[0].subject ?? "", /Your order has shipped/);
+
+    await prisma.order.update({
+      where: { id: retry.id },
+      data: { shipmentBookingStartedAt: new Date(Date.now() - 11 * 60 * 1_000) },
+    });
+    setDefaultEmailSender({ async send() { throw new Error("Simulated shipment delivery failure"); } });
+    await request(app).post(`/api/admin/orders/${retry.id}/shipment/retry`)
+      .set("authorization", `Bearer ${token}`).expect(200);
+    setDefaultEmailSender(operationsSender);
+    const retried = await prisma.order.findUniqueOrThrow({ where: { id: retry.id } });
+    assert.equal(retried.shipmentBookingStatus, "BOOKED");
+    assert.equal(retried.lifecycleStatus, "FULFILLED");
+    await request(app).post(`/api/admin/orders/${retry.id}/shipment/retry`)
+      .set("authorization", `Bearer ${token}`).expect(409);
+
+    await prisma.order.update({ where: { id: searchable.id }, data: { shipmentBookingStartedAt: new Date() } });
+    await request(app).post(`/api/admin/orders/${searchable.id}/cancel`)
+      .set("authorization", `Bearer ${token}`).send({ reason: "Booking is still running" }).expect(409);
+    await prisma.order.update({ where: { id: searchable.id }, data: { shipmentBookingStartedAt: null } });
+
+    const stockBeforePendingCancel = (await prisma.productVariant.findUniqueOrThrow({ where: { id: variant.id } })).stockQuantity;
+    await request(app).post(`/api/admin/orders/${pending.id}/cancel`)
+      .set("authorization", `Bearer ${token}`).send({ reason: "Customer requested cancellation" }).expect(200);
+    assert.equal((await prisma.productVariant.findUniqueOrThrow({ where: { id: variant.id } })).stockQuantity, stockBeforePendingCancel + 1);
+    await request(app).post(`/api/admin/orders/${pending.id}/cancel`)
+      .set("authorization", `Bearer ${token}`).send({ reason: "Duplicate cancellation" }).expect(200);
+    assert.equal((await prisma.productVariant.findUniqueOrThrow({ where: { id: variant.id } })).stockQuantity, stockBeforePendingCancel + 1);
+    const latePaymentSignature = createHash("sha512")
+      .update(`${pending.id}200270000.00server-operations`)
+      .digest("hex");
+    await request(app).post("/api/payments/midtrans/notification").send({
+      order_id: pending.id,
+      status_code: "200",
+      gross_amount: "270000.00",
+      merchant_id: "merchant-operations",
+      transaction_status: "settlement",
+      fraud_status: "accept",
+      transaction_id: `late-${pending.id}`,
+      payment_type: "bank_transfer",
+      signature_key: latePaymentSignature,
+    }).expect(200);
+    const latePaidOrder = await prisma.order.findUniqueOrThrow({ where: { id: pending.id } });
+    assert.equal(latePaidOrder.lifecycleStatus, "CANCELLED");
+    assert.equal(latePaidOrder.paymentStatus, "PAID");
+    assert.equal(latePaidOrder.shipmentBookingStatus, "UNFULFILLED");
+    assert.equal((await prisma.productVariant.findUniqueOrThrow({ where: { id: variant.id } })).stockQuantity, stockBeforePendingCancel + 1);
+
+    const stockBeforeBookedCancel = (await prisma.productVariant.findUniqueOrThrow({ where: { id: variant.id } })).stockQuantity;
+    await request(app).post(`/api/admin/orders/${booked.id}/cancel`)
+      .set("authorization", `Bearer ${token}`).send({ reason: "Cannot deliver" }).expect(409);
+    assert.equal((await prisma.order.findUniqueOrThrow({ where: { id: booked.id } })).lifecycleStatus, "FULFILLED");
+    assert.equal((await prisma.productVariant.findUniqueOrThrow({ where: { id: variant.id } })).stockQuantity, stockBeforeBookedCancel);
+    rejectShipmentCancellation = false;
+    const cancelledBooked = await request(app).post(`/api/admin/orders/${booked.id}/cancel`)
+      .set("authorization", `Bearer ${token}`).send({ reason: "Cannot deliver" }).expect(200);
+    assert.equal(cancelledBooked.body.refundState, "REQUIRED");
+
+    const refunded = await request(app).post(`/api/admin/orders/${refund.id}/external-refund`)
+      .set("authorization", `Bearer ${token}`).send({ reason: "Returned through bank transfer" }).expect(200);
+    assert.equal(refunded.body.lifecycleStatus, "CANCELLED");
+    assert.equal(refunded.body.refundState, "EXTERNALLY_REFUNDED");
+    assert.equal(refunded.body.externalRefundedByAdmin.email, "admin@example.com");
+    const repeatedRefund = await request(app).post(`/api/admin/orders/${refund.id}/external-refund`)
+      .set("authorization", `Bearer ${token}`).send({ reason: "Duplicate marker" }).expect(200);
+    assert.equal(repeatedRefund.body.externalRefundedAt, refunded.body.externalRefundedAt);
+
+    const emailResults = await Promise.all([
+      request(app).post(`/api/admin/orders/${searchable.id}/confirmation-email/resend`)
+        .set("authorization", `Bearer ${token}`),
+      request(app).post(`/api/admin/orders/${searchable.id}/confirmation-email/resend`)
+        .set("authorization", `Bearer ${token}`),
+    ]);
+    assert.deepEqual(emailResults.map((result) => result.status).sort(), [200, 409]);
+    assert.equal(previousSenderMessages.filter((message) => message.subject?.startsWith("Payment received")).length, 1);
+
+    const shipmentEmailResults = await Promise.all([
+      request(app).post(`/api/admin/orders/${lifecycle.id}/shipment-email/resend`)
+        .set("authorization", `Bearer ${token}`),
+      request(app).post(`/api/admin/orders/${lifecycle.id}/shipment-email/resend`)
+        .set("authorization", `Bearer ${token}`),
+    ]);
+    assert.deepEqual(shipmentEmailResults.map((result) => result.status).sort(), [200, 409]);
+    assert.equal(
+      previousSenderMessages.filter((message) => message.subject?.startsWith("Your order has shipped")).length,
+      2,
+    );
+
+    const csv = await request(app).get("/api/admin/orders/export.csv?search=OPS-&sort=createdAt_asc")
+      .set("authorization", `Bearer ${token}`).expect("content-type", /text\/csv/).expect(200);
+    assert.ok(csv.text.startsWith("\uFEFF\"order_number\""));
+    assert.match(csv.text, /"'\=FORMULA Buyer"/);
+    assert.ok(csv.text.indexOf("OPS-BEFORE") < csv.text.indexOf("OPS-SEARCH"));
+
+    const invoice = await request(app).get(`/api/admin/orders/${searchable.id}/invoice.pdf`)
+      .set("authorization", `Bearer ${token}`).buffer(true).parse((response, callback) => {
+        const chunks: Buffer[] = [];
+        response.on("data", (chunk: Buffer) => chunks.push(chunk));
+        response.on("end", () => callback(null, Buffer.concat(chunks)));
+      }).expect("content-type", /application\/pdf/).expect("content-disposition", /invoice-OPS-SEARCH\.pdf/).expect(200);
+    assert.equal((invoice.body as Buffer).subarray(0, 5).toString(), "%PDF-");
+
+    const auditActions = (await prisma.orderAuditEvent.findMany({
+      where: { orderId: { in: [lifecycle.id, retry.id, pending.id, booked.id, refund.id, searchable.id] } },
+      select: { action: true, outcome: true },
+    })).map((event) => `${event.action}:${event.outcome}`);
+    assert.ok(auditActions.includes("LIFECYCLE_UPDATED:SUCCEEDED"));
+    assert.ok(auditActions.includes("LIFECYCLE_UPDATE_FAILED:FAILED"));
+    assert.ok(auditActions.includes("SHIPMENT_BOOKING_RETRIED:SUCCEEDED"));
+    assert.ok(auditActions.includes("SHIPMENT_BOOKED:SUCCEEDED"));
+    assert.ok(auditActions.includes("SHIPMENT_CONFIRMATION_EMAIL_FAILED:FAILED"));
+    assert.ok(auditActions.includes("ORDER_CANCELLATION_FAILED:FAILED"));
+    assert.ok(auditActions.includes("LATE_PAYMENT_AFTER_CANCELLATION:SUCCEEDED"));
+    assert.ok(auditActions.includes("EXTERNAL_REFUND_RECORDED:SUCCEEDED"));
+    assert.ok(auditActions.includes("CONFIRMATION_EMAIL_RESENT:SUCCEEDED"));
+    assert.ok(auditActions.includes("CONFIRMATION_EMAIL_RESEND_FAILED:FAILED"));
+    assert.ok(auditActions.includes("PAYMENT_CONFIRMATION_EMAIL_FAILED:FAILED"));
+    assert.ok(auditActions.includes("SHIPMENT_CONFIRMATION_EMAIL_RESENT:SUCCEEDED"));
+    assert.ok(auditActions.includes("SHIPMENT_CONFIRMATION_EMAIL_RESEND_FAILED:FAILED"));
+    assert.ok(auditActions.includes("INVOICE_DOWNLOADED:SUCCEEDED"));
+  } finally {
+    globalThis.fetch = previousFetch;
+    setDefaultEmailSender(undefined);
+    await prisma.order.deleteMany({ where: { orderNumber: { startsWith: "OPS-" } } });
+    await prisma.product.delete({ where: { id: product.id } });
+    await prisma.category.delete({ where: { id: category.id } });
+  }
 });
 
 test("admins manage ordered bilingual FAQs and the public API exposes published localized copy", async () => {
@@ -711,7 +1071,7 @@ test("promo codes are normalized, validated, previewed, and managed by admins", 
   assert.equal(listed.body[0].redeemedDiscountIdr, 0);
 });
 
-test("checkout verifies payment notifications, reserves stock, and books Biteship once", async () => {
+test("checkout verifies payment notifications, reserves stock, and waits for manual Biteship booking", async () => {
   const originalFetch = globalThis.fetch;
   const originalConfig = {
     apiKey: config.biteshipApiKey,
@@ -947,7 +1307,7 @@ test("checkout verifies payment notifications, reserves stock, and books Biteshi
       .send(notification(checkout.body.orderId, "settlement", "1168000.00")).expect(200);
     await request(app).post("/api/payments/midtrans/notification")
       .send(notification(checkout.body.orderId, "settlement", "1168000.00")).expect(200);
-    assert.equal(bookingCalls, 1);
+    assert.equal(bookingCalls, 0);
     assert.equal(sentEmails.length, 1);
     assert.deepEqual(sentEmails[0].to, { email: "buyer@example.com", name: "Ayu Racer" });
     assert.deepEqual(sentEmails[0].from, { email: "orders@valydejersey.com", name: "Valyde Jersey" });
@@ -974,11 +1334,31 @@ test("checkout verifies payment notifications, reserves stock, and books Biteshi
       event.payload.settlement_time === "2026-07-18 12:00:00"));
     const paid = await request(app).get(`/api/orders/${checkout.body.orderId}`).expect(200);
     assert.equal(paid.body.paymentStatus, "PAID");
-    assert.equal(paid.body.fulfillmentStatus, "BOOKED");
-    assert.equal(paid.body.tracking.waybillId, "waybill-1");
+    assert.equal(paid.body.lifecycleStatus, "UNFULFILLED");
+    assert.equal(paid.body.fulfillmentStatus, "UNFULFILLED");
+    assert.deepEqual(paid.body.tracking, { id: null, waybillId: null, status: null });
+    await request(app).post(`/api/admin/orders/${checkout.body.orderId}/shipment/book`)
+      .set("authorization", `Bearer ${token}`).expect(409);
+    await request(app).patch(`/api/admin/orders/${checkout.body.orderId}/lifecycle`)
+      .set("authorization", `Bearer ${token}`).send({ status: "PROCESSING" }).expect(200);
+    const manualBookings = await Promise.all([
+      request(app).post(`/api/admin/orders/${checkout.body.orderId}/shipment/book`)
+        .set("authorization", `Bearer ${token}`),
+      request(app).post(`/api/admin/orders/${checkout.body.orderId}/shipment/book`)
+        .set("authorization", `Bearer ${token}`),
+    ]);
+    assert.deepEqual(manualBookings.map((result) => result.status).sort(), [200, 409]);
+    assert.equal(bookingCalls, 1);
+    const shipped = await request(app).get(`/api/orders/${checkout.body.orderId}`).expect(200);
+    assert.equal(shipped.body.lifecycleStatus, "FULFILLED");
+    assert.equal(shipped.body.fulfillmentStatus, "BOOKED");
+    assert.equal(shipped.body.tracking.waybillId, "waybill-1");
+    assert.equal(sentEmails.length, 2);
+    assert.equal(sentEmails[1].subject, `Your order has shipped — ${checkout.body.orderNumber}`);
+    assert.match(sentEmails[1].text ?? "", /Tracking number: waybill-1/);
     const tracked = await request(app).post("/api/orders/track")
-      .send({ orderNumber: paid.body.orderNumber.toLowerCase(), email: "BUYER@EXAMPLE.COM" }).expect(200);
-    assert.equal(tracked.body.orderNumber, paid.body.orderNumber);
+      .send({ orderNumber: shipped.body.orderNumber.toLowerCase(), email: "BUYER@EXAMPLE.COM" }).expect(200);
+    assert.equal(tracked.body.orderNumber, shipped.body.orderNumber);
     assert.deepEqual(tracked.body.destination, { city: "Jakarta Selatan", province: "DKI Jakarta" });
     assert.deepEqual(tracked.body.courier, { name: "JNE", serviceName: "Reguler", duration: "2 - 3 days" });
     assert.deepEqual(tracked.body.items[0], {
@@ -991,14 +1371,14 @@ test("checkout verifies payment notifications, reserves stock, and books Biteshi
     assert.equal(tracked.body.tracking.origin, undefined);
     const legacyTracked = await request(app).post("/api/orders/track")
       .send({ orderNumber: checkout.body.orderId, email: "buyer@example.com" }).expect(200);
-    assert.equal(legacyTracked.body.orderNumber, paid.body.orderNumber);
+    assert.equal(legacyTracked.body.orderNumber, shipped.body.orderNumber);
     trackingMode = "unavailable";
     const unavailableTracking = await request(app).post("/api/orders/track")
-      .send({ orderNumber: paid.body.orderNumber, email: "buyer@example.com" }).expect(200);
+      .send({ orderNumber: shipped.body.orderNumber, email: "buyer@example.com" }).expect(200);
     assert.equal(unavailableTracking.body.tracking, null);
     trackingMode = "malformed";
     await request(app).post("/api/orders/track")
-      .send({ orderNumber: paid.body.orderNumber, email: "buyer@example.com" })
+      .send({ orderNumber: shipped.body.orderNumber, email: "buyer@example.com" })
       .expect(502, { error: { code: "TRACKING_UPSTREAM_ERROR", message: "Biteship returned an unexpected response" } });
     trackingMode = "success";
     assert.deepEqual(bookingBodies.find((body) => body.reference_id === checkout.body.orderId)?.items[0], {
@@ -1044,16 +1424,23 @@ test("checkout verifies payment notifications, reserves stock, and books Biteshi
 
     const retrying = await request(app).post("/api/checkout")
       .send({ ...payload, idempotencyKey: randomUUID() }).expect(201);
-    failNextBooking = true;
-    await request(app).post("/api/payments/midtrans/notification")
-      .send(notification(retrying.body.orderId, "settlement")).expect(503);
-    const failedBooking = await request(app).get(`/api/orders/${retrying.body.orderId}`).expect(200);
-    assert.equal(failedBooking.body.paymentStatus, "PAID");
-    assert.equal(failedBooking.body.fulfillmentStatus, "BOOKING_FAILED");
     await request(app).post("/api/payments/midtrans/notification")
       .send(notification(retrying.body.orderId, "settlement")).expect(200);
+    assert.equal(bookingCalls, 1);
+    await request(app).patch(`/api/admin/orders/${retrying.body.orderId}/lifecycle`)
+      .set("authorization", `Bearer ${token}`).send({ status: "PROCESSING" }).expect(200);
+    failNextBooking = true;
+    await request(app).post(`/api/admin/orders/${retrying.body.orderId}/shipment/book`)
+      .set("authorization", `Bearer ${token}`).expect(502);
+    const failedBooking = await request(app).get(`/api/orders/${retrying.body.orderId}`).expect(200);
+    assert.equal(failedBooking.body.paymentStatus, "PAID");
+    assert.equal(failedBooking.body.lifecycleStatus, "PROCESSING");
+    assert.equal(failedBooking.body.fulfillmentStatus, "BOOKING_FAILED");
+    await request(app).post(`/api/admin/orders/${retrying.body.orderId}/shipment/retry`)
+      .set("authorization", `Bearer ${token}`).expect(200);
     const bookedRetry = await request(app).get(`/api/orders/${retrying.body.orderId}`).expect(200);
     assert.equal(bookedRetry.body.fulfillmentStatus, "BOOKED");
+    assert.equal(bookedRetry.body.lifecycleStatus, "FULFILLED");
 
     const concurrent = await request(app).post("/api/checkout")
       .send({ ...payload, idempotencyKey: randomUUID() }).expect(201);
@@ -1068,9 +1455,9 @@ test("checkout verifies payment notifications, reserves stock, and books Biteshi
     assert.equal(expireNotification.status, 200);
     const concurrentOrder = await prisma.order.findUniqueOrThrow({ where: { id: concurrent.body.orderId } });
     assert.equal(concurrentOrder.paymentStatus, "PAID");
-    assert.equal(concurrentOrder.fulfillmentStatus, "BOOKED");
+    assert.equal(concurrentOrder.shipmentBookingStatus, "UNFULFILLED");
     assert.equal(concurrentOrder.stockReleasedAt, null);
-    assert.equal(bookingCalls, bookingsBeforeConcurrent + 1);
+    assert.equal(bookingCalls, bookingsBeforeConcurrent);
     assert.equal((await prisma.productVariant.findUniqueOrThrow({ where: { id: variantId } })).stockQuantity, 5);
 
     const latePaid = await request(app).post("/api/checkout")
@@ -1082,7 +1469,7 @@ test("checkout verifies payment notifications, reserves stock, and books Biteshi
       .send(notification(latePaid.body.orderId, "settlement")).expect(200);
     const recovered = await prisma.order.findUniqueOrThrow({ where: { id: latePaid.body.orderId } });
     assert.equal(recovered.paymentStatus, "PAID");
-    assert.equal(recovered.fulfillmentStatus, "BOOKED");
+    assert.equal(recovered.shipmentBookingStatus, "UNFULFILLED");
     assert.equal(recovered.stockReleasedAt, null);
     assert.equal((await prisma.productVariant.findUniqueOrThrow({ where: { id: variantId } })).stockQuantity, 4);
 
@@ -1133,12 +1520,13 @@ test("checkout verifies payment notifications, reserves stock, and books Biteshi
     await prisma.productVariant.update({ where: { id: variantId }, data: { stockQuantity: 1 } });
     const bookingsBeforeInsufficient = bookingCalls;
     await request(app).post("/api/payments/midtrans/notification")
-      .send(notification(insufficient.body.orderId, "settlement", "2518000.00")).expect(503);
+      .send(notification(insufficient.body.orderId, "settlement", "2518000.00")).expect(200);
     await request(app).post("/api/payments/midtrans/notification")
-      .send(notification(insufficient.body.orderId, "settlement", "2518000.00")).expect(503);
+      .send(notification(insufficient.body.orderId, "settlement", "2518000.00")).expect(200);
     const unavailable = await prisma.order.findUniqueOrThrow({ where: { id: insufficient.body.orderId } });
     assert.equal(unavailable.paymentStatus, "PAID");
-    assert.equal(unavailable.fulfillmentStatus, "BOOKING_FAILED");
+    assert.equal(unavailable.shipmentBookingStatus, "UNFULFILLED");
+    assert.equal(unavailable.lifecycleStatus, "CANCELLED");
     assert.ok(unavailable.stockReleasedAt);
     assert.equal((await prisma.productVariant.findUniqueOrThrow({ where: { id: variantId } })).stockQuantity, 1);
     assert.equal(bookingCalls, bookingsBeforeInsufficient);
@@ -1146,9 +1534,10 @@ test("checkout verifies payment notifications, reserves stock, and books Biteshi
     await request(app).post("/api/payments/midtrans/notification")
       .send(notification(insufficient.body.orderId, "settlement", "2518000.00")).expect(200);
     const restocked = await prisma.order.findUniqueOrThrow({ where: { id: insufficient.body.orderId } });
-    assert.equal(restocked.fulfillmentStatus, "BOOKED");
-    assert.equal(restocked.stockReleasedAt, null);
-    assert.equal((await prisma.productVariant.findUniqueOrThrow({ where: { id: variantId } })).stockQuantity, 2);
+    assert.equal(restocked.shipmentBookingStatus, "UNFULFILLED");
+    assert.equal(restocked.lifecycleStatus, "CANCELLED");
+    assert.ok(restocked.stockReleasedAt);
+    assert.equal((await prisma.productVariant.findUniqueOrThrow({ where: { id: variantId } })).stockQuantity, 4);
 
     await request(app).post("/api/payments/midtrans/notification")
       .send(notification(checkout.body.orderId, "refund", "1168000.00")).expect(200);

@@ -10,7 +10,7 @@ const JAKARTA_OFFSET_MS = 7 * 60 * 60 * 1_000;
 const DAY_MS = 24 * 60 * 60 * 1_000;
 const LOW_STOCK_THRESHOLD = 5;
 const PAYMENT_STATUSES = ["PENDING", "PAID", "FAILED", "EXPIRED", "CANCELLED", "REFUNDED"] as const;
-const FULFILLMENT_STATUSES = ["UNFULFILLED", "BOOKED", "BOOKING_FAILED"] as const;
+const SHIPMENT_BOOKING_STATUSES = ["UNFULFILLED", "BOOKED", "BOOKING_FAILED"] as const;
 const PERIOD_DAYS: Record<DashboardPeriod, number> = { "7d": 7, "30d": 30, "90d": 90 };
 
 function jakartaDateKey(date: Date) {
@@ -77,7 +77,17 @@ export class DashboardService {
     const { days, startAt, endAt, previousStartAt, previousEndAt } = getPeriodRange(period, now);
     const currentRange = { gte: startAt, lt: endAt };
 
-    const [paidOrdersInComparisonWindow, paymentGroups, fulfillmentGroups, variants, paidItems, recentOrders] =
+    const [
+      paidOrdersInComparisonWindow,
+      paymentGroups,
+      shipmentBookingGroups,
+      variants,
+      paidItems,
+      recentOrders,
+      readyToProcess,
+      packing,
+      bookingFailed,
+    ] =
       await Promise.all([
         prisma.order.findMany({
           where: { paymentStatus: "PAID", createdAt: { gte: previousStartAt, lt: endAt } },
@@ -89,7 +99,7 @@ export class DashboardService {
           _count: { _all: true },
         }),
         prisma.order.groupBy({
-          by: ["fulfillmentStatus"],
+          by: ["shipmentBookingStatus"],
           where: { createdAt: currentRange },
           _count: { _all: true },
         }),
@@ -118,10 +128,19 @@ export class DashboardService {
             email: true,
             totalIdr: true,
             paymentStatus: true,
-            fulfillmentStatus: true,
+            shipmentBookingStatus: true,
+            lifecycleStatus: true,
+            externalRefundedAt: true,
             createdAt: true,
             _count: { select: { items: true } },
           },
+        }),
+        prisma.order.count({ where: { paymentStatus: "PAID", lifecycleStatus: "UNFULFILLED" } }),
+        prisma.order.count({
+          where: { paymentStatus: "PAID", lifecycleStatus: "PROCESSING", shipmentBookingStatus: "UNFULFILLED" },
+        }),
+        prisma.order.count({
+          where: { paymentStatus: "PAID", lifecycleStatus: "PROCESSING", shipmentBookingStatus: "BOOKING_FAILED" },
         }),
       ]);
 
@@ -133,8 +152,8 @@ export class DashboardService {
     const previous = summarizePaidOrders(previousPaidOrders);
 
     const paymentCounts = new Map(paymentGroups.map((group) => [group.paymentStatus, group._count._all]));
-    const fulfillmentCounts = new Map(
-      fulfillmentGroups.map((group) => [group.fulfillmentStatus, group._count._all]),
+    const shipmentBookingCounts = new Map(
+      shipmentBookingGroups.map((group) => [group.shipmentBookingStatus, group._count._all]),
     );
     const productTotals = new Map<string, { grossMerchandiseIdr: number; name: string; unitsSold: number }>();
     for (const item of paidItems) {
@@ -173,9 +192,14 @@ export class DashboardService {
       paymentStatuses: Object.fromEntries(
         PAYMENT_STATUSES.map((status) => [status, paymentCounts.get(status) ?? 0]),
       ),
-      fulfillmentStatuses: Object.fromEntries(
-        FULFILLMENT_STATUSES.map((status) => [status, fulfillmentCounts.get(status) ?? 0]),
+      shipmentBookingStatuses: Object.fromEntries(
+        SHIPMENT_BOOKING_STATUSES.map((status) => [status, shipmentBookingCounts.get(status) ?? 0]),
       ),
+      orderQueues: {
+        READY_TO_PROCESS: readyToProcess,
+        PACKING: packing,
+        BOOKING_FAILED: bookingFailed,
+      },
       inventory: {
         totalUnits: variants.reduce((total, variant) => total + variant.stockQuantity, 0),
         totalVariants: variants.length,
@@ -207,7 +231,13 @@ export class DashboardService {
         totalIdr: order.totalIdr,
         itemCount: order._count.items,
         paymentStatus: order.paymentStatus,
-        fulfillmentStatus: order.fulfillmentStatus,
+        shipmentBookingStatus: order.shipmentBookingStatus,
+        lifecycleStatus: order.lifecycleStatus,
+        refundState: order.externalRefundedAt
+          ? "EXTERNALLY_REFUNDED"
+          : order.lifecycleStatus === "CANCELLED" && order.paymentStatus === "PAID"
+            ? "REQUIRED"
+            : "NONE",
         createdAt: order.createdAt,
       })),
     };

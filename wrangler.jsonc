@@ -20,7 +20,11 @@
     "STOREFRONT_URL": "https://valydejersey.com",
     "EMAIL_FROM_ADDRESS": "orders@valydejersey.com",
     "EMAIL_FROM_NAME": "Valyde Jersey",
-    "EMAIL_REPLY_TO": "support@valydejersey.com"
+    "EMAIL_REPLY_TO": "support@valydejersey.com",
+    "INVOICE_SELLER_NAME": "Valyde Jersey",
+    "INVOICE_SELLER_EMAIL": "support@valydejersey.com",
+    "INVOICE_SELLER_PHONE": "081382854010",
+    "INVOICE_SELLER_ADDRESS": "anggrek lok aaf 1"
   },
   "send_email": [
     {

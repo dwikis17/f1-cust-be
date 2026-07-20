@@ -23,6 +23,10 @@ const env = z.object({
   EMAIL_FROM_ADDRESS: z.string().trim().email().optional(),
   EMAIL_FROM_NAME: z.string().trim().min(1).max(100).default("Valyde Jersey"),
   EMAIL_REPLY_TO: z.string().trim().email().optional(),
+  INVOICE_SELLER_NAME: z.string().trim().min(1).max(100).default("Valyde Jersey"),
+  INVOICE_SELLER_EMAIL: z.string().trim().email().default("support@valydejersey.com"),
+  INVOICE_SELLER_PHONE: z.string().trim().min(6).max(30).default("081382854010"),
+  INVOICE_SELLER_ADDRESS: z.string().trim().min(5).max(500).default("anggrek lok aaf 1"),
 }).parse(process.env);
 
 export const config = {
@@ -47,6 +51,10 @@ export const config = {
   emailFromAddress: env.EMAIL_FROM_ADDRESS,
   emailFromName: env.EMAIL_FROM_NAME,
   emailReplyTo: env.EMAIL_REPLY_TO,
+  invoiceSellerName: env.INVOICE_SELLER_NAME,
+  invoiceSellerEmail: env.INVOICE_SELLER_EMAIL,
+  invoiceSellerPhone: env.INVOICE_SELLER_PHONE,
+  invoiceSellerAddress: env.INVOICE_SELLER_ADDRESS,
 };
 
 export function requireDatabaseUrl() {

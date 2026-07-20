@@ -77,7 +77,9 @@ function publicOrder(order: {
   totalIdr: number;
   promoCode: { code: string } | null;
   paymentStatus: string;
-  fulfillmentStatus: string;
+  shipmentBookingStatus: string;
+  lifecycleStatus: string;
+  externalRefundedAt: Date | null;
   courierCode: string;
   courierName: string;
   courierServiceCode: string;
@@ -98,7 +100,13 @@ function publicOrder(order: {
     totalIdr: order.totalIdr,
     promoCode: order.promoCode?.code ?? null,
     paymentStatus: order.paymentStatus,
-    fulfillmentStatus: order.fulfillmentStatus,
+    fulfillmentStatus: order.shipmentBookingStatus,
+    lifecycleStatus: order.lifecycleStatus,
+    refundState: order.externalRefundedAt
+      ? "EXTERNALLY_REFUNDED"
+      : order.lifecycleStatus === "CANCELLED" && order.paymentStatus === "PAID"
+        ? "REQUIRED"
+        : "NONE",
     courier: {
       code: order.courierCode,
       name: order.courierName,
@@ -238,12 +246,23 @@ async function createSnapToken(order: Awaited<ReturnType<typeof prisma.order.fin
   return parsed.data.token;
 }
 
-async function bookShipment(tx: Prisma.TransactionClient, order: OrderWithItems) {
-  if (order.paymentStatus !== "PAID" || order.fulfillmentStatus === "BOOKED") return false;
+export type ShipmentBookingResult = {
+  success: true;
+  providerOrderId: string;
+  trackingId: string | null;
+  waybillId: string | null;
+  priceIdr: number | null;
+  providerStatus: string;
+} | {
+  success: false;
+  code: "CONFIGURATION" | "UPSTREAM" | "INVALID_RESPONSE";
+  message: string;
+};
+
+export async function requestShipmentBooking(order: OrderWithItems): Promise<ShipmentBookingResult> {
   if (!config.biteshipApiKey || !config.biteshipOriginPostalCode || !config.biteshipOriginContactName
     || !config.biteshipOriginContactPhone || !config.biteshipOriginAddress) {
-    await tx.order.update({ where: { id: order.id }, data: { fulfillmentStatus: "BOOKING_FAILED" } });
-    return true;
+    return { success: false, code: "CONFIGURATION", message: "Biteship pickup is not configured" };
   }
 
   let response: Response;
@@ -285,42 +304,37 @@ async function bookShipment(tx: Prisma.TransactionClient, order: OrderWithItems)
       signal: AbortSignal.timeout(3_000),
     });
   } catch {
-    await tx.order.update({ where: { id: order.id }, data: { fulfillmentStatus: "BOOKING_FAILED" } });
-    return true;
+    return { success: false, code: "UPSTREAM", message: "Biteship booking is temporarily unavailable" };
   }
 
   const body: unknown = await response.json().catch(() => undefined);
   const created = biteshipOrderSchema.safeParse(body);
   const duplicate = biteshipDuplicateSchema.safeParse(body);
   if ((!response.ok && !duplicate.success) || (response.ok && !created.success)) {
-    await tx.order.update({ where: { id: order.id }, data: { fulfillmentStatus: "BOOKING_FAILED" } });
-    return true;
+    return { success: false, code: "INVALID_RESPONSE", message: "Biteship did not accept the shipment booking" };
   }
 
   if (created.success) {
-    await tx.order.update({
-      where: { id: order.id },
-      data: {
-        fulfillmentStatus: "BOOKED",
-        biteshipOrderId: created.data.id,
-        biteshipTrackingId: created.data.courier.tracking_id ?? null,
-        biteshipWaybillId: created.data.courier.waybill_id ?? null,
-        biteshipPriceIdr: created.data.price,
-        biteshipStatus: created.data.status,
-      },
-    });
-  } else if (duplicate.success) {
-    await tx.order.update({
-      where: { id: order.id },
-      data: {
-        fulfillmentStatus: "BOOKED",
-        biteshipOrderId: duplicate.data.details.order_id,
-        biteshipWaybillId: duplicate.data.details.waybill_id ?? null,
-        biteshipStatus: "confirmed",
-      },
-    });
+    return {
+      success: true,
+      providerOrderId: created.data.id,
+      trackingId: created.data.courier.tracking_id ?? null,
+      waybillId: created.data.courier.waybill_id ?? null,
+      priceIdr: created.data.price,
+      providerStatus: created.data.status,
+    };
   }
-  return false;
+  if (!duplicate.success) {
+    return { success: false, code: "INVALID_RESPONSE", message: "Biteship returned an unexpected response" };
+  }
+  return {
+    success: true,
+    providerOrderId: duplicate.data.details.order_id,
+    trackingId: null,
+    waybillId: duplicate.data.details.waybill_id ?? null,
+    priceIdr: null,
+    providerStatus: "confirmed",
+  };
 }
 
 function secureEqual(left: string, right: string) {
@@ -468,7 +482,13 @@ export class PublicCheckoutService {
       orderNumber: order.orderNumber,
       createdAt: order.createdAt,
       paymentStatus: order.paymentStatus,
-      fulfillmentStatus: order.fulfillmentStatus,
+      fulfillmentStatus: order.shipmentBookingStatus,
+      lifecycleStatus: order.lifecycleStatus,
+      refundState: order.externalRefundedAt
+        ? "EXTERNALLY_REFUNDED"
+        : order.lifecycleStatus === "CANCELLED" && order.paymentStatus === "PAID"
+          ? "REQUIRED"
+          : "NONE",
       destination: { city: order.city, province: order.province },
       courier: {
         name: order.courierName,
@@ -484,7 +504,7 @@ export class PublicCheckoutService {
         quantity: item.quantity,
       })),
     };
-    if (order.fulfillmentStatus !== "BOOKED" || !order.biteshipTrackingId) {
+    if (order.shipmentBookingStatus !== "BOOKED" || !order.biteshipTrackingId) {
       return { ...result, tracking: null };
     }
     if (!config.biteshipApiKey) {
@@ -582,6 +602,26 @@ export class PublicCheckoutService {
       if (!locked.length) notFound("Order not found");
       let order = await tx.order.findUniqueOrThrow({ where: { id: input.order_id }, include: { items: true } });
 
+      if (paid && order.lifecycleStatus === "CANCELLED" && order.paymentStatus !== "REFUNDED") {
+        await tx.order.update({
+          where: { id: order.id },
+          data: { ...transaction, paymentStatus: "PAID" },
+        });
+        await tx.orderAuditEvent.create({
+          data: {
+            orderId: order.id,
+            action: "LATE_PAYMENT_AFTER_CANCELLATION",
+            outcome: "SUCCEEDED",
+            details: { transactionStatus: input.transaction_status },
+          },
+        });
+        await tx.midtransPaymentEvent.update({
+          where: { id: event.id },
+          data: { processingResult: "PROCESSED", processedAt: new Date() },
+        });
+        return { stockUnavailable: false, cancelled: true };
+      }
+
       if (paid && order.paymentStatus !== "REFUNDED") {
         const redemption = order.promoCodeId && !order.promoRedeemedAt ? { promoRedeemedAt: new Date() } : {};
         if (order.stockReleasedAt) {
@@ -590,13 +630,20 @@ export class PublicCheckoutService {
             if (!item.variantId) {
               await tx.order.update({
                 where: { id: order.id },
-                data: { ...transaction, ...redemption, paymentStatus: "PAID", fulfillmentStatus: "BOOKING_FAILED" },
+                data: {
+                  ...transaction,
+                  ...redemption,
+                  paymentStatus: "PAID",
+                  lifecycleStatus: "CANCELLED",
+                  shipmentBookingStatus: "UNFULFILLED",
+                  cancelledAt: order.cancelledAt ?? new Date(),
+                },
               });
               await tx.midtransPaymentEvent.update({
                 where: { id: event.id },
                 data: { processingResult: "PROCESSED", processedAt: new Date() },
               });
-              return { bookingFailed: true, stockUnavailable: true };
+              return { stockUnavailable: true, cancelled: true };
             }
             quantities.set(item.variantId, (quantities.get(item.variantId) ?? 0) + item.quantity);
           }
@@ -611,13 +658,20 @@ export class PublicCheckoutService {
           if (!stockAvailable) {
             await tx.order.update({
               where: { id: order.id },
-              data: { ...transaction, ...redemption, paymentStatus: "PAID", fulfillmentStatus: "BOOKING_FAILED" },
+              data: {
+                ...transaction,
+                ...redemption,
+                paymentStatus: "PAID",
+                lifecycleStatus: "CANCELLED",
+                shipmentBookingStatus: "UNFULFILLED",
+                cancelledAt: order.cancelledAt ?? new Date(),
+              },
             });
             await tx.midtransPaymentEvent.update({
               where: { id: event.id },
               data: { processingResult: "PROCESSED", processedAt: new Date() },
             });
-            return { bookingFailed: true, stockUnavailable: true };
+            return { stockUnavailable: true, cancelled: true };
           }
           for (const [variantId, quantity] of quantities) {
             await tx.productVariant.update({
@@ -631,7 +685,7 @@ export class PublicCheckoutService {
               ...transaction,
               ...redemption,
               paymentStatus: "PAID",
-              fulfillmentStatus: order.fulfillmentStatus === "BOOKED" ? "BOOKED" : "UNFULFILLED",
+              shipmentBookingStatus: order.shipmentBookingStatus === "BOOKED" ? "BOOKED" : "UNFULFILLED",
               stockReleasedAt: null,
             },
           });
@@ -663,34 +717,42 @@ export class PublicCheckoutService {
         await tx.order.update({ where: { id: order.id }, data: transaction });
       }
 
-      order = await tx.order.findUniqueOrThrow({ where: { id: order.id }, include: { items: true } });
-      const bookingFailed = order.paymentStatus === "PAID" && order.fulfillmentStatus !== "BOOKED"
-        ? await bookShipment(tx, order)
-        : false;
       await tx.midtransPaymentEvent.update({
         where: { id: event.id },
         data: { processingResult: "PROCESSED", processedAt: new Date() },
       });
-      return { bookingFailed, stockUnavailable: false };
+      return { stockUnavailable: false, cancelled: false };
     }, { timeout: 10_000 });
 
     let emailDeliveryFailed = false;
-    try {
-      await sendPaymentConfirmationEmail(input.order_id);
-    } catch (error) {
-      emailDeliveryFailed = true;
-      console.error(`Payment confirmation email failed for order ${input.order_id}`, error);
+    if (!result.cancelled) {
+      try {
+        await sendPaymentConfirmationEmail(input.order_id);
+      } catch (error) {
+        emailDeliveryFailed = true;
+        console.error(`Payment confirmation email failed for order ${input.order_id}`, error);
+      }
     }
 
-    if (result.bookingFailed) {
-      throw new HttpError(
-        503,
-        result.stockUnavailable ? "FULFILLMENT_STOCK_UNAVAILABLE" : "FULFILLMENT_UPSTREAM_ERROR",
-        result.stockUnavailable ? "Paid order is waiting for stock" : "Shipment booking will be retried",
-      );
+    if (result.stockUnavailable) {
+      await prisma.orderAuditEvent.create({
+        data: {
+          orderId: input.order_id,
+          action: "PAID_STOCK_UNAVAILABLE",
+          outcome: "FAILED",
+          details: { transactionStatus: input.transaction_status },
+        },
+      });
     }
     if (emailDeliveryFailed) {
-      throw new HttpError(503, "EMAIL_DELIVERY_ERROR", "Payment received; confirmation email will be retried");
+      await prisma.orderAuditEvent.create({
+        data: {
+          orderId: input.order_id,
+          action: "PAYMENT_CONFIRMATION_EMAIL_FAILED",
+          outcome: "FAILED",
+          details: { message: "Payment was persisted; an admin can resend the confirmation" },
+        },
+      });
     }
     return { received: true };
   }

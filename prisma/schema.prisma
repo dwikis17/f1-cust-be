@@ -52,10 +52,22 @@ enum PaymentEventProcessingResult {
   REJECTED
 }
 
-enum FulfillmentStatus {
+enum ShipmentBookingStatus {
   UNFULFILLED
   BOOKED
   BOOKING_FAILED
+}
+
+enum OrderLifecycleStatus {
+  UNFULFILLED
+  PROCESSING
+  FULFILLED
+  CANCELLED
+}
+
+enum OrderAuditOutcome {
+  SUCCEEDED
+  FAILED
 }
 
 model Admin {
@@ -65,7 +77,9 @@ model Admin {
   passwordSalt String
   passwordHash String
   active       Boolean        @default(true)
-  sessions     AdminSession[]
+  sessions                 AdminSession[]
+  orderAuditEvents         OrderAuditEvent[]
+  externallyRefundedOrders Order[]          @relation("ExternalRefundActor")
   createdAt    DateTime       @default(now())
   updatedAt    DateTime       @updatedAt
 }
@@ -296,8 +310,16 @@ model Order {
   midtransSnapToken                 String?
   paymentConfirmationEmailSendingAt DateTime?
   paymentConfirmationEmailSentAt    DateTime?
+  shipmentConfirmationEmailSendingAt DateTime?
+  shipmentConfirmationEmailSentAt    DateTime?
   stockReleasedAt                   DateTime?
-  fulfillmentStatus                 FulfillmentStatus      @default(UNFULFILLED)
+  shipmentBookingStatus             ShipmentBookingStatus  @default(UNFULFILLED)
+  shipmentBookingStartedAt          DateTime?
+  lifecycleStatus                   OrderLifecycleStatus   @default(UNFULFILLED)
+  cancelledAt                       DateTime?
+  externalRefundedAt                DateTime?
+  externalRefundedByAdminId         String?                @db.Uuid
+  externalRefundedByAdmin           Admin?                  @relation("ExternalRefundActor", fields: [externalRefundedByAdminId], references: [id], onDelete: SetNull)
   biteshipOrderId                   String?                @unique
   biteshipTrackingId                String?
   biteshipWaybillId                 String?
@@ -305,13 +327,38 @@ model Order {
   biteshipStatus                    String?
   items                             OrderItem[]
   paymentEvents                     MidtransPaymentEvent[]
+  auditEvents                       OrderAuditEvent[]
   createdAt                         DateTime               @default(now())
   updatedAt                         DateTime               @updatedAt
 
   @@index([paymentStatus, createdAt])
-  @@index([fulfillmentStatus, createdAt])
+  @@index([shipmentBookingStatus, createdAt])
+  @@index([shipmentBookingStartedAt])
+  @@index([lifecycleStatus, createdAt])
+  @@index([email])
+  @@index([phone])
+  @@index([biteshipTrackingId])
+  @@index([biteshipWaybillId])
+  @@index([externalRefundedByAdminId])
   @@index([promoCodeId, createdAt])
   @@index([promoRedeemedAt])
+}
+
+model OrderAuditEvent {
+  id        String            @id @default(uuid()) @db.Uuid
+  orderId   String?           @db.Uuid
+  order     Order?            @relation(fields: [orderId], references: [id], onDelete: Cascade)
+  adminId   String?           @db.Uuid
+  admin     Admin?            @relation(fields: [adminId], references: [id], onDelete: SetNull)
+  action    String
+  outcome   OrderAuditOutcome
+  reason    String?
+  details   Json?
+  createdAt DateTime          @default(now())
+
+  @@index([orderId, createdAt])
+  @@index([adminId, createdAt])
+  @@index([action, createdAt])
 }
 
 model MidtransPaymentEvent {

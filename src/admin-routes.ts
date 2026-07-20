@@ -19,7 +19,19 @@ router.post("/auth/logout", AuthController.logout);
 router.get("/auth/me", AuthController.me);
 
 router.get("/dashboard", DashboardController.summary);
+router.get("/orders", OrderController.list);
+router.get("/orders/export.csv", OrderController.exportCsv);
+router.get("/orders/:id", OrderController.find);
 router.get("/orders/:id/payment-events", OrderController.listPaymentEvents);
+router.patch("/orders/:id/lifecycle", OrderController.updateLifecycle);
+router.post("/orders/:id/shipment/book", OrderController.bookShipment);
+router.post("/orders/:id/shipment/retry", OrderController.retryShipment);
+router.get("/orders/:id/shipment", OrderController.shipment);
+router.post("/orders/:id/cancel", OrderController.cancel);
+router.post("/orders/:id/external-refund", OrderController.markExternalRefund);
+router.post("/orders/:id/confirmation-email/resend", OrderController.resendConfirmation);
+router.post("/orders/:id/shipment-email/resend", OrderController.resendShipmentConfirmation);
+router.get("/orders/:id/invoice.pdf", OrderController.invoice);
 
 router.get("/faqs", FaqController.list);
 router.post("/faqs", FaqController.create);
