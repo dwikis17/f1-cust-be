@@ -555,6 +555,25 @@ test("active products are filterable without exposing exact stock", async () => 
     }).expect(400);
 });
 
+test("cart items return only requested active variants and report missing ids", async () => {
+  const product = await request(app).get("/api/products/ferrari-team-jersey").expect(200);
+  const variantId = product.body.variants[0].id as string;
+  const missingId = randomUUID();
+  const response = await request(app).post("/api/products/cart-items").send({
+    variantIds: [variantId, variantId, missingId],
+    locale: "id",
+  }).expect(200).expect("cache-control", "no-store");
+  assert.equal(response.body.data.length, 1);
+  assert.equal(response.body.data[0].product.name, "Jersey Tim Ferrari");
+  assert.equal(response.body.data[0].product.merchandisingLabel, "Ferrari");
+  assert.equal(response.body.data[0].variant.id, variantId);
+  assert.equal(response.body.data[0].variant.available, true);
+  assert.deepEqual(response.body.missingVariantIds, [missingId]);
+  assert.equal(response.body.data[0].product.description, undefined);
+  await request(app).post("/api/products/cart-items").send({ variantIds: [], locale: "en" }).expect(400);
+  await request(app).post("/api/products/cart-items").send({ variantIds: [variantId], locale: "fr" }).expect(400);
+});
+
 test("shipping rates use authoritative cart data and normalize Biteship responses", async () => {
   const originalFetch = globalThis.fetch;
   const originalShippingConfig = {

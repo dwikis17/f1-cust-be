@@ -16,6 +16,7 @@ router.get("/collections", PublicCatalogController.listCollections);
 router.get("/collections/:slug/products", PublicProductController.listCollectionProducts);
 router.get("/collections/:slug", PublicCatalogController.findCollection);
 router.get("/products", PublicProductController.listProducts);
+router.post("/products/cart-items", PublicProductController.cartItems);
 router.get("/products/:slug", PublicProductController.findProduct);
 router.get("/faqs", FaqController.listPublic);
 router.post("/shipping/rates", PublicShippingController.rates);

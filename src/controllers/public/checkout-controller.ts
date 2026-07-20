@@ -3,6 +3,7 @@ import { z } from "zod";
 import { parse } from "../../http.js";
 import { idSchema, promoCodeValueSchema } from "../../schemas.js";
 import { PublicCheckoutService } from "../../services/public/checkout-service.js";
+import { revalidateStorefront } from "../../storefront-revalidation.js";
 
 const checkoutSchema = z.object({
   idempotencyKey: idSchema,
@@ -54,6 +55,8 @@ export class PublicCheckoutController {
   }
 
   static async midtransNotification(request: Request, response: Response) {
-    response.json(await PublicCheckoutService.notification(parse(notificationSchema, request.body)));
+    const value = await PublicCheckoutService.notification(parse(notificationSchema, request.body));
+    revalidateStorefront(["catalog:products"]);
+    response.json(value);
   }
 }

@@ -29,6 +29,10 @@ export const driverPatchSchema = driverSchema.partial().refine((value) => Object
 
 export const productAudienceSchema = z.enum(["MEN", "WOMEN", "KIDS", "UNISEX"]);
 export const localeSchema = z.enum(["en", "id"]);
+export const cartItemsSchema = z.object({
+  variantIds: z.array(idSchema).min(1).max(50),
+  locale: localeSchema,
+}).strict();
 export const dashboardPeriodSchema = z.enum(["7d", "30d", "90d"]);
 export const collectionKindSchema = z.enum([
   "DOMAIN",

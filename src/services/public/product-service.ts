@@ -113,4 +113,34 @@ export class PublicProductService {
     if (!product) notFound("Product not found");
     return PublicProductService.publicProduct(product, locale);
   }
+
+  static async cartItems(variantIds: string[], locale: Locale) {
+    const uniqueIds = [...new Set(variantIds)];
+    const variants = await PublicProductRepository.findCartItems(uniqueIds);
+    const byId = new Map(variants.map((variant) => [variant.id, variant]));
+    const data = uniqueIds.flatMap((variantId) => {
+      const value = byId.get(variantId);
+      if (!value) return [];
+      const { product } = value;
+      const photo = product.photos[0];
+      return [{
+        product: {
+          id: product.id,
+          name: locale === "id" ? product.nameId ?? product.name : product.name,
+          slug: product.slug,
+          priceIdr: product.priceIdr,
+          merchandisingLabel: product.team?.name ?? product.category.name,
+          photo: photo ? { url: PublicProductRepository.storedPhotoUrl(photo.path), altText: photo.altText } : null,
+        },
+        variant: {
+          id: value.id,
+          sku: value.sku,
+          size: value.size,
+          color: value.color,
+          available: value.stockQuantity > 0,
+        },
+      }];
+    });
+    return { data, missingVariantIds: uniqueIds.filter((id) => !byId.has(id)) };
+  }
 }

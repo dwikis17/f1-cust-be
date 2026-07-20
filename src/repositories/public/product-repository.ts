@@ -139,6 +139,35 @@ export class PublicProductRepository {
   static findProduct(slug: string) {
     return prisma.product.findFirst({ where: { slug, status: "ACTIVE" }, include: productInclude });
   }
+
+  static findCartItems(variantIds: string[]) {
+    return prisma.productVariant.findMany({
+      where: { id: { in: variantIds }, product: { status: "ACTIVE" } },
+      select: {
+        id: true,
+        sku: true,
+        size: true,
+        color: true,
+        stockQuantity: true,
+        product: {
+          select: {
+            id: true,
+            name: true,
+            nameId: true,
+            slug: true,
+            priceIdr: true,
+            team: { select: { name: true } },
+            category: { select: { name: true } },
+            photos: {
+              select: { path: true, altText: true },
+              orderBy: [{ position: "asc" }, { createdAt: "asc" }],
+              take: 1,
+            },
+          },
+        },
+      },
+    });
+  }
 }
 
 export type PublicCollectionRecord = {

@@ -43,6 +43,7 @@ Public endpoints:
 - `GET /api/drivers?team=<team-slug>`
 - `GET /api/products?page=1&limit=20&locale=en|id&search=&category=&tag=&team=&driver=&size=&color=`
 - `GET /api/products/:slug?locale=en|id`
+- `POST /api/products/cart-items`
 - `POST /api/shipping/rates`
 - `POST /api/checkout`
 - `POST /api/orders/track`
@@ -109,6 +110,8 @@ curl -X POST http://localhost:3000/api/admin/auth/login \
 
 Prices use integer Indonesian rupiah. Public product responses expose `available` for each variant but do not expose exact stock quantities.
 
+`POST /api/products/cart-items` accepts `{ variantIds, locale }` for at most 50 variants and returns only the product and variant fields required to render a cart. Missing or inactive variants are reported separately, and the response is never cached.
+
 ### Biteship shipping estimates
 
 `POST /api/shipping/rates` accepts a five-digit destination postal code and cart lines shaped as `{ variantId, quantity }`. The API resolves price, stock, weight, and package dimensions from the database before requesting live Biteship courier rates, so clients cannot supply shipping measurements.
@@ -147,6 +150,14 @@ npm run worker:deploy
 ```
 
 Apply Prisma migrations to the production database separately with `npm run db:deploy` before deploying. Product photo upload and `/uploads` serving use the `PHOTO_BUCKET` R2 binding.
+
+Catalog, collection, media, FAQ, and paid-order stock changes invalidate the storefront cache in the background. Configure the same random secret on both Workers:
+
+```sh
+npx wrangler secret put STOREFRONT_REVALIDATE_SECRET
+# Run from f1-cust-fe with the same value:
+npx wrangler secret put REVALIDATE_SECRET
+```
 
 ### Changing the R2 public domain
 

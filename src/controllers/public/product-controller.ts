@@ -2,7 +2,7 @@ import type { Request, Response } from "express";
 import { z } from "zod";
 import { parse } from "../../http.js";
 import type { ProductFilters, ProductSort } from "../../repositories/public/product-repository.js";
-import { localeSchema, productAudienceSchema, slugSchema } from "../../schemas.js";
+import { cartItemsSchema, localeSchema, productAudienceSchema, slugSchema } from "../../schemas.js";
 import { PublicProductService } from "../../services/public/product-service.js";
 
 function listValue(value: unknown) {
@@ -63,6 +63,10 @@ function filters(query: z.infer<typeof listQuerySchema>): ProductFilters {
 }
 
 export class PublicProductController {
+  static async cartItems(request: Request, response: Response) {
+    const body = parse(cartItemsSchema, request.body);
+    response.set("cache-control", "no-store").json(await PublicProductService.cartItems(body.variantIds, body.locale));
+  }
   static async listProducts(request: Request, response: Response) {
     const query = parse(listQuerySchema, request.query);
     response.json(await PublicProductService.listProducts(
