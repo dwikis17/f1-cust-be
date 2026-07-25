@@ -6,6 +6,7 @@ const siteverifyResponseSchema = z.object({
   success: z.boolean(),
   hostname: z.string().optional(),
   action: z.string().optional(),
+  metadata: z.object({ result_with_testing_key: z.boolean().optional() }).optional(),
 }).passthrough();
 
 export async function verifyCheckoutHuman(token: string | undefined, remoteIp?: string) {
@@ -37,7 +38,8 @@ export async function verifyCheckoutHuman(token: string | undefined, remoteIp?: 
   }
 
   const expectedHostname = new URL(config.storefrontUrl).hostname;
-  if (!result.data.success || result.data.action !== "checkout" || result.data.hostname !== expectedHostname) {
+  const testingKeyAccepted = result.data.success && result.data.metadata?.result_with_testing_key === true;
+  if (!result.data.success || (!testingKeyAccepted && (result.data.action !== "checkout" || result.data.hostname !== expectedHostname))) {
     throw new HttpError(403, "HUMAN_VERIFICATION_FAILED", "Human verification failed");
   }
 }

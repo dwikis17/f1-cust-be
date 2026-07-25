@@ -26,6 +26,13 @@ test("checkout human verification validates action and hostname and fails closed
     };
     await verifyCheckoutHuman("valid-token", "203.0.113.10");
 
+    globalThis.fetch = async () => Response.json({
+      success: true,
+      hostname: "example.com",
+      metadata: { result_with_testing_key: true },
+    });
+    await verifyCheckoutHuman("dummy-test-token");
+
     await assert.rejects(() => verifyCheckoutHuman(undefined), isHttpError(403, "HUMAN_VERIFICATION_FAILED"));
 
     for (const body of [

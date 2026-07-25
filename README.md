@@ -18,6 +18,8 @@ npm run dev
 
 For non-interactive local setup or automation, provide `ADMIN_EMAIL`, `ADMIN_DISPLAY_NAME`, and `ADMIN_PASSWORD` when running `npm run admin:create`.
 
+`npm run dev` runs the Cloudflare Worker with the local variables and secrets from `.env`. `npm run dev:node` uses the same file for the Node server.
+
 The API starts at `http://localhost:3000`. PostgreSQL is available only on `127.0.0.1:5432`. Local Worker development writes uploaded images to the remote `f1-bucket` R2 bucket under `development/`, so Wrangler must be logged in. Set `PHOTO_PUBLIC_BASE_URL` to the bucket's HTTPS public origin; development currently uses its `r2.dev` URL, while production should use an R2 custom domain. Deployed Workers use `production/`. Run `npm run dev:node` only when you explicitly want filesystem uploads and `/uploads/*` URLs.
 
 Useful commands:
