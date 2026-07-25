@@ -1084,6 +1084,7 @@ test("checkout verifies payment notifications, reserves stock, and waits for man
     merchantId: config.midtransMerchantId,
     serverKey: config.midtransServerKey,
     storefrontUrl: config.storefrontUrl,
+    turnstileSecretKey: config.turnstileSecretKey,
     emailFromAddress: config.emailFromAddress,
     emailFromName: config.emailFromName,
     emailReplyTo: config.emailReplyTo,
@@ -1100,6 +1101,7 @@ test("checkout verifies payment notifications, reserves stock, and waits for man
   config.midtransMerchantId = "merchant-test";
   config.midtransServerKey = "server-test";
   config.storefrontUrl = "http://localhost:3001";
+  config.turnstileSecretKey = "turnstile-test-secret";
   config.emailFromAddress = "orders@valydejersey.com";
   config.emailFromName = "Valyde Jersey";
   config.emailReplyTo = "support@valydejersey.com";
@@ -1129,6 +1131,12 @@ test("checkout verifies payment notifications, reserves stock, and waits for man
   }> = [];
   globalThis.fetch = async (input, init) => {
     const url = String(input);
+    if (url.endsWith("/turnstile/v0/siteverify")) {
+      const body = JSON.parse(String(init?.body)) as { response: string };
+      return Response.json(body.response === "turnstile-invalid"
+        ? { success: false, action: "checkout", hostname: "localhost" }
+        : { success: true, action: "checkout", hostname: "localhost" });
+    }
     if (url.endsWith("/v1/rates/couriers")) {
       rateCalls += 1;
       return new Response(JSON.stringify({ pricing: [{
@@ -1230,9 +1238,18 @@ test("checkout verifies payment notifications, reserves stock, and waits for man
     items: [{ variantId, quantity: 1 }],
     courierCode: "jne",
     serviceCode: "reg",
+    turnstileToken: "turnstile-valid",
   };
 
   try {
+    const ordersBeforeRejectedHuman = await prisma.order.count();
+    await request(app).post("/api/checkout")
+      .send({ ...payload, idempotencyKey: randomUUID(), turnstileToken: "turnstile-invalid" })
+      .expect(403, { error: { code: "HUMAN_VERIFICATION_FAILED", message: "Human verification failed" } });
+    assert.equal(rateCalls, 0);
+    assert.equal(snapCalls, 0);
+    assert.equal(await prisma.order.count(), ordersBeforeRejectedHuman);
+
     const promoPayload = { ...payload, promoCode: "grid20" };
     const checkout = await request(app).post("/api/checkout").send(promoPayload).expect(201);
     assert.equal(checkout.body.subtotalIdr, 1_250_000);
@@ -1558,6 +1575,7 @@ test("checkout verifies payment notifications, reserves stock, and waits for man
     config.midtransMerchantId = originalConfig.merchantId;
     config.midtransServerKey = originalConfig.serverKey;
     config.storefrontUrl = originalConfig.storefrontUrl;
+    config.turnstileSecretKey = originalConfig.turnstileSecretKey;
     config.emailFromAddress = originalConfig.emailFromAddress;
     config.emailFromName = originalConfig.emailFromName;
     config.emailReplyTo = originalConfig.emailReplyTo;

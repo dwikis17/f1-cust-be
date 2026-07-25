@@ -4,6 +4,7 @@ import { parse } from "../../http.js";
 import { idSchema, promoCodeValueSchema } from "../../schemas.js";
 import { PublicCheckoutService } from "../../services/public/checkout-service.js";
 import { revalidateStorefront } from "../../storefront-revalidation.js";
+import { verifyCheckoutHuman } from "../../turnstile.js";
 
 const checkoutSchema = z.object({
   idempotencyKey: idSchema,
@@ -19,6 +20,7 @@ const checkoutSchema = z.object({
   courierCode: z.string().trim().min(1).max(50).regex(/^[a-z0-9_-]+$/),
   serviceCode: z.string().trim().min(1).max(50).regex(/^[a-z0-9_-]+$/),
   promoCode: promoCodeValueSchema.optional(),
+  turnstileToken: z.string().trim().min(1).max(2048).optional(),
 }).strict();
 
 const notificationSchema = z.object({
@@ -41,7 +43,9 @@ const trackingLookupSchema = z.object({
 export class PublicCheckoutController {
   static async create(request: Request, response: Response) {
     response.set("cache-control", "no-store");
-    response.status(201).json(await PublicCheckoutService.create(parse(checkoutSchema, request.body)));
+    const { turnstileToken, ...input } = parse(checkoutSchema, request.body);
+    await verifyCheckoutHuman(turnstileToken, request.get("cf-connecting-ip"));
+    response.status(201).json(await PublicCheckoutService.create(input));
   }
 
   static async find(request: Request, response: Response) {
