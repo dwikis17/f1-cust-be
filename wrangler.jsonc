@@ -36,7 +36,6 @@
     {
       "binding": "HYPERDRIVE",
       "id": "dc41a0198dc848fb8179a4b6d72d0473",
-      // "localConnectionString": "postgresql://neondb_owner:npg_QN4MP5ItrAaR@ep-raspy-sea-aotggo7b-pooler.c-2.ap-southeast-1.aws.neon.tech/neondb?sslmode=require&channel_binding=require"
       "localConnectionString": "postgresql://f1:f1@localhost:5432/f1_store"
     }
   ],
