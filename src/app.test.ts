@@ -3,6 +3,7 @@ import { createHash, randomUUID } from "node:crypto";
 import { access } from "node:fs/promises";
 import path from "node:path";
 import { after, before, test } from "node:test";
+import { PDFDocument } from "pdf-lib";
 import request from "supertest";
 import { createApp } from "./app.js";
 import { config } from "./config.js";
@@ -307,6 +308,7 @@ test("admins search, operate, audit, export, and invoice orders safely", async (
     shipmentBookingStatus?: "UNFULFILLED" | "BOOKED" | "BOOKING_FAILED";
     firstName?: string;
     biteshipOrderId?: string;
+    biteshipWaybillId?: string;
   }) => prisma.order.create({
     data: {
       orderNumber: input.number,
@@ -331,6 +333,7 @@ test("admins search, operate, audit, export, and invoice orders safely", async (
       lifecycleStatus: input.lifecycleStatus ?? "UNFULFILLED",
       shipmentBookingStatus: input.shipmentBookingStatus ?? "UNFULFILLED",
       biteshipOrderId: input.biteshipOrderId,
+      biteshipWaybillId: input.biteshipWaybillId,
       createdAt: input.createdAt,
       updatedAt: input.createdAt,
       items: {
@@ -381,6 +384,7 @@ test("admins search, operate, audit, export, and invoice orders safely", async (
     shipmentBookingStatus: "BOOKED",
     lifecycleStatus: "FULFILLED",
     biteshipOrderId: "biteship-ops-booked",
+    biteshipWaybillId: "OPS-WAYBILL-1",
   });
   const refund = await createOperationsOrder({
     number: "OPS-REFUND",
@@ -547,6 +551,20 @@ test("admins search, operate, audit, export, and invoice orders safely", async (
     assert.equal(latePaidOrder.shipmentBookingStatus, "UNFULFILLED");
     assert.equal((await prisma.productVariant.findUniqueOrThrow({ where: { id: variant.id } })).stockQuantity, stockBeforePendingCancel + 1);
 
+    await request(app).get(`/api/admin/orders/${searchable.id}/shipping-label.pdf`)
+      .set("authorization", `Bearer ${token}`).expect(409);
+    const label = await request(app).get(`/api/admin/orders/${booked.id}/shipping-label.pdf`)
+      .set("authorization", `Bearer ${token}`).buffer(true).parse((response, callback) => {
+        const chunks: Buffer[] = [];
+        response.on("data", (chunk: Buffer) => chunks.push(chunk));
+        response.on("end", () => callback(null, Buffer.concat(chunks)));
+      }).expect("content-type", /application\/pdf/).expect("content-disposition", /shipping-label-OPS-BOOKED\.pdf/).expect(200);
+    const labelPdf = await PDFDocument.load(label.body as Buffer);
+    const labelPage = labelPdf.getPage(0).getSize();
+    assert.equal(labelPdf.getPageCount(), 1);
+    assert.ok(Math.abs(labelPage.width - 100 * 72 / 25.4) < 0.01);
+    assert.ok(Math.abs(labelPage.height - 150 * 72 / 25.4) < 0.01);
+
     const stockBeforeBookedCancel = (await prisma.productVariant.findUniqueOrThrow({ where: { id: variant.id } })).stockQuantity;
     await request(app).post(`/api/admin/orders/${booked.id}/cancel`)
       .set("authorization", `Bearer ${token}`).send({ reason: "Cannot deliver" }).expect(409);
@@ -619,6 +637,7 @@ test("admins search, operate, audit, export, and invoice orders safely", async (
     assert.ok(auditActions.includes("SHIPMENT_CONFIRMATION_EMAIL_RESENT:SUCCEEDED"));
     assert.ok(auditActions.includes("SHIPMENT_CONFIRMATION_EMAIL_RESEND_FAILED:FAILED"));
     assert.ok(auditActions.includes("INVOICE_DOWNLOADED:SUCCEEDED"));
+    assert.ok(auditActions.includes("SHIPPING_LABEL_DOWNLOADED:SUCCEEDED"));
   } finally {
     globalThis.fetch = previousFetch;
     setDefaultEmailSender(undefined);

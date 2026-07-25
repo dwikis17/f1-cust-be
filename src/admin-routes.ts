@@ -32,6 +32,7 @@ router.post("/orders/:id/external-refund", OrderController.markExternalRefund);
 router.post("/orders/:id/confirmation-email/resend", OrderController.resendConfirmation);
 router.post("/orders/:id/shipment-email/resend", OrderController.resendShipmentConfirmation);
 router.get("/orders/:id/invoice.pdf", OrderController.invoice);
+router.get("/orders/:id/shipping-label.pdf", OrderController.shippingLabel);
 
 router.get("/faqs", FaqController.list);
 router.post("/faqs", FaqController.create);

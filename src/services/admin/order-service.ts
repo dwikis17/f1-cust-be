@@ -5,7 +5,7 @@ import { prisma } from "../../db.js";
 import { sendPaymentConfirmationEmail, sendShipmentConfirmationEmail } from "../../email-service.js";
 import type { Prisma } from "../../generated/prisma/client.js";
 import { HttpError, notFound } from "../../http.js";
-import { createOrderInvoice } from "../../order-invoice.js";
+import { createOrderInvoice, createShippingLabel } from "../../order-invoice.js";
 import { requestShipmentBooking } from "../public/checkout-service.js";
 
 export type OrderQueue = "READY_TO_PROCESS" | "PACKING" | "BOOKING_FAILED";
@@ -679,6 +679,17 @@ export class OrderService {
     const bytes = await createOrderInvoice(order);
     await audit({ orderId, adminId, action: "INVOICE_DOWNLOADED", outcome: "SUCCEEDED" });
     return { bytes, filename: `invoice-${order.orderNumber}.pdf` };
+  }
+
+  static async shippingLabel(orderId: string, adminId: string) {
+    const order = await prisma.order.findUnique({ where: { id: orderId }, include: { items: true } });
+    if (!order) notFound("Order not found");
+    if (order.shipmentBookingStatus !== "BOOKED" || order.lifecycleStatus !== "FULFILLED" || !order.biteshipWaybillId) {
+      throw new HttpError(409, "SHIPPING_LABEL_NOT_AVAILABLE", "A booked shipment with an airway bill is required");
+    }
+    const bytes = await createShippingLabel({ ...order, biteshipWaybillId: order.biteshipWaybillId });
+    await audit({ orderId, adminId, action: "SHIPPING_LABEL_DOWNLOADED", outcome: "SUCCEEDED" });
+    return { bytes, filename: `shipping-label-${order.orderNumber}.pdf` };
   }
 
   static async exportCsv(input: OrderListInput, adminId: string) {

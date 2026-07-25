@@ -35,6 +35,7 @@ type InvoiceOrder = {
 };
 
 const A4 = { width: 595.28, height: 841.89 };
+const THERMAL_LABEL = { width: 100 * 72 / 25.4, height: 150 * 72 / 25.4 };
 const MARGIN = 48;
 const DARK = rgb(0.08, 0.08, 0.08);
 const MUTED = rgb(0.38, 0.38, 0.38);
@@ -281,5 +282,86 @@ export async function createOrderInvoice(order: InvoiceOrder) {
   document.setTitle(`Order invoice ${order.orderNumber}`);
   document.setAuthor(config.invoiceSellerName);
   document.setCreationDate(new Date());
+  return document.save();
+}
+
+type ShippingLabelOrder = {
+  orderNumber: string;
+  firstName: string;
+  lastName: string;
+  phone: string;
+  address: string;
+  city: string;
+  province: string;
+  postalCode: string;
+  courierName: string;
+  courierServiceName: string;
+  biteshipWaybillId: string;
+  items: Array<{
+    productName: string;
+    sku: string;
+    color: string | null;
+    size: string | null;
+    quantity: number;
+  }>;
+};
+
+export async function createShippingLabel(order: ShippingLabelOrder) {
+  const document = await PDFDocument.create();
+  const regular = await document.embedFont(StandardFonts.Helvetica);
+  const bold = await document.embedFont(StandardFonts.HelveticaBold);
+  const page = document.addPage([THERMAL_LABEL.width, THERMAL_LABEL.height]);
+  const margin = 18;
+  const contentWidth = THERMAL_LABEL.width - margin * 2;
+  let y = THERMAL_LABEL.height - margin;
+
+  const heading = (value: string) => {
+    page.drawText(value, { x: margin, y, font: bold, size: 7, color: MUTED });
+    y -= 11;
+  };
+  const text = (value: string, size = 8, font = regular) => {
+    const lines = wrap(font, value, size, contentWidth);
+    y = drawLines(page, font, lines, margin, y, { size, lineHeight: size + 2 });
+    y -= 4;
+  };
+  const rule = () => {
+    page.drawLine({ start: { x: margin, y }, end: { x: THERMAL_LABEL.width - margin, y }, thickness: 0.5, color: LINE });
+    y -= 10;
+  };
+
+  page.drawText(pdfText(config.invoiceSellerName.toUpperCase()), { x: margin, y, font: bold, size: 10, color: DARK });
+  y -= 17;
+  page.drawText("SHIPPING LABEL", { x: margin, y, font: bold, size: 12, color: DARK });
+  y -= 18;
+  rule();
+
+  heading("AWB");
+  text(order.biteshipWaybillId, 15, bold);
+  heading("COURIER");
+  text(`${order.courierName} ${order.courierServiceName}`, 9, bold);
+  heading("ORDER");
+  text(order.orderNumber, 9, bold);
+  rule();
+
+  heading("TO");
+  text(`${order.firstName} ${order.lastName}`.trim(), 10, bold);
+  text(order.phone);
+  text(`${order.address}, ${order.city}, ${order.province} ${order.postalCode}`);
+  rule();
+
+  heading("FROM");
+  text(config.biteshipOriginContactName ?? config.invoiceSellerName, 9, bold);
+  text(config.biteshipOriginContactPhone ?? config.invoiceSellerPhone);
+  text(`${config.biteshipOriginAddress ?? config.invoiceSellerAddress}${config.biteshipOriginPostalCode ? `, ${config.biteshipOriginPostalCode}` : ""}`);
+  rule();
+
+  heading("ITEMS");
+  for (const item of order.items) {
+    const options = [item.color, item.size].filter(Boolean).join(" / ");
+    text(`${item.quantity}x ${item.productName}${options ? ` (${options})` : ""} — ${item.sku}`, 7);
+  }
+
+  document.setTitle(`Shipping label ${order.orderNumber}`);
+  document.setAuthor(config.invoiceSellerName);
   return document.save();
 }

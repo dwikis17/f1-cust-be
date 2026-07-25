@@ -112,6 +112,16 @@ export class OrderController {
     response.send(Buffer.from(invoice.bytes));
   }
 
+  static async shippingLabel(request: Request, response: Response) {
+    const label = await OrderService.shippingLabel(orderId(request), adminId(response));
+    response.set({
+      "cache-control": "no-store",
+      "content-disposition": `attachment; filename="${label.filename}"`,
+      "content-type": "application/pdf",
+    });
+    response.send(Buffer.from(label.bytes));
+  }
+
   static async exportCsv(request: Request, response: Response) {
     const exported = await OrderService.exportCsv(listInput(request), adminId(response));
     response.set({
