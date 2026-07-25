@@ -27,6 +27,13 @@ enum ProductAudience {
   UNISEX
 }
 
+enum ProductCondition {
+  BNIB
+  BNWT
+  BNWOT
+  PRE_OWNED
+}
+
 enum CollectionKind {
   DOMAIN
   TEAM
@@ -153,6 +160,7 @@ model Product {
   priceIdr      Int
   salePriceIdr  Int?
   status        ProductStatus       @default(DRAFT)
+  condition     ProductCondition
   categoryId    String              @db.Uuid
   category      Category            @relation(fields: [categoryId], references: [id], onDelete: Restrict)
   teamId        String?             @db.Uuid
@@ -169,6 +177,7 @@ model Product {
   @@index([categoryId])
   @@index([teamId])
   @@index([audience])
+  @@index([condition])
   @@index([status])
   @@index([createdAt])
 }

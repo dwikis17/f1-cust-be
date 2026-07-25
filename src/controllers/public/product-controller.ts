@@ -2,7 +2,13 @@ import type { Request, Response } from "express";
 import { z } from "zod";
 import { parse } from "../../http.js";
 import type { ProductFilters, ProductSort } from "../../repositories/public/product-repository.js";
-import { cartItemsSchema, localeSchema, productAudienceSchema, slugSchema } from "../../schemas.js";
+import {
+  cartItemsSchema,
+  localeSchema,
+  productAudienceSchema,
+  productConditionSchema,
+  slugSchema,
+} from "../../schemas.js";
 import { PublicProductService } from "../../services/public/product-service.js";
 
 function listValue(value: unknown) {
@@ -12,6 +18,7 @@ function listValue(value: unknown) {
 
 const slugListSchema = z.preprocess(listValue, z.array(slugSchema).max(50));
 const audienceListSchema = z.preprocess(listValue, z.array(productAudienceSchema).max(10));
+const conditionListSchema = z.preprocess(listValue, z.array(productConditionSchema).max(10));
 const sortSchema = z.enum([
   "featured",
   "relevance",
@@ -36,6 +43,7 @@ const listQuerySchema = z.object({
   size: z.preprocess(listValue, z.array(z.string().trim().min(1).max(40)).max(50)),
   color: z.preprocess(listValue, z.array(z.string().trim().min(1).max(60)).max(50)),
   audience: audienceListSchema,
+  condition: conditionListSchema,
   availability: z.enum(["in_stock"]).optional(),
   minPrice: z.coerce.number().int().nonnegative().optional(),
   maxPrice: z.coerce.number().int().nonnegative().optional(),
@@ -56,6 +64,7 @@ function filters(query: z.infer<typeof listQuerySchema>): ProductFilters {
     sizes: query.size,
     colors: query.color,
     audiences: query.audience,
+    conditions: query.condition,
     availability: query.availability,
     minPrice: query.minPrice,
     maxPrice: query.maxPrice,

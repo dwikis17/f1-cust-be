@@ -11,6 +11,7 @@ import { publicCollection, PublicCatalogService } from "./catalog-service.js";
 
 type NamedFacetValue = { id: string; name: string; slug: string };
 type Locale = "en" | "id";
+const conditions = ["BNIB", "BNWT", "BNWOT", "PRE_OWNED"] as const;
 
 function increment(map: Map<string, { value: NamedFacetValue; count: number }>, value: NamedFacetValue) {
   const current = map.get(value.id);
@@ -54,12 +55,20 @@ export class PublicProductService {
   }
 
   private static async facets(collectionSlug: string, filters: ProductFilters) {
-    const [teamProducts, driverProducts, productTypeProducts, audienceProducts, availabilityProducts, priceProducts] =
-      await PublicProductRepository.facetSources(collectionSlug, filters);
+    const [
+      teamProducts,
+      driverProducts,
+      productTypeProducts,
+      audienceProducts,
+      conditionProducts,
+      availabilityProducts,
+      priceProducts,
+    ] = await PublicProductRepository.facetSources(collectionSlug, filters);
     const teams = new Map<string, { value: NamedFacetValue; count: number }>();
     const drivers = new Map<string, { value: NamedFacetValue; count: number }>();
     const productTypes = new Map<string, { value: NamedFacetValue; count: number }>();
     const audiences = new Map<string, number>();
+    const conditionCounts = new Map<string, number>();
 
     for (const { team } of teamProducts) if (team) increment(teams, team);
     for (const product of driverProducts) {
@@ -68,6 +77,9 @@ export class PublicProductService {
     for (const { category } of productTypeProducts) increment(productTypes, category);
     for (const { audience } of audienceProducts) {
       if (audience) audiences.set(audience, (audiences.get(audience) ?? 0) + 1);
+    }
+    for (const { condition } of conditionProducts) {
+      conditionCounts.set(condition, (conditionCounts.get(condition) ?? 0) + 1);
     }
 
     let min = 0;
@@ -87,6 +99,10 @@ export class PublicProductService {
       drivers: namedFacet(drivers),
       productTypes: namedFacet(productTypes),
       audiences: [...audiences.entries()].map(([value, count]) => ({ value, count })),
+      conditions: conditions.flatMap((value) => {
+        const count = conditionCounts.get(value);
+        return count ? [{ value, count }] : [];
+      }),
       availability: { inStock: availabilityProducts.filter(({ variants }) => variants.length > 0).length },
       price: { min, max },
     };

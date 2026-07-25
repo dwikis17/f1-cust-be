@@ -1,4 +1,9 @@
-import type { CollectionKind, Prisma, ProductAudience } from "../../generated/prisma/client.js";
+import type {
+  CollectionKind,
+  Prisma,
+  ProductAudience,
+  ProductCondition,
+} from "../../generated/prisma/client.js";
 import { prisma } from "../../db.js";
 import { storedPhotoUrl } from "../../photo-storage.js";
 import { effectivePriceIdr } from "../../product-price.js";
@@ -23,12 +28,13 @@ export type ProductFilters = {
   sizes?: string[];
   colors?: string[];
   audiences?: ProductAudience[];
+  conditions?: ProductCondition[];
   availability?: "in_stock";
   minPrice?: number;
   maxPrice?: number;
 };
 
-type FacetName = "team" | "driver" | "productType" | "audience" | "availability" | "price";
+type FacetName = "team" | "driver" | "productType" | "audience" | "condition" | "availability" | "price";
 type PriceRow = { id: string; priceIdr: number; salePriceIdr: number | null };
 
 const hasPriceFilter = (filters: ProductFilters) => filters.minPrice !== undefined || filters.maxPrice !== undefined;
@@ -65,6 +71,7 @@ function productWhere(filters: ProductFilters, omit?: FacetName): Prisma.Product
       drivers: { some: { driver: { slug: { in: filters.drivers } } } },
     }),
     ...(omit !== "audience" && filters.audiences?.length && { audience: { in: filters.audiences } }),
+    ...(omit !== "condition" && filters.conditions?.length && { condition: { in: filters.conditions } }),
     ...(hasVariantFilter && { variants: { some: variantFilter } }),
   };
 }
@@ -199,11 +206,20 @@ export class PublicProductRepository {
         filters,
         omit,
       );
-    const [teamWhere, driverWhere, productTypeWhere, audienceWhere, availabilityWhere, priceWhere] = await Promise.all([
+    const [
+      teamWhere,
+      driverWhere,
+      productTypeWhere,
+      audienceWhere,
+      conditionWhere,
+      availabilityWhere,
+      priceWhere,
+    ] = await Promise.all([
       scoped("team"),
       scoped("driver"),
       scoped("productType"),
       scoped("audience"),
+      scoped("condition"),
       scoped("availability"),
       scoped("price"),
     ]);
@@ -215,6 +231,7 @@ export class PublicProductRepository {
       }),
       prisma.product.findMany({ where: productTypeWhere, select: { category: true } }),
       prisma.product.findMany({ where: audienceWhere, select: { audience: true } }),
+      prisma.product.findMany({ where: conditionWhere, select: { condition: true } }),
       prisma.product.findMany({
         where: availabilityWhere,
         select: { variants: { where: { stockQuantity: { gt: 0 } }, select: { id: true }, take: 1 } },

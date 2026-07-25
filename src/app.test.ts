@@ -83,6 +83,7 @@ test("admin dashboard aggregates real commerce data and handles empty periods", 
       slug: "dashboard-jersey",
       priceIdr: 100_000,
       status: "ACTIVE",
+      condition: "BNIB",
       categoryId: category.id,
       variants: {
         create: [
@@ -120,6 +121,7 @@ test("admin dashboard aggregates real commerce data and handles empty periods", 
       slug: "dashboard-draft",
       priceIdr: 100_000,
       status: "DRAFT",
+      condition: "BNIB",
       categoryId: category.id,
       variants: {
         create: {
@@ -285,6 +287,7 @@ test("admins search, operate, audit, export, and invoice orders safely", async (
       slug: "operations-jersey",
       priceIdr: 250_000,
       status: "ACTIVE",
+      condition: "BNIB",
       categoryId: category.id,
       variants: {
         create: {
@@ -766,11 +769,17 @@ test("admin creates catalog data and public API hides drafts", async () => {
       parentId: drivers.body.id,
     }).expect(201);
   historicalDriverCollectionId = historicalDriverCollection.body.id;
+  await request(app).post("/api/admin/products").set("authorization", `Bearer ${token}`)
+    .send({ name: "Missing Condition", slug: "missing-condition", priceIdr: 1, categoryId }).expect(400);
+  await request(app).post("/api/admin/products").set("authorization", `Bearer ${token}`)
+    .send({ name: "Invalid Condition", slug: "invalid-condition", priceIdr: 1, condition: "OPEN_BOX", categoryId })
+    .expect(400);
   const crossTeamProduct = await request(app).post("/api/admin/products").set("authorization", `Bearer ${token}`)
     .send({
       name: "Historic Driver Product",
       slug: "historic-driver-product",
       priceIdr: 1,
+      condition: "PRE_OWNED",
       categoryId,
       teamId: secondTeamId,
       driverIds: [driverId, historicalDriverId],
@@ -785,6 +794,7 @@ test("admin creates catalog data and public API hides drafts", async () => {
       descriptionId: "Jersey tim merah resmi",
       sizingNote: "Measured flat across the garment.",
       priceIdr: 1_250_000,
+      condition: "BNIB",
       categoryId,
       teamId,
       driverIds: [driverId, historicalDriverId],
@@ -807,11 +817,13 @@ test("admin creates catalog data and public API hides drafts", async () => {
   assert.equal(product.body.nameId, "Jersey Tim Ferrari");
   assert.equal(product.body.descriptionId, "Jersey tim merah resmi");
   assert.equal(product.body.sizingNote, "Measured flat across the garment.");
+  assert.equal(product.body.condition, "BNIB");
   assert.equal(product.body.team.slug, "ferrari");
   assert.deepEqual(product.body.drivers.map((driver: { slug: string }) => driver.slug), ["charles-leclerc", "niki-lauda"]);
   assert.equal(product.body.collections.length, 3);
   const unassigned = await request(app).post("/api/admin/products").set("authorization", `Bearer ${token}`)
-    .send({ name: "General F1 Cap", slug: "general-f1-cap", priceIdr: 300_000, categoryId }).expect(201);
+    .send({ name: "General F1 Cap", slug: "general-f1-cap", priceIdr: 300_000, condition: "BNWT", categoryId })
+    .expect(201);
   assert.equal(unassigned.body.team, null);
   assert.deepEqual(unassigned.body.drivers, []);
   const hidden = await request(app)
@@ -928,6 +940,7 @@ test("active products are filterable without exposing exact stock", async () => 
   assert.equal(response.body.total, 1);
   assert.equal(response.body.data[0].priceIdr, 1_250_000);
   assert.equal(response.body.data[0].sizingNote, "Allow a 1 cm tolerance.");
+  assert.equal(response.body.data[0].condition, "BNIB");
   assert.equal(response.body.data[0].team.slug, "ferrari");
   assert.deepEqual(
     response.body.data[0].drivers.map((driver: { slug: string }) => driver.slug),
@@ -997,6 +1010,58 @@ test("active products are filterable without exposing exact stock", async () => 
     }).expect(400);
 });
 
+test("product conditions update, filter with OR semantics, and expose stable facets", async () => {
+  let comparisonId: string | undefined;
+  try {
+    await request(app).patch(`/api/admin/products/${productId}`).set("authorization", `Bearer ${token}`)
+      .send({ condition: "OPEN_BOX" }).expect(400);
+    const updated = await request(app).patch(`/api/admin/products/${productId}`)
+      .set("authorization", `Bearer ${token}`)
+      .send({ condition: "PRE_OWNED" }).expect(200);
+    assert.equal(updated.body.condition, "PRE_OWNED");
+
+    const comparison = await prisma.product.create({
+      data: {
+        name: "Condition Comparison Product",
+        slug: "condition-comparison-product",
+        priceIdr: 2_000_000,
+        status: "ACTIVE",
+        condition: "BNWOT",
+        categoryId,
+        audience: "UNISEX",
+        collections: { create: { collectionId: ferrariCollectionId } },
+        variants: {
+          create: {
+            sku: "CONDITION-COMPARISON",
+            stockQuantity: 1,
+            packageLengthMm: 300,
+            packageWidthMm: 220,
+            packageHeightMm: 40,
+            packageWeightG: 400,
+          },
+        },
+      },
+    });
+    comparisonId = comparison.id;
+
+    const single = await request(app).get("/api/products?condition=PRE_OWNED").expect(200);
+    assert.deepEqual(single.body.data.map(({ id }: { id: string }) => id), [productId]);
+
+    const multiple = await request(app)
+      .get("/api/collections/ferrari/products?condition=BNWOT&condition=PRE_OWNED")
+      .expect(200);
+    assert.equal(multiple.body.total, 2);
+    assert.deepEqual(
+      multiple.body.facets.conditions,
+      [{ value: "BNWOT", count: 1 }, { value: "PRE_OWNED", count: 1 }],
+    );
+    await request(app).get("/api/products?condition=BNIB,UNKNOWN").expect(400);
+  } finally {
+    if (comparisonId) await prisma.product.delete({ where: { id: comparisonId } });
+    await prisma.product.update({ where: { id: productId }, data: { condition: "BNIB" } });
+  }
+});
+
 test("product sales validate and price public catalog results until cleared", async () => {
   let comparisonId: string | undefined;
   try {
@@ -1016,6 +1081,7 @@ test("product sales validate and price public catalog results until cleared", as
         priceIdr: 2_000_000,
         salePriceIdr: 800_000,
         status: "ACTIVE",
+        condition: "BNIB",
         categoryId,
         audience: "UNISEX",
         collections: { create: { collectionId: ferrariCollectionId } },
@@ -1657,6 +1723,7 @@ test("checkout verifies payment notifications, reserves stock, and waits for man
         priceIdr: 500_000,
         salePriceIdr: 400_000,
         status: "ACTIVE",
+        condition: "BNIB",
         categoryId,
         variants: { create: [{
           sku: "CHECKOUT-CAP-DEFAULT",
@@ -1821,6 +1888,7 @@ test("optionless products use a default SKU without fake size or color", async (
       slug: "ferrari-team-cap",
       priceIdr: 500_000,
       status: "ACTIVE",
+      condition: "BNIB",
       categoryId,
       teamId,
       audience: "UNISEX",
@@ -1846,6 +1914,7 @@ test("optionless products use a default SKU without fake size or color", async (
       name: "Size-only Shirt",
       slug: "size-only-shirt",
       priceIdr: 700_000,
+      condition: "BNWOT",
       categoryId,
       variants: [{
         sku: "SIZE-ONLY-S",

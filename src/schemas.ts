@@ -28,6 +28,7 @@ export const driverSchema = z.object({
 export const driverPatchSchema = driverSchema.partial().refine((value) => Object.keys(value).length > 0);
 
 export const productAudienceSchema = z.enum(["MEN", "WOMEN", "KIDS", "UNISEX"]);
+export const productConditionSchema = z.enum(["BNIB", "BNWT", "BNWOT", "PRE_OWNED"]);
 export const localeSchema = z.enum(["en", "id"]);
 export const cartItemsSchema = z.object({
   variantIds: z.array(idSchema).min(1).max(50),
@@ -126,6 +127,7 @@ export const productSchema = z.object({
   priceIdr: z.number().int().nonnegative(),
   salePriceIdr: z.number().int().positive().nullable().optional(),
   status: z.enum(["DRAFT", "ACTIVE", "ARCHIVED"]).default("DRAFT"),
+  condition: productConditionSchema,
   categoryId: idSchema,
   teamId: idSchema.nullable().optional(),
   driverIds: z.array(idSchema).max(50).default([]),
@@ -155,6 +157,7 @@ export const productPatchSchema = z.object({
   priceIdr: z.number().int().nonnegative().optional(),
   salePriceIdr: z.number().int().positive().nullable().optional(),
   status: z.enum(["DRAFT", "ACTIVE", "ARCHIVED"]).optional(),
+  condition: productConditionSchema.optional(),
   categoryId: idSchema.optional(),
   teamId: idSchema.nullable().optional(),
   driverIds: z.array(idSchema).max(50).optional(),
