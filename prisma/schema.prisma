@@ -197,6 +197,7 @@ model Collection {
   children    Collection[]        @relation("CollectionTree")
   imageUrl    String?
   description String              @default("")
+  descriptionId String?
   position    Int                 @default(0)
   active      Boolean             @default(true)
   products    ProductCollection[]

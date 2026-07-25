@@ -1,14 +1,27 @@
 import { PublicCatalogRepository } from "../../repositories/public/catalog-repository.js";
 
 type CollectionItem = Awaited<ReturnType<typeof PublicCatalogRepository.listCollections>>[number];
-type CollectionTreeNode = CollectionItem & { children: CollectionTreeNode[] };
+type Locale = "en" | "id";
+type PublicCollectionItem = Omit<CollectionItem, "descriptionId">;
+type CollectionTreeNode = PublicCollectionItem & { children: CollectionTreeNode[] };
+
+export function publicCollection<T extends { description: string; descriptionId: string | null }>(
+  collection: T,
+  locale: Locale,
+) {
+  const { descriptionId, ...value } = collection;
+  return {
+    ...value,
+    description: locale === "id" ? descriptionId ?? collection.description : collection.description,
+  };
+}
 
 export class PublicCatalogService {
   static listCategories() { return PublicCatalogRepository.listCategories(); }
   static listTags() { return PublicCatalogRepository.listTags(); }
   static listTeams() { return PublicCatalogRepository.listTeams(); }
   static listDrivers(team?: string) { return PublicCatalogRepository.listDrivers(team); }
-  static async listCollections() {
+  static async listCollections(locale: Locale) {
     const collections = await PublicCatalogRepository.listCollections();
     const byParent = new Map<string | null, typeof collections>();
     for (const collection of collections) {
@@ -17,8 +30,18 @@ export class PublicCatalogService {
       byParent.set(collection.parentId, siblings);
     }
     const build = (parentId: string | null): CollectionTreeNode[] =>
-      (byParent.get(parentId) ?? []).map((collection) => ({ ...collection, children: build(collection.id) }));
+      (byParent.get(parentId) ?? []).map((collection) => ({
+        ...publicCollection(collection, locale),
+        children: build(collection.id),
+      }));
     return build(null);
   }
-  static findCollection(slug: string) { return PublicCatalogRepository.findCollection(slug); }
+  static async findCollection(slug: string, locale: Locale) {
+    const collection = await PublicCatalogRepository.findCollection(slug);
+    return collection ? {
+      ...publicCollection(collection, locale),
+      parent: collection.parent ? publicCollection(collection.parent, locale) : null,
+      children: collection.children.map((child) => publicCollection(child, locale)),
+    } : null;
+  }
 }

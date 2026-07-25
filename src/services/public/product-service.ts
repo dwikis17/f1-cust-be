@@ -7,6 +7,7 @@ import {
 } from "../../repositories/public/product-repository.js";
 import type { ProductWithRelations } from "../../repositories/admin/product-repository.js";
 import { effectivePriceIdr } from "../../product-price.js";
+import { publicCollection, PublicCatalogService } from "./catalog-service.js";
 
 type NamedFacetValue = { id: string; name: string; slug: string };
 type Locale = "en" | "id";
@@ -46,7 +47,7 @@ export class PublicProductService {
       category,
       productType: category,
       drivers: drivers.map(({ driver }) => driver),
-      collections: collections.map(({ collection }) => collection),
+      collections: collections.map(({ collection }) => publicCollection(collection, locale)),
       variants: variants.map(({ stockQuantity, ...variant }) => ({ ...variant, available: stockQuantity > 0 })),
       photos: photos.map((photo) => ({ ...photo, url: PublicProductRepository.storedPhotoUrl(photo.path) })),
     };
@@ -109,7 +110,7 @@ export class PublicProductService {
     limit: number,
     locale: Locale,
   ) {
-    const collectionPromise = PublicCatalogRepository.findCollection(collectionSlug);
+    const collectionPromise = PublicCatalogService.findCollection(collectionSlug, locale);
     const productsPromise = PublicProductRepository.listCollectionProducts(collectionSlug, filters, sort, page, limit);
     const facetsPromise = PublicProductService.facets(collectionSlug, filters);
     const [collection, [total, memberships], facets] = await Promise.all([

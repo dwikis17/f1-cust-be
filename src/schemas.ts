@@ -43,7 +43,7 @@ export const collectionKindSchema = z.enum([
   "PROMOTION",
   "MANUAL",
 ]);
-export const collectionSchema = z.object({
+const collectionShape = {
   name: nameSchema,
   slug: slugSchema,
   kind: collectionKindSchema,
@@ -51,11 +51,19 @@ export const collectionSchema = z.object({
   driverId: idSchema.nullable().optional(),
   parentId: idSchema.nullable().optional(),
   imageUrl: urlSchema.nullable().optional(),
-  description: z.string().trim().max(5_000).default(""),
-  position: z.number().int().nonnegative().default(0),
-  active: z.boolean().default(true),
+  description: z.string().trim().max(5_000),
+  descriptionId: z.string().trim().max(5_000).nullable().optional(),
+  position: z.number().int().nonnegative(),
+  active: z.boolean(),
+};
+export const collectionSchema = z.object({
+  ...collectionShape,
+  description: collectionShape.description.default(""),
+  position: collectionShape.position.default(0),
+  active: collectionShape.active.default(true),
 }).strict();
-export const collectionPatchSchema = collectionSchema.partial().refine((value) => Object.keys(value).length > 0);
+export const collectionPatchSchema = z.object(collectionShape).partial().strict()
+  .refine((value) => Object.keys(value).length > 0);
 export const collectionMembershipSchema = z.object({
   productIds: z.array(idSchema).max(10_000),
   featuredProductIds: z.array(idSchema).max(10_000).default([]),

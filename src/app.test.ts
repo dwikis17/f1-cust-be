@@ -724,13 +724,33 @@ test("admin creates catalog data and public API hides drafts", async () => {
   const tag = await request(app).post("/api/admin/tags").set("authorization", `Bearer ${token}`)
     .send({ name: "Limited Edition", slug: "limited-edition" }).expect(201);
   const formulaOne = await request(app).post("/api/admin/collections").set("authorization", `Bearer ${token}`)
-    .send({ name: "Formula 1", slug: "formula-1", kind: "DOMAIN", position: 0 }).expect(201);
+    .send({
+      name: "Formula 1",
+      slug: "formula-1",
+      kind: "DOMAIN",
+      description: "Formula 1 collections.",
+      position: 0,
+    }).expect(201);
   const drivers = await request(app).post("/api/admin/collections").set("authorization", `Bearer ${token}`)
     .send({ name: "Drivers", slug: "drivers", kind: "DOMAIN", position: 1 }).expect(201);
   const ferrariCollection = await request(app).post("/api/admin/collections").set("authorization", `Bearer ${token}`)
-    .send({ name: "Ferrari", slug: "ferrari", kind: "TEAM", teamId, parentId: formulaOne.body.id }).expect(201);
+    .send({
+      name: "Ferrari",
+      slug: "ferrari",
+      kind: "TEAM",
+      teamId,
+      parentId: formulaOne.body.id,
+      description: "Shop the Ferrari collection.",
+      descriptionId: "Belanja koleksi Ferrari.",
+    }).expect(201);
   assert.equal(ferrariCollection.body.team.id, teamId);
+  assert.equal(ferrariCollection.body.description, "Shop the Ferrari collection.");
+  assert.equal(ferrariCollection.body.descriptionId, "Belanja koleksi Ferrari.");
   ferrariCollectionId = ferrariCollection.body.id;
+  const updatedFerrariCollection = await request(app).patch(`/api/admin/collections/${ferrariCollectionId}`)
+    .set("authorization", `Bearer ${token}`)
+    .send({ descriptionId: "Jelajahi koleksi Ferrari." }).expect(200);
+  assert.equal(updatedFerrariCollection.body.descriptionId, "Jelajahi koleksi Ferrari.");
   const driverCollection = await request(app).post("/api/admin/collections").set("authorization", `Bearer ${token}`)
     .send({ name: "Charles Leclerc", slug: "charles-leclerc", kind: "DRIVER", driverId, parentId: drivers.body.id })
     .expect(201);
@@ -919,11 +939,19 @@ test("active products are filterable without exposing exact stock", async () => 
   assert.equal(response.body.data[0].name, "Ferrari Team Jersey");
   assert.equal(response.body.data[0].nameId, undefined);
   assert.equal(response.body.data[0].descriptionId, undefined);
+  const publicFerrariCollection = response.body.data[0].collections
+    .find((collection: { slug: string }) => collection.slug === "ferrari");
+  assert.equal(publicFerrariCollection.description, "Shop the Ferrari collection.");
+  assert.equal(publicFerrariCollection.descriptionId, undefined);
   const indonesian = await request(app).get("/api/products/ferrari-team-jersey?locale=id").expect(200);
   assert.equal(indonesian.body.name, "Jersey Tim Ferrari");
   assert.equal(indonesian.body.description, "Jersey tim merah resmi");
   assert.equal(indonesian.body.nameId, undefined);
   assert.equal(indonesian.body.descriptionId, undefined);
+  const indonesianFerrariCollection = indonesian.body.collections
+    .find((collection: { slug: string }) => collection.slug === "ferrari");
+  assert.equal(indonesianFerrariCollection.description, "Jelajahi koleksi Ferrari.");
+  assert.equal(indonesianFerrariCollection.descriptionId, undefined);
   const indonesianSearch = await request(app).get("/api/products?locale=id&search=merah").expect(200);
   assert.equal(indonesianSearch.body.total, 1);
   assert.equal(indonesianSearch.body.data[0].name, "Jersey Tim Ferrari");
@@ -1730,12 +1758,34 @@ test("collection hierarchy, memberships, and counted facets are public", async (
     .send({ productIds: [productId], featuredProductIds: [randomUUID()] }).expect(400);
   const tree = await request(app).get("/api/collections").expect(200);
   assert.deepEqual(tree.body.map((collection: { slug: string }) => collection.slug), ["formula-1", "drivers"]);
+  assert.equal(tree.body[0].description, "Formula 1 collections.");
+  assert.equal(tree.body[0].descriptionId, undefined);
   assert.equal(tree.body[0].children[0].slug, "ferrari");
+  assert.equal(tree.body[0].children[0].description, "Shop the Ferrari collection.");
+  assert.equal(tree.body[0].children[0].descriptionId, undefined);
+  const indonesianTree = await request(app).get("/api/collections?locale=id").expect(200);
+  assert.equal(indonesianTree.body[0].description, "Formula 1 collections.");
+  assert.equal(indonesianTree.body[0].children[0].description, "Jelajahi koleksi Ferrari.");
+  assert.equal(indonesianTree.body[0].children[0].descriptionId, undefined);
+  await request(app).get("/api/collections?locale=fr").expect(400);
+
+  const englishDetail = await request(app).get("/api/collections/ferrari").expect(200);
+  assert.equal(englishDetail.body.description, "Shop the Ferrari collection.");
+  assert.equal(englishDetail.body.descriptionId, undefined);
+  assert.equal(englishDetail.body.parent.description, "Formula 1 collections.");
+  assert.equal(englishDetail.body.parent.descriptionId, undefined);
+  const indonesianDetail = await request(app).get("/api/collections/ferrari?locale=id").expect(200);
+  assert.equal(indonesianDetail.body.description, "Jelajahi koleksi Ferrari.");
+  assert.equal(indonesianDetail.body.descriptionId, undefined);
+  assert.equal(indonesianDetail.body.parent.description, "Formula 1 collections.");
+  await request(app).get("/api/collections/ferrari?locale=fr").expect(400);
 
   const response = await request(app)
     .get("/api/collections/ferrari/products?driver=charles-leclerc&productType=jerseys&audience=UNISEX&availability=in_stock")
     .expect(200);
   assert.equal(response.body.collection.slug, "ferrari");
+  assert.equal(response.body.collection.description, "Shop the Ferrari collection.");
+  assert.equal(response.body.collection.descriptionId, undefined);
   assert.equal(response.body.total, 1);
   assert.equal(response.body.facets.teams[0].slug, "ferrari");
   assert.deepEqual(
@@ -1747,6 +1797,8 @@ test("collection hierarchy, memberships, and counted facets are public", async (
   assert.equal(response.body.facets.availability.inStock, 1);
   assert.deepEqual(response.body.facets.price, { min: 1_250_000, max: 1_250_000 });
   const indonesian = await request(app).get("/api/collections/ferrari/products?locale=id").expect(200);
+  assert.equal(indonesian.body.collection.description, "Jelajahi koleksi Ferrari.");
+  assert.equal(indonesian.body.collection.descriptionId, undefined);
   assert.equal(indonesian.body.data[0].name, "Jersey Tim Ferrari");
   const inclusivePrice = await request(app)
     .get("/api/collections/ferrari/products?minPrice=1250000&maxPrice=1250000").expect(200);
