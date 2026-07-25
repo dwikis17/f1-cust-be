@@ -151,6 +151,7 @@ model Product {
   descriptionId String?
   sizingNote    String?
   priceIdr      Int
+  salePriceIdr  Int?
   status        ProductStatus       @default(DRAFT)
   categoryId    String              @db.Uuid
   category      Category            @relation(fields: [categoryId], references: [id], onDelete: Restrict)

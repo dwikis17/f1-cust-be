@@ -6,6 +6,7 @@ import {
   type ProductSort,
 } from "../../repositories/public/product-repository.js";
 import type { ProductWithRelations } from "../../repositories/admin/product-repository.js";
+import { effectivePriceIdr } from "../../product-price.js";
 
 type NamedFacetValue = { id: string; name: string; slug: string };
 type Locale = "en" | "id";
@@ -24,9 +25,22 @@ function namedFacet(map: Map<string, { value: NamedFacetValue; count: number }>)
 
 export class PublicProductService {
   private static publicProduct(product: ProductWithRelations, locale: Locale) {
-    const { drivers, collections, variants, photos, category, nameId, descriptionId, ...value } = product;
+    const {
+      drivers,
+      collections,
+      variants,
+      photos,
+      category,
+      nameId,
+      descriptionId,
+      salePriceIdr,
+      priceIdr,
+      ...value
+    } = product;
     return {
       ...value,
+      priceIdr: effectivePriceIdr(product),
+      originalPriceIdr: salePriceIdr === null ? null : priceIdr,
       name: locale === "id" ? nameId ?? product.name : product.name,
       description: locale === "id" ? descriptionId ?? product.description : product.description,
       category,
@@ -58,9 +72,10 @@ export class PublicProductService {
     let min = 0;
     let max = 0;
     if (priceProducts.length > 0) {
-      min = priceProducts[0]?.priceIdr ?? 0;
+      min = effectivePriceIdr(priceProducts[0] as NonNullable<typeof priceProducts[0]>);
       max = min;
-      for (const { priceIdr } of priceProducts) {
+      for (const product of priceProducts) {
+        const priceIdr = effectivePriceIdr(product);
         if (priceIdr < min) min = priceIdr;
         if (priceIdr > max) max = priceIdr;
       }
@@ -78,7 +93,12 @@ export class PublicProductService {
 
   static async listProducts(filters: ProductFilters, sort: ProductSort, page: number, limit: number, locale: Locale) {
     const [total, products] = await PublicProductRepository.listProducts(filters, sort, page, limit);
-    return { data: products.map((product) => PublicProductService.publicProduct(product, locale)), page, limit, total };
+    return {
+      data: products.map((product) => PublicProductService.publicProduct(product, locale)),
+      page,
+      limit,
+      total,
+    };
   }
 
   static async listCollectionProducts(
@@ -128,7 +148,7 @@ export class PublicProductService {
           id: product.id,
           name: locale === "id" ? product.nameId ?? product.name : product.name,
           slug: product.slug,
-          priceIdr: product.priceIdr,
+          priceIdr: effectivePriceIdr(product),
           merchandisingLabel: product.team?.name ?? product.category.name,
           photo: photo ? { url: PublicProductRepository.storedPhotoUrl(photo.path), altText: photo.altText } : null,
         },

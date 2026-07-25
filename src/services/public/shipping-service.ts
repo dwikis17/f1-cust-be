@@ -2,6 +2,7 @@ import { z } from "zod";
 import { config } from "../../config.js";
 import { prisma } from "../../db.js";
 import { HttpError } from "../../http.js";
+import { effectivePriceIdr } from "../../product-price.js";
 
 type ShippingInput = {
   destinationPostalCode: string;
@@ -51,7 +52,9 @@ export class PublicShippingService {
         packageWidthMm: true,
         packageHeightMm: true,
         packageWeightG: true,
-        product: { select: { name: true, priceIdr: true, status: true } },
+        product: {
+          select: { name: true, priceIdr: true, salePriceIdr: true, status: true },
+        },
       },
     });
     if (variants.length !== quantities.size || variants.some((variant) =>
@@ -72,7 +75,7 @@ export class PublicShippingService {
             name: variant.product.name,
             category: "fashion",
             sku: variant.sku,
-            value: variant.product.priceIdr,
+            value: effectivePriceIdr(variant.product),
             quantity: quantities.get(variant.id),
             weight: variant.packageWeightG,
             height: variant.packageHeightMm / 10,

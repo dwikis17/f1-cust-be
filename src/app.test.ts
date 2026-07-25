@@ -934,6 +934,76 @@ test("active products are filterable without exposing exact stock", async () => 
     }).expect(400);
 });
 
+test("product sales validate and price public catalog results until cleared", async () => {
+  let comparisonId: string | undefined;
+  try {
+    await request(app).patch(`/api/admin/products/${productId}`).set("authorization", `Bearer ${token}`)
+      .send({ salePriceIdr: 0 }).expect(400);
+    await request(app).patch(`/api/admin/products/${productId}`).set("authorization", `Bearer ${token}`)
+      .send({ salePriceIdr: 1_250_000 }).expect(400);
+    const managed = await request(app).patch(`/api/admin/products/${productId}`)
+      .set("authorization", `Bearer ${token}`)
+      .send({ salePriceIdr: 900_000 }).expect(200);
+    assert.equal(managed.body.salePriceIdr, 900_000);
+
+    const comparison = await prisma.product.create({
+      data: {
+        name: "Sale Comparison Product",
+        slug: "sale-comparison-product",
+        priceIdr: 2_000_000,
+        salePriceIdr: 800_000,
+        status: "ACTIVE",
+        categoryId,
+        audience: "UNISEX",
+        collections: { create: { collectionId: ferrariCollectionId } },
+        variants: {
+          create: {
+            sku: "SALE-COMPARISON",
+            stockQuantity: 1,
+            packageLengthMm: 300,
+            packageWidthMm: 220,
+            packageHeightMm: 40,
+            packageWeightG: 400,
+          },
+        },
+      },
+    });
+    comparisonId = comparison.id;
+
+    const publicProduct = await request(app).get("/api/products/ferrari-team-jersey").expect(200);
+    assert.equal(publicProduct.body.priceIdr, 900_000);
+    assert.equal(publicProduct.body.originalPriceIdr, 1_250_000);
+
+    const variantId = publicProduct.body.variants[0].id as string;
+    const cart = await request(app).post("/api/products/cart-items")
+      .send({ variantIds: [variantId], locale: "en" }).expect(200);
+    assert.equal(cart.body.data[0].product.priceIdr, 900_000);
+    assert.equal(cart.body.data[0].product.originalPriceIdr, undefined);
+
+    const filtered = await request(app)
+      .get("/api/collections/ferrari/products?minPrice=900000&maxPrice=900000").expect(200);
+    assert.equal(filtered.body.total, 1);
+    assert.equal(filtered.body.data[0].id, productId);
+
+    const sorted = await request(app).get("/api/collections/ferrari/products?sort=price_asc").expect(200);
+    assert.ok(sorted.body.data.findIndex(({ id }: { id: string }) => id === comparison.id)
+      < sorted.body.data.findIndex(({ id }: { id: string }) => id === productId));
+    assert.deepEqual(sorted.body.facets.price, { min: 800_000, max: 900_000 });
+
+    await request(app).patch(`/api/admin/products/${productId}`).set("authorization", `Bearer ${token}`)
+      .send({ salePriceIdr: null }).expect(200);
+    const cleared = await request(app).get("/api/products/ferrari-team-jersey").expect(200);
+    assert.equal(cleared.body.priceIdr, 1_250_000);
+    assert.equal(cleared.body.originalPriceIdr, null);
+  } finally {
+    if (comparisonId) await prisma.product.delete({ where: { id: comparisonId } });
+    await prisma.product.update({
+      where: { id: productId },
+      data: { salePriceIdr: null },
+    });
+  }
+});
+
 test("cart items return only requested active variants and report missing ids", async () => {
   const product = await request(app).get("/api/products/ferrari-team-jersey").expect(200);
   const variantId = product.body.variants[0].id as string;
@@ -965,6 +1035,7 @@ test("shipping rates use authoritative cart data and normalize Biteship response
   config.biteshipApiKey = "biteship_test.test-key";
   config.biteshipOriginPostalCode = "12440";
   config.biteshipCouriers = ["jne", "sicepat"];
+  await prisma.product.update({ where: { id: productId }, data: { salePriceIdr: 900_000 } });
 
   try {
     let upstreamBody: Record<string, unknown> | undefined;
@@ -997,7 +1068,7 @@ test("shipping rates use authoritative cart data and normalize Biteship response
       destination_postal_code: 12240,
       couriers: "jne,sicepat",
       items: [{
-        name: "Ferrari Team Jersey", category: "fashion", sku: "FER-JER-RED-M", value: 1_250_000,
+        name: "Ferrari Team Jersey", category: "fashion", sku: "FER-JER-RED-M", value: 900_000,
         quantity: 3, weight: 450, height: 4, length: 30, width: 22,
       }],
     });
@@ -1033,6 +1104,7 @@ test("shipping rates use authoritative cart data and normalize Biteship response
     await request(app).post("/api/shipping/rates")
       .send({ destinationPostalCode: "12240", items: [{ variantId, quantity: 1 }] }).expect(503);
   } finally {
+    await prisma.product.update({ where: { id: productId }, data: { salePriceIdr: null } });
     globalThis.fetch = originalFetch;
     config.biteshipApiKey = originalShippingConfig.apiKey;
     config.biteshipOriginPostalCode = originalShippingConfig.originPostalCode;
@@ -1059,16 +1131,22 @@ test("promo codes are normalized, validated, previewed, and managed by admins", 
     .send({ code: "BAD", discountPercentage: 0, active: true })
     .expect(400);
 
-  const preview = await request(app).post("/api/promo-codes/preview")
-    .send({ code: "grid20", items: [{ variantId, quantity: 1 }] })
-    .expect(200);
+  let preview;
+  try {
+    await prisma.product.update({ where: { id: productId }, data: { salePriceIdr: 1_000_000 } });
+    preview = await request(app).post("/api/promo-codes/preview")
+      .send({ code: "grid20", items: [{ variantId, quantity: 1 }] })
+      .expect(200);
+  } finally {
+    await prisma.product.update({ where: { id: productId }, data: { salePriceIdr: null } });
+  }
   assert.deepEqual(preview.body, {
     code: "GRID20",
     discountPercentage: 20,
     maxDiscountIdr: 100_000,
-    subtotalIdr: 1_250_000,
+    subtotalIdr: 1_000_000,
     discountIdr: 100_000,
-    discountedSubtotalIdr: 1_150_000,
+    discountedSubtotalIdr: 900_000,
   });
 
   await request(app).patch(`/api/admin/promo-codes/${promoCodeId}`)
@@ -1514,6 +1592,7 @@ test("checkout verifies payment notifications, reserves stock, and waits for man
         name: "Checkout Cap",
         slug: "checkout-cap",
         priceIdr: 500_000,
+        salePriceIdr: 400_000,
         status: "ACTIVE",
         categoryId,
         variants: { create: [{
@@ -1536,14 +1615,15 @@ test("checkout verifies payment notifications, reserves stock, and waits for man
     assert.deepEqual(optionlessSnapItem, {
       id: "CHECKOUT-CAP-DEFAULT",
       name: "Checkout Cap",
-      price: 500_000,
+      price: 400_000,
       quantity: 1,
     });
     const optionlessSnapshot = await prisma.orderItem.findFirstOrThrow({ where: { orderId: optionlessCheckout.body.orderId } });
+    assert.equal(optionlessSnapshot.unitPriceIdr, 400_000);
     assert.equal(optionlessSnapshot.color, null);
     assert.equal(optionlessSnapshot.size, null);
     await request(app).post("/api/payments/midtrans/notification")
-      .send(notification(optionlessCheckout.body.orderId, "expire", "518000.00")).expect(200);
+      .send(notification(optionlessCheckout.body.orderId, "expire", "418000.00")).expect(200);
     await prisma.product.update({ where: { id: optionless.id }, data: { status: "ARCHIVED" } });
 
     const insufficient = await request(app).post("/api/checkout").send({

@@ -1,6 +1,7 @@
 import type { z } from "zod";
 import { prisma } from "../db.js";
 import { HttpError, notFound } from "../http.js";
+import { effectivePriceIdr } from "../product-price.js";
 import type { promoCodePatchSchema, promoCodeSchema } from "../schemas.js";
 
 type PromoCodeInput = z.infer<typeof promoCodeSchema>;
@@ -29,7 +30,7 @@ export class PromoCodeService {
       select: {
         id: true,
         stockQuantity: true,
-        product: { select: { priceIdr: true, status: true } },
+        product: { select: { priceIdr: true, salePriceIdr: true, status: true } },
       },
     });
     if (variants.length !== quantities.size || variants.some((variant) =>
@@ -38,7 +39,7 @@ export class PromoCodeService {
     }
 
     const subtotalIdr = variants.reduce(
-      (sum, variant) => sum + variant.product.priceIdr * (quantities.get(variant.id) ?? 0),
+      (sum, variant) => sum + effectivePriceIdr(variant.product) * (quantities.get(variant.id) ?? 0),
       0,
     );
     const discountIdr = calculatePromoDiscount(subtotalIdr, promoCode);

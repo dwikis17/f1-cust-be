@@ -72,6 +72,15 @@ export class ProductService {
     }
   }
 
+  private static validateSale(
+    priceIdr: number,
+    salePriceIdr: number | null,
+  ) {
+    if (salePriceIdr !== null && salePriceIdr >= priceIdr) {
+      throw new HttpError(400, "INVALID_SALE_PRICE", "Sale price must be lower than the regular price");
+    }
+  }
+
   static async listProducts() {
     return (await ProductRepository.listProducts()).map(ProductService.response);
   }
@@ -115,6 +124,9 @@ export class ProductService {
     const effectiveAudience = input.audience === undefined ? current.audience : input.audience;
     const effectiveStatus = input.status ?? current.status;
     await ProductService.validateActivation(effectiveStatus, effectiveAudience, effectiveCollectionIds, current.variants.length);
+    const priceIdr = input.priceIdr ?? current.priceIdr;
+    const salePriceIdr = input.salePriceIdr === undefined ? current.salePriceIdr : input.salePriceIdr;
+    ProductService.validateSale(priceIdr, salePriceIdr);
 
     const {
       tagIds: _tagIds,

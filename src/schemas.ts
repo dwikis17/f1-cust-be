@@ -81,6 +81,15 @@ export const sizingGuideSchema = z.object({
 
 const sizingNoteSchema = z.string().trim().max(2_000).nullable();
 
+function validateSale(
+  value: { priceIdr: number; salePriceIdr?: number | null },
+  context: z.RefinementCtx,
+) {
+  if (value.salePriceIdr != null && value.salePriceIdr >= value.priceIdr) {
+    context.addIssue({ code: "custom", path: ["salePriceIdr"], message: "Sale price must be lower than the regular price" });
+  }
+}
+
 const variantBaseSchema = z.object({
   sku: z.string().trim().min(1).max(80),
   size: z.string().trim().min(1).max(40).nullable().optional(),
@@ -107,6 +116,7 @@ export const productSchema = z.object({
   descriptionId: z.string().trim().max(10_000).nullable().optional(),
   sizingNote: sizingNoteSchema.optional(),
   priceIdr: z.number().int().nonnegative(),
+  salePriceIdr: z.number().int().positive().nullable().optional(),
   status: z.enum(["DRAFT", "ACTIVE", "ARCHIVED"]).default("DRAFT"),
   categoryId: idSchema,
   teamId: idSchema.nullable().optional(),
@@ -116,6 +126,7 @@ export const productSchema = z.object({
   tagIds: z.array(idSchema).max(30).default([]),
   variants: z.array(variantSchema).max(100).default([]),
 }).strict().superRefine((value, context) => {
+  validateSale(value, context);
   if (value.status !== "ACTIVE") return;
   if (!value.audience) context.addIssue({ code: "custom", path: ["audience"], message: "Active products require an audience" });
   if (value.collectionIds.length === 0) {
@@ -134,6 +145,7 @@ export const productPatchSchema = z.object({
   descriptionId: z.string().trim().max(10_000).nullable().optional(),
   sizingNote: sizingNoteSchema.optional(),
   priceIdr: z.number().int().nonnegative().optional(),
+  salePriceIdr: z.number().int().positive().nullable().optional(),
   status: z.enum(["DRAFT", "ACTIVE", "ARCHIVED"]).optional(),
   categoryId: idSchema.optional(),
   teamId: idSchema.nullable().optional(),

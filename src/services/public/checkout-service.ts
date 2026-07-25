@@ -6,6 +6,7 @@ import { prisma } from "../../db.js";
 import { sendPaymentConfirmationEmail } from "../../email-service.js";
 import type { Prisma } from "../../generated/prisma/client.js";
 import { HttpError, notFound } from "../../http.js";
+import { effectivePriceIdr } from "../../product-price.js";
 import { calculatePromoDiscount } from "../promo-code-service.js";
 import { PublicShippingService } from "./shipping-service.js";
 
@@ -371,7 +372,9 @@ export class PublicCheckoutService {
           select: {
             id: true, sku: true, color: true, size: true, stockQuantity: true, packageLengthMm: true, packageWidthMm: true,
             packageHeightMm: true, packageWeightG: true,
-            product: { select: { name: true, priceIdr: true, status: true } },
+            product: {
+              select: { name: true, priceIdr: true, salePriceIdr: true, status: true },
+            },
           },
         });
         if (variants.length !== quantities.size || variants.some((variant) =>
@@ -392,7 +395,10 @@ export class PublicCheckoutService {
           });
           if (updated.count !== 1) throw new HttpError(409, "CART_CHANGED", "One or more cart items are unavailable");
         }
-        const subtotalIdr = variants.reduce((sum, variant) => sum + variant.product.priceIdr * (quantities.get(variant.id) ?? 0), 0);
+        const subtotalIdr = variants.reduce(
+          (sum, variant) => sum + effectivePriceIdr(variant.product) * (quantities.get(variant.id) ?? 0),
+          0,
+        );
         const discountIdr = promoCode ? calculatePromoDiscount(subtotalIdr, promoCode) : 0;
         return tx.order.create({
           data: {
@@ -424,7 +430,7 @@ export class PublicCheckoutService {
                 sku: variant.sku,
                 color: variant.color,
                 size: variant.size,
-                unitPriceIdr: variant.product.priceIdr,
+                unitPriceIdr: effectivePriceIdr(variant.product),
                 quantity: quantities.get(variant.id) ?? 0,
                 packageLengthMm: variant.packageLengthMm,
                 packageWidthMm: variant.packageWidthMm,
