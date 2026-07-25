@@ -815,6 +815,41 @@ test("collection relations validate kind and allow multiple collections per enti
   await request(app).delete(`/api/admin/collections/${second.body.id}`).set("authorization", `Bearer ${token}`).expect(204);
 });
 
+test("collection image uploads validate, replace, publish, and clean up files", async () => {
+  const endpoint = `/api/admin/collections/${ferrariCollectionId}/image`;
+  const pngHeader = Buffer.from([0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a]);
+  await request(app).post(endpoint).set("authorization", `Bearer ${token}`)
+    .attach("image", Buffer.from("not-image"), "fake.png").expect(400);
+
+  const first = await request(app).post(endpoint).set("authorization", `Bearer ${token}`)
+    .attach("image", pngHeader, "ferrari-team.png").expect(200);
+  const firstPath = path.join(config.uploadDir, first.body.imageUrl.replace("/uploads/", ""));
+  await access(firstPath);
+  const publicTree = await request(app).get("/api/collections").expect(200);
+  const publicFerrari = publicTree.body.flatMap((root: { children: Array<{ slug: string }> }) => root.children)
+    .find((collection: { slug: string }) => collection.slug === "ferrari");
+  assert.equal(publicFerrari.imageUrl, first.body.imageUrl);
+  await request(app).patch(`/api/admin/teams/${teamId}`).set("authorization", `Bearer ${token}`)
+    .send({ logoUrl: first.body.imageUrl }).expect(200);
+
+  const replacement = await request(app).post(endpoint).set("authorization", `Bearer ${token}`)
+    .attach("image", pngHeader, "ferrari-team-new.png").expect(200);
+  const replacementPath = path.join(config.uploadDir, replacement.body.imageUrl.replace("/uploads/", ""));
+  await access(firstPath);
+  await access(replacementPath);
+
+  await request(app).patch(`/api/admin/collections/${ferrariCollectionId}`)
+    .set("authorization", `Bearer ${token}`).send({ imageUrl: first.body.imageUrl }).expect(200);
+  await assert.rejects(access(replacementPath));
+  await request(app).patch(`/api/admin/collections/${ferrariCollectionId}`)
+    .set("authorization", `Bearer ${token}`).send({ imageUrl: null }).expect(200);
+  await access(firstPath);
+  await request(app).delete(`/api/admin/teams/${teamId}/logo`).set("authorization", `Bearer ${token}`).expect(204);
+  await assert.rejects(access(firstPath));
+  await request(app).patch(`/api/admin/teams/${teamId}`).set("authorization", `Bearer ${token}`)
+    .send({ logoUrl: "https://example.com/ferrari.webp" }).expect(200);
+});
+
 test("admin can update and delete unreferenced teams and drivers", async () => {
   const team = await request(app).post("/api/admin/teams").set("authorization", `Bearer ${token}`)
     .send({ name: "Alpine", slug: "alpine" }).expect(201);

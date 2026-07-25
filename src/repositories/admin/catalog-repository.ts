@@ -110,4 +110,13 @@ export class CatalogRepository {
 
   static deletePhoto(key: string) { return deletePhoto(key); }
   static storedPhotoKey(value: string) { return storedPhotoKey(value); }
+  static async countImageReferences(value: string) {
+    const counts = await Promise.all([
+      prisma.team.count({ where: { logoUrl: value } }),
+      prisma.driver.count({ where: { photoUrl: value } }),
+      prisma.collection.count({ where: { imageUrl: value } }),
+      prisma.productPhoto.count({ where: { path: value } }),
+    ]);
+    return counts.reduce((total, count) => total + count, 0);
+  }
 }

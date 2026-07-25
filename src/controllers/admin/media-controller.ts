@@ -29,6 +29,11 @@ export class MediaController {
     revalidateStorefront(["catalog:products"]);
     response.status(204).send();
   }
+  static async replaceCollectionImage(request: Request, response: Response) {
+    const value = await MediaService.replaceCollectionImage(parse(idSchema, request.params.id), request.file);
+    revalidateStorefront(["catalog:collections", `catalog:collection:${value.slug}`]);
+    response.json(value);
+  }
 
   static async createProductPhoto(request: Request, response: Response) {
     const productId = parse(idSchema, request.params.productId);

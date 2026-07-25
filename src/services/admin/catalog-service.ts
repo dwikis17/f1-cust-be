@@ -25,8 +25,10 @@ type CollectionMembership = z.infer<typeof collectionMembershipSchema>;
 
 export class CatalogService {
   private static async deleteManagedImage(url?: string | null) {
-    const key = url ? CatalogRepository.storedPhotoKey(url) : null;
+    if (!url) return;
+    const key = CatalogRepository.storedPhotoKey(url);
     if (!key) return;
+    if (await CatalogRepository.countImageReferences(url)) return;
     await CatalogRepository.deletePhoto(key).catch((error: NodeJS.ErrnoException) => {
       if (error.code !== "ENOENT") console.error("Could not remove image", error);
     });
@@ -134,7 +136,11 @@ export class CatalogService {
         "Move active products to another active collection before hiding this collection",
       );
     }
-    return CatalogRepository.updateCollection(id, input);
+    const updated = await CatalogRepository.updateCollection(id, input);
+    if (input.imageUrl !== undefined && input.imageUrl !== current.imageUrl) {
+      await CatalogService.deleteManagedImage(current.imageUrl);
+    }
+    return updated;
   }
   static async deleteCollection(id: string) {
     const collection = await CatalogRepository.findCollection(id);

@@ -70,6 +70,7 @@ router.post("/collections", CatalogController.createCollection);
 router.patch("/collections/:id", CatalogController.updateCollection);
 router.put("/collections/:id/products", CatalogController.replaceCollectionProducts);
 router.delete("/collections/:id", CatalogController.deleteCollection);
+router.post("/collections/:id/image", upload.single("image"), MediaController.replaceCollectionImage);
 
 router.get("/products", ProductController.listProducts);
 router.get("/products/:id", ProductController.findProduct);

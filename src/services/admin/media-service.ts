@@ -26,8 +26,10 @@ export class MediaService {
   }
 
   private static async deleteManagedImage(url?: string | null) {
-    const key = url ? MediaRepository.storedPhotoKey(url) : null;
+    if (!url) return;
+    const key = MediaRepository.storedPhotoKey(url);
     if (!key) return;
+    if (await MediaRepository.countImageReferences(url)) return;
     await MediaRepository.deletePhoto(key).catch((error: NodeJS.ErrnoException) => {
       if (error.code !== "ENOENT") console.error("Could not remove image", error);
     });
@@ -75,6 +77,22 @@ export class MediaService {
     if (!driver) notFound("Driver not found");
     await MediaRepository.updateDriver(id, { photoUrl: null });
     await MediaService.deleteManagedImage(driver.photoUrl);
+  }
+
+  static async replaceCollectionImage(id: string, file: UploadedImage) {
+    const collection = await MediaRepository.findCollection(id);
+    if (!collection) notFound("Collection not found");
+    const image = MediaService.validateImage(file);
+    const key = MediaRepository.photoKey(`collection-${randomUUID()}.${image.extension}`);
+    await MediaRepository.storePhoto(key, file!.buffer, image.contentType);
+    try {
+      const updated = await MediaRepository.updateCollection(id, { imageUrl: MediaRepository.photoUrl(key) });
+      await MediaService.deleteManagedImage(collection.imageUrl);
+      return updated;
+    } catch (error) {
+      await MediaRepository.deletePhoto(key).catch(() => undefined);
+      throw error;
+    }
   }
 
   static async createProductPhoto(

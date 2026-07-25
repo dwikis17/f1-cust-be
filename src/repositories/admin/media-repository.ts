@@ -9,6 +9,10 @@ export class MediaRepository {
   static updateDriver(id: string, data: Prisma.DriverUncheckedUpdateInput) {
     return prisma.driver.update({ where: { id }, data, include: { team: true } });
   }
+  static findCollection(id: string) { return prisma.collection.findUnique({ where: { id } }); }
+  static updateCollection(id: string, data: Prisma.CollectionUncheckedUpdateInput) {
+    return prisma.collection.update({ where: { id }, data });
+  }
 
   static findProduct(id: string) { return prisma.product.findUnique({ where: { id } }); }
   static countProductPhotos(productId: string) { return prisma.productPhoto.count({ where: { productId } }); }
@@ -23,4 +27,13 @@ export class MediaRepository {
   static photoKey(filename: string) { return photoKey(filename); }
   static photoUrl(key: string) { return photoUrl(key); }
   static storedPhotoKey(value: string) { return storedPhotoKey(value); }
+  static async countImageReferences(value: string) {
+    const counts = await Promise.all([
+      prisma.team.count({ where: { logoUrl: value } }),
+      prisma.driver.count({ where: { photoUrl: value } }),
+      prisma.collection.count({ where: { imageUrl: value } }),
+      prisma.productPhoto.count({ where: { path: value } }),
+    ]);
+    return counts.reduce((total, count) => total + count, 0);
+  }
 }
