@@ -4,16 +4,29 @@ import { prisma } from "../db.js";
 import { HttpError, notFound } from "../http.js";
 import { storedPhotoUrl } from "../photo-storage.js";
 import { MediaRepository } from "../repositories/admin/media-repository.js";
-import type { homeHeroOrderSchema, homeHeroSchema } from "../schemas.js";
+import { PublicProductRepository } from "../repositories/public/product-repository.js";
+import type {
+  homeCollectionBlockSchema,
+  homeHeroOrderSchema,
+  homeHeroSchema,
+} from "../schemas.js";
 import { MediaService } from "./admin/media-service.js";
+import { PublicProductService } from "./public/product-service.js";
 
 const MAX_ACTIVE_CAMPAIGNS = 6;
+const MAX_ACTIVE_COLLECTION_BLOCKS = 3;
 
 type HomeHeroInput = z.infer<typeof homeHeroSchema>;
 type HomeHeroOrder = z.infer<typeof homeHeroOrderSchema>;
+type HomeCollectionBlockInput = z.infer<typeof homeCollectionBlockSchema>;
 type HeroImages = {
   desktopImage?: Express.Multer.File;
   mobileImage?: Express.Multer.File;
+};
+type CollectionBlockImages = {
+  leadImage?: Express.Multer.File;
+  sideImageOne?: Express.Multer.File;
+  sideImageTwo?: Express.Multer.File;
 };
 
 async function removeUploaded(keys: string[]) {
@@ -174,6 +187,208 @@ export class HomeService {
     await Promise.all([
       MediaService.deleteManagedImage(campaign.desktopImageUrl),
       MediaService.deleteManagedImage(campaign.mobileImageUrl),
+    ]);
+  }
+}
+
+async function validateBlockCollection(collectionId: string, currentId?: string) {
+  const [collection, duplicate] = await Promise.all([
+    prisma.collection.findFirst({ where: { id: collectionId, active: true } }),
+    prisma.homeCollectionBlock.findUnique({ where: { collectionId } }),
+  ]);
+  if (!collection) throw new HttpError(400, "ACTIVE_COLLECTION_REQUIRED", "Choose an active collection");
+  if (duplicate && duplicate.id !== currentId) {
+    throw new HttpError(409, "COLLECTION_BLOCK_EXISTS", "This collection already has a home block");
+  }
+}
+
+async function validateActiveBlockLimit(active: boolean, wasActive = false) {
+  if (!active || wasActive) return;
+  if (await prisma.homeCollectionBlock.count({ where: { active: true } }) >= MAX_ACTIVE_COLLECTION_BLOCKS) {
+    throw new HttpError(
+      409,
+      "ACTIVE_COLLECTION_BLOCK_LIMIT",
+      `Only ${MAX_ACTIVE_COLLECTION_BLOCKS} collection blocks can be active`,
+    );
+  }
+}
+
+async function storeBlockImages(
+  images: CollectionBlockImages,
+  current?: { leadImageUrl: string; sideImageOneUrl: string; sideImageTwoUrl: string },
+) {
+  if (!current && (!images.leadImage || !images.sideImageOne || !images.sideImageTwo)) {
+    throw new HttpError(400, "COLLECTION_BLOCK_IMAGES_REQUIRED", "Lead and both side images are required");
+  }
+  const uploads = [
+    ["leadImageUrl", "home-collection-lead", images.leadImage],
+    ["sideImageOneUrl", "home-collection-side-one", images.sideImageOne],
+    ["sideImageTwoUrl", "home-collection-side-two", images.sideImageTwo],
+  ] as const;
+  const entries = uploads.flatMap(([field, prefix, file]) => {
+    if (!file) return [];
+    const type = MediaService.validateImage(file);
+    const key = MediaRepository.photoKey(`${prefix}-${randomUUID()}.${type.extension}`);
+    return [{ field, file, key, contentType: type.contentType }];
+  });
+  const stored = await Promise.allSettled(
+    entries.map(({ file, key, contentType }) => MediaRepository.storePhoto(key, file.buffer, contentType)),
+  );
+  const failed = stored.find((upload) => upload.status === "rejected");
+  if (failed?.status === "rejected") {
+    await removeUploaded(entries.map(({ key }) => key));
+    throw failed.reason;
+  }
+  const urls = Object.fromEntries(entries.map(({ field, key }) => [field, MediaRepository.photoUrl(key)]));
+  return {
+    keys: entries.map(({ key }) => key),
+    leadImageUrl: urls.leadImageUrl ?? current!.leadImageUrl,
+    sideImageOneUrl: urls.sideImageOneUrl ?? current!.sideImageOneUrl,
+    sideImageTwoUrl: urls.sideImageTwoUrl ?? current!.sideImageTwoUrl,
+  };
+}
+
+const includeBlockCollection = { collection: true } as const;
+const blockOrderBy = [{ position: "asc" as const }, { createdAt: "asc" as const }, { id: "asc" as const }];
+
+export class HomeCollectionBlockService {
+  static listAdmin() {
+    return prisma.homeCollectionBlock.findMany({ include: includeBlockCollection, orderBy: blockOrderBy });
+  }
+
+  static async listPublic(locale: "en" | "id") {
+    const blocks = await prisma.homeCollectionBlock.findMany({
+      where: { active: true, collection: { active: true } },
+      include: includeBlockCollection,
+      orderBy: blockOrderBy,
+      take: MAX_ACTIVE_COLLECTION_BLOCKS,
+    });
+    const values = await Promise.all(blocks.map(async (block) => {
+      const [, memberships] = await PublicProductRepository.listCollectionProducts(
+        block.collection!.slug,
+        {},
+        "featured",
+        1,
+        5,
+      );
+      if (!memberships.length) return null;
+      const collection = block.collection!;
+      return {
+        id: block.id,
+        leadImageUrl: storedPhotoUrl(block.leadImageUrl),
+        sideImageOneUrl: storedPhotoUrl(block.sideImageOneUrl),
+        sideImageTwoUrl: storedPhotoUrl(block.sideImageTwoUrl),
+        collection: {
+          name: collection.name,
+          slug: collection.slug,
+          description: locale === "id" ? collection.descriptionId ?? collection.description : collection.description,
+        },
+        products: memberships.map(({ product }) => PublicProductService.publicProduct(product, locale)),
+      };
+    }));
+    return values.filter((value) => value !== null);
+  }
+
+  static async create(input: HomeCollectionBlockInput, images: CollectionBlockImages) {
+    await Promise.all([
+      validateBlockCollection(input.collectionId),
+      validateActiveBlockLimit(input.active),
+    ]);
+    const stored = await storeBlockImages(images);
+    try {
+      const last = await prisma.homeCollectionBlock.aggregate({ _max: { position: true } });
+      return await prisma.homeCollectionBlock.create({
+        data: {
+          ...input,
+          leadImageUrl: stored.leadImageUrl,
+          sideImageOneUrl: stored.sideImageOneUrl,
+          sideImageTwoUrl: stored.sideImageTwoUrl,
+          position: (last._max.position ?? -1) + 1,
+        },
+        include: includeBlockCollection,
+      });
+    } catch (error) {
+      await removeUploaded(stored.keys);
+      throw error;
+    }
+  }
+
+  static async update(id: string, input: HomeCollectionBlockInput, images: CollectionBlockImages) {
+    const current = await prisma.homeCollectionBlock.findUnique({ where: { id } });
+    if (!current) notFound("Collection block not found");
+    await Promise.all([
+      validateBlockCollection(input.collectionId, id),
+      validateActiveBlockLimit(input.active, current.active),
+    ]);
+    const stored = await storeBlockImages(images, current);
+    let updated;
+    try {
+      updated = await prisma.homeCollectionBlock.update({
+        where: { id },
+        data: {
+          ...input,
+          leadImageUrl: stored.leadImageUrl,
+          sideImageOneUrl: stored.sideImageOneUrl,
+          sideImageTwoUrl: stored.sideImageTwoUrl,
+        },
+        include: includeBlockCollection,
+      });
+    } catch (error) {
+      await removeUploaded(stored.keys);
+      throw error;
+    }
+    await Promise.all([
+      images.leadImage ? MediaService.deleteManagedImage(current.leadImageUrl) : undefined,
+      images.sideImageOne ? MediaService.deleteManagedImage(current.sideImageOneUrl) : undefined,
+      images.sideImageTwo ? MediaService.deleteManagedImage(current.sideImageTwoUrl) : undefined,
+    ]);
+    return updated;
+  }
+
+  static async setActive(id: string, active: boolean) {
+    const current = await prisma.homeCollectionBlock.findUnique({ where: { id }, include: includeBlockCollection });
+    if (!current) notFound("Collection block not found");
+    if (active && !current.collection?.active) {
+      throw new HttpError(400, "ACTIVE_COLLECTION_REQUIRED", "Choose an active collection before enabling this block");
+    }
+    await validateActiveBlockLimit(active, current.active);
+    return prisma.homeCollectionBlock.update({
+      where: { id },
+      data: { active },
+      include: includeBlockCollection,
+    });
+  }
+
+  static async reorder(input: HomeHeroOrder) {
+    const blocks = await prisma.homeCollectionBlock.findMany({ select: { id: true }, orderBy: blockOrderBy });
+    const currentIds = new Set(blocks.map((block) => block.id));
+    if (
+      input.ids.length !== blocks.length
+      || new Set(input.ids).size !== input.ids.length
+      || input.ids.some((id) => !currentIds.has(id))
+    ) {
+      throw new HttpError(400, "INVALID_COLLECTION_BLOCK_ORDER", "Order must contain every block exactly once");
+    }
+    await prisma.$transaction(input.ids.map((id, position) => prisma.homeCollectionBlock.update({
+      where: { id },
+      data: { position },
+    })));
+    return HomeCollectionBlockService.listAdmin();
+  }
+
+  static async remove(id: string) {
+    const block = await prisma.homeCollectionBlock.findUnique({ where: { id } });
+    if (!block) notFound("Collection block not found");
+    await prisma.homeCollectionBlock.delete({ where: { id } });
+    const remaining = await prisma.homeCollectionBlock.findMany({ select: { id: true }, orderBy: blockOrderBy });
+    await prisma.$transaction(remaining.map((item, position) => prisma.homeCollectionBlock.update({
+      where: { id: item.id },
+      data: { position },
+    })));
+    await Promise.all([
+      MediaService.deleteManagedImage(block.leadImageUrl),
+      MediaService.deleteManagedImage(block.sideImageOneUrl),
+      MediaService.deleteManagedImage(block.sideImageTwoUrl),
     ]);
   }
 }

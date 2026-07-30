@@ -78,17 +78,17 @@ enum OrderAuditOutcome {
 }
 
 model Admin {
-  id           String         @id @default(uuid()) @db.Uuid
-  email        String         @unique
-  displayName  String
-  passwordSalt String
-  passwordHash String
-  active       Boolean        @default(true)
+  id                       String            @id @default(uuid()) @db.Uuid
+  email                    String            @unique
+  displayName              String
+  passwordSalt             String
+  passwordHash             String
+  active                   Boolean           @default(true)
   sessions                 AdminSession[]
   orderAuditEvents         OrderAuditEvent[]
-  externallyRefundedOrders Order[]          @relation("ExternalRefundActor")
-  createdAt    DateTime       @default(now())
-  updatedAt    DateTime       @updatedAt
+  externallyRefundedOrders Order[]           @relation("ExternalRefundActor")
+  createdAt                DateTime          @default(now())
+  updatedAt                DateTime          @updatedAt
 }
 
 model AdminSession {
@@ -193,26 +193,27 @@ model ProductDriver {
 }
 
 model Collection {
-  id          String              @id @default(uuid()) @db.Uuid
-  name        String
-  slug        String              @unique
-  kind        CollectionKind
-  teamId      String?             @db.Uuid
-  team        Team?               @relation(fields: [teamId], references: [id], onDelete: Restrict)
-  driverId    String?             @db.Uuid
-  driver      Driver?             @relation(fields: [driverId], references: [id], onDelete: Restrict)
-  parentId    String?             @db.Uuid
-  parent      Collection?         @relation("CollectionTree", fields: [parentId], references: [id], onDelete: Restrict)
-  children    Collection[]        @relation("CollectionTree")
-  imageUrl    String?
-  description String              @default("")
-  descriptionId String?
-  position    Int                 @default(0)
-  active      Boolean             @default(true)
-  products    ProductCollection[]
-  homeHeroes HomeHero[]
-  createdAt   DateTime            @default(now())
-  updatedAt   DateTime            @updatedAt
+  id                  String               @id @default(uuid()) @db.Uuid
+  name                String
+  slug                String               @unique
+  kind                CollectionKind
+  teamId              String?              @db.Uuid
+  team                Team?                @relation(fields: [teamId], references: [id], onDelete: Restrict)
+  driverId            String?              @db.Uuid
+  driver              Driver?              @relation(fields: [driverId], references: [id], onDelete: Restrict)
+  parentId            String?              @db.Uuid
+  parent              Collection?          @relation("CollectionTree", fields: [parentId], references: [id], onDelete: Restrict)
+  children            Collection[]         @relation("CollectionTree")
+  imageUrl            String?
+  description         String               @default("")
+  descriptionId       String?
+  position            Int                  @default(0)
+  active              Boolean              @default(true)
+  products            ProductCollection[]
+  homeHeroes          HomeHero[]
+  homeCollectionBlock HomeCollectionBlock?
+  createdAt           DateTime             @default(now())
+  updatedAt           DateTime             @updatedAt
 
   @@index([parentId, position])
   @@index([kind, active])
@@ -221,27 +222,42 @@ model Collection {
 }
 
 model HomeHero {
-  id                 String     @id @default(uuid()) @db.Uuid
-  eyebrow            String
-  eyebrowId          String?
-  title              String
-  titleId            String?
-  outlinedTitle      String
-  outlinedTitleId    String?
-  body               String
-  bodyId              String?
-  ctaLabel           String
-  ctaLabelId         String?
-  desktopImageUrl    String
-  mobileImageUrl     String
-  collectionId       String?    @db.Uuid
-  collection         Collection? @relation(fields: [collectionId], references: [id], onDelete: SetNull)
-  position           Int        @default(0)
-  active             Boolean    @default(false)
-  createdAt          DateTime   @default(now())
-  updatedAt          DateTime   @updatedAt
+  id              String      @id @default(uuid()) @db.Uuid
+  eyebrow         String
+  eyebrowId       String?
+  title           String
+  titleId         String?
+  outlinedTitle   String
+  outlinedTitleId String?
+  body            String
+  bodyId          String?
+  ctaLabel        String
+  ctaLabelId      String?
+  desktopImageUrl String
+  mobileImageUrl  String
+  collectionId    String?     @db.Uuid
+  collection      Collection? @relation(fields: [collectionId], references: [id], onDelete: SetNull)
+  position        Int         @default(0)
+  active          Boolean     @default(false)
+  createdAt       DateTime    @default(now())
+  updatedAt       DateTime    @updatedAt
 
   @@index([collectionId])
+  @@index([active, position])
+}
+
+model HomeCollectionBlock {
+  id              String      @id @default(uuid()) @db.Uuid
+  leadImageUrl    String
+  sideImageOneUrl String
+  sideImageTwoUrl String
+  collectionId    String?     @unique @db.Uuid
+  collection      Collection? @relation(fields: [collectionId], references: [id], onDelete: SetNull)
+  position        Int         @default(0)
+  active          Boolean     @default(false)
+  createdAt       DateTime    @default(now())
+  updatedAt       DateTime    @updatedAt
+
   @@index([active, position])
 }
 
@@ -317,56 +333,56 @@ model Faq {
 }
 
 model Order {
-  id                                String                 @id @default(uuid()) @db.Uuid
-  orderNumber                       String                 @unique
-  idempotencyKey                    String                 @unique @db.Uuid
-  email                             String
-  firstName                         String
-  lastName                          String
-  phone                             String
-  address                           String
-  city                              String
-  province                          String
-  postalCode                        String
-  subtotalIdr                       Int
-  discountIdr                       Int                    @default(0)
-  shippingIdr                       Int
-  totalIdr                          Int
-  promoCodeId                       String?                @db.Uuid
-  promoCode                         PromoCode?             @relation(fields: [promoCodeId], references: [id], onDelete: Restrict)
-  promoRedeemedAt                   DateTime?
-  courierCode                       String
-  courierName                       String
-  courierServiceCode                String
-  courierServiceName                String
-  courierDuration                   String
-  paymentStatus                     PaymentStatus          @default(PENDING)
-  midtransStatus                    String                 @default("pending")
-  midtransTransactionId             String?
-  midtransPaymentType               String?
-  midtransSnapToken                 String?
-  paymentConfirmationEmailSendingAt DateTime?
-  paymentConfirmationEmailSentAt    DateTime?
+  id                                 String                 @id @default(uuid()) @db.Uuid
+  orderNumber                        String                 @unique
+  idempotencyKey                     String                 @unique @db.Uuid
+  email                              String
+  firstName                          String
+  lastName                           String
+  phone                              String
+  address                            String
+  city                               String
+  province                           String
+  postalCode                         String
+  subtotalIdr                        Int
+  discountIdr                        Int                    @default(0)
+  shippingIdr                        Int
+  totalIdr                           Int
+  promoCodeId                        String?                @db.Uuid
+  promoCode                          PromoCode?             @relation(fields: [promoCodeId], references: [id], onDelete: Restrict)
+  promoRedeemedAt                    DateTime?
+  courierCode                        String
+  courierName                        String
+  courierServiceCode                 String
+  courierServiceName                 String
+  courierDuration                    String
+  paymentStatus                      PaymentStatus          @default(PENDING)
+  midtransStatus                     String                 @default("pending")
+  midtransTransactionId              String?
+  midtransPaymentType                String?
+  midtransSnapToken                  String?
+  paymentConfirmationEmailSendingAt  DateTime?
+  paymentConfirmationEmailSentAt     DateTime?
   shipmentConfirmationEmailSendingAt DateTime?
   shipmentConfirmationEmailSentAt    DateTime?
-  stockReleasedAt                   DateTime?
-  shipmentBookingStatus             ShipmentBookingStatus  @default(UNFULFILLED)
-  shipmentBookingStartedAt          DateTime?
-  lifecycleStatus                   OrderLifecycleStatus   @default(UNFULFILLED)
-  cancelledAt                       DateTime?
-  externalRefundedAt                DateTime?
-  externalRefundedByAdminId         String?                @db.Uuid
-  externalRefundedByAdmin           Admin?                  @relation("ExternalRefundActor", fields: [externalRefundedByAdminId], references: [id], onDelete: SetNull)
-  biteshipOrderId                   String?                @unique
-  biteshipTrackingId                String?
-  biteshipWaybillId                 String?
-  biteshipPriceIdr                  Int?
-  biteshipStatus                    String?
-  items                             OrderItem[]
-  paymentEvents                     MidtransPaymentEvent[]
-  auditEvents                       OrderAuditEvent[]
-  createdAt                         DateTime               @default(now())
-  updatedAt                         DateTime               @updatedAt
+  stockReleasedAt                    DateTime?
+  shipmentBookingStatus              ShipmentBookingStatus  @default(UNFULFILLED)
+  shipmentBookingStartedAt           DateTime?
+  lifecycleStatus                    OrderLifecycleStatus   @default(UNFULFILLED)
+  cancelledAt                        DateTime?
+  externalRefundedAt                 DateTime?
+  externalRefundedByAdminId          String?                @db.Uuid
+  externalRefundedByAdmin            Admin?                 @relation("ExternalRefundActor", fields: [externalRefundedByAdminId], references: [id], onDelete: SetNull)
+  biteshipOrderId                    String?                @unique
+  biteshipTrackingId                 String?
+  biteshipWaybillId                  String?
+  biteshipPriceIdr                   Int?
+  biteshipStatus                     String?
+  items                              OrderItem[]
+  paymentEvents                      MidtransPaymentEvent[]
+  auditEvents                        OrderAuditEvent[]
+  createdAt                          DateTime               @default(now())
+  updatedAt                          DateTime               @updatedAt
 
   @@index([paymentStatus, createdAt])
   @@index([shipmentBookingStatus, createdAt])

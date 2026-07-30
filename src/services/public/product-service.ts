@@ -26,7 +26,7 @@ function namedFacet(map: Map<string, { value: NamedFacetValue; count: number }>)
 }
 
 export class PublicProductService {
-  private static publicProduct(product: ProductWithRelations, locale: Locale) {
+  static publicProduct(product: ProductWithRelations, locale: Locale) {
     const {
       drivers,
       collections,

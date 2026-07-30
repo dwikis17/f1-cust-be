@@ -12,7 +12,7 @@ import { FaqController } from "./controllers/faq-controller.js";
 import { HomeController } from "./controllers/home-controller.js";
 
 const router = Router();
-const upload = multer({ storage: multer.memoryStorage(), limits: { fileSize: config.maxUploadBytes, files: 2 } });
+const upload = multer({ storage: multer.memoryStorage(), limits: { fileSize: config.maxUploadBytes, files: 3 } });
 
 router.post("/auth/login", AuthController.login);
 router.use(AuthController.requireAdmin);
@@ -41,6 +41,28 @@ router.patch("/faqs/:id", FaqController.update);
 router.delete("/faqs/:id", FaqController.remove);
 
 router.get("/home", HomeController.listAdmin);
+router.get("/home/collection-blocks", HomeController.listAdminCollectionBlocks);
+router.post(
+  "/home/collection-blocks",
+  upload.fields([
+    { name: "leadImage", maxCount: 1 },
+    { name: "sideImageOne", maxCount: 1 },
+    { name: "sideImageTwo", maxCount: 1 },
+  ]),
+  HomeController.createCollectionBlock,
+);
+router.put("/home/collection-blocks/order", HomeController.reorderCollectionBlocks);
+router.put(
+  "/home/collection-blocks/:id",
+  upload.fields([
+    { name: "leadImage", maxCount: 1 },
+    { name: "sideImageOne", maxCount: 1 },
+    { name: "sideImageTwo", maxCount: 1 },
+  ]),
+  HomeController.updateCollectionBlock,
+);
+router.patch("/home/collection-blocks/:id", HomeController.setCollectionBlockActive);
+router.delete("/home/collection-blocks/:id", HomeController.removeCollectionBlock);
 router.post(
   "/home",
   upload.fields([

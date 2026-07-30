@@ -33,6 +33,7 @@ before(async () => {
   await prisma.promoCode.deleteMany();
   await prisma.faq.deleteMany();
   await prisma.homeHero.deleteMany();
+  await prisma.homeCollectionBlock.deleteMany();
   await prisma.productPhoto.deleteMany();
   await prisma.productVariant.deleteMany();
   await prisma.productTag.deleteMany();
@@ -1112,6 +1113,121 @@ test("active products are filterable with exact variant stock", async () => {
       ...invalidVariant,
       sizingGuide: { unit: "cm", measurements: { length: 74, chestWidth: 55, waistWidth: 0 } },
     }).expect(400);
+});
+
+test("home collection blocks support ordered CRUD, ranked products, limits, localization, and image cleanup", async () => {
+  const endpoint = "/api/admin/home/collection-blocks";
+  const pngHeader = Buffer.from([0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a]);
+  const create = (collectionId: string, active = false) => request(app).post(endpoint)
+    .set("authorization", `Bearer ${token}`)
+    .field({ collectionId, active: String(active) })
+    .attach("leadImage", pngHeader, "lead.png")
+    .attach("sideImageOne", pngHeader, "side-one.png")
+    .attach("sideImageTwo", pngHeader, "side-two.png");
+  const extraCollections = await Promise.all(Array.from({ length: 4 }, (_, index) => prisma.collection.create({
+    data: {
+      name: `Home Block ${index + 1}`,
+      slug: `home-block-${index + 1}`,
+      kind: "MANUAL",
+      description: `Home block ${index + 1}.`,
+    },
+  })));
+  const extraProducts = await Promise.all(Array.from({ length: 5 }, (_, index) => prisma.product.create({
+    data: {
+      name: `Home Block Product ${index + 1}`,
+      slug: `home-block-product-${index + 1}`,
+      description: `Home block product ${index + 1}.`,
+      priceIdr: 100_000 + index,
+      status: "ACTIVE",
+      condition: "BNIB",
+      categoryId,
+      audience: "UNISEX",
+    },
+  })));
+
+  try {
+    await request(app).get(endpoint).expect(401);
+    await request(app).post(endpoint).set("authorization", `Bearer ${token}`)
+      .field({ collectionId: ferrariCollectionId, active: "true" }).expect(400);
+    await request(app).post(endpoint).set("authorization", `Bearer ${token}`)
+      .field({ collectionId: ferrariCollectionId, active: "true" })
+      .attach("leadImage", Buffer.from("invalid"), "lead.png")
+      .attach("sideImageOne", pngHeader, "side-one.png")
+      .attach("sideImageTwo", pngHeader, "side-two.png")
+      .expect(400);
+
+    await request(app).put(`/api/admin/collections/${ferrariCollectionId}/products`)
+      .set("authorization", `Bearer ${token}`)
+      .send({
+        productIds: [productId, ...extraProducts.map(({ id }) => id)],
+        featuredProductIds: [extraProducts[4].id],
+      }).expect(200);
+
+    const first = await create(ferrariCollectionId, true).expect(201);
+    assert.equal(first.body.position, 0);
+    assert.equal(first.body.active, true);
+    const imagePaths = [
+      first.body.leadImageUrl,
+      first.body.sideImageOneUrl,
+      first.body.sideImageTwoUrl,
+    ].map((url: string) => path.join(config.uploadDir, url.replace("/uploads/", "")));
+    await Promise.all(imagePaths.map((file) => access(file)));
+
+    await create(ferrariCollectionId).expect(409);
+    const second = await create(extraCollections[0].id, true).expect(201);
+    const third = await create(extraCollections[1].id, true).expect(201);
+    await create(extraCollections[2].id, true).expect(409);
+    const fourth = await create(extraCollections[3].id).expect(201);
+
+    const english = await request(app).get("/api/home/collection-blocks?locale=en").expect(200);
+    assert.equal(english.body.length, 1);
+    assert.equal(english.body[0].collection.description, "Shop the Ferrari collection.");
+    assert.equal(english.body[0].products.length, 5);
+    assert.equal(english.body[0].products[0].id, extraProducts[4].id);
+    assert.equal(english.body[0].products.some((product: { id: string }) => product.id === extraProducts[3].id), false);
+    const indonesian = await request(app).get("/api/home/collection-blocks?locale=id").expect(200);
+    assert.equal(indonesian.body[0].collection.description, "Jelajahi koleksi Ferrari.");
+    assert.equal(indonesian.body[0].products.find((product: { id: string }) => product.id === productId).name, "Jersey Tim Ferrari");
+    await request(app).get("/api/home/collection-blocks?locale=fr").expect(400);
+
+    const oldSidePath = imagePaths[1];
+    const replaced = await request(app).put(`${endpoint}/${first.body.id}`)
+      .set("authorization", `Bearer ${token}`)
+      .field({ collectionId: ferrariCollectionId, active: "true" })
+      .attach("sideImageOne", pngHeader, "side-one-new.png")
+      .expect(200);
+    assert.equal(replaced.body.leadImageUrl, first.body.leadImageUrl);
+    assert.notEqual(replaced.body.sideImageOneUrl, first.body.sideImageOneUrl);
+    await assert.rejects(access(oldSidePath));
+    const replacementSidePath = path.join(config.uploadDir, replaced.body.sideImageOneUrl.replace("/uploads/", ""));
+    await access(replacementSidePath);
+
+    const reordered = await request(app).put(`${endpoint}/order`).set("authorization", `Bearer ${token}`)
+      .send({ ids: [fourth.body.id, third.body.id, second.body.id, first.body.id] }).expect(200);
+    assert.deepEqual(
+      reordered.body.map((block: { id: string; position: number }) => [block.id, block.position]),
+      [[fourth.body.id, 0], [third.body.id, 1], [second.body.id, 2], [first.body.id, 3]],
+    );
+
+    await prisma.collection.update({ where: { id: ferrariCollectionId }, data: { active: false } });
+    await request(app).get("/api/home/collection-blocks").expect(200, []);
+    await prisma.collection.update({ where: { id: ferrariCollectionId }, data: { active: true } });
+
+    for (const block of [fourth.body, third.body, second.body]) {
+      await request(app).delete(`${endpoint}/${block.id}`).set("authorization", `Bearer ${token}`).expect(204);
+    }
+    await request(app).delete(`${endpoint}/${first.body.id}`).set("authorization", `Bearer ${token}`).expect(204);
+    await Promise.all([access(imagePaths[0]), access(imagePaths[2]), access(replacementSidePath)]
+      .map((result) => assert.rejects(result)));
+    await request(app).get("/api/home/collection-blocks").expect(200, []);
+  } finally {
+    await prisma.homeCollectionBlock.deleteMany();
+    await prisma.product.deleteMany({ where: { id: { in: extraProducts.map(({ id }) => id) } } });
+    await prisma.collection.deleteMany({ where: { id: { in: extraCollections.map(({ id }) => id) } } });
+    await request(app).put(`/api/admin/collections/${ferrariCollectionId}/products`)
+      .set("authorization", `Bearer ${token}`)
+      .send({ productIds: [productId], featuredProductIds: [productId] });
+  }
 });
 
 test("product conditions update, filter with OR semantics, and expose stable facets", async () => {

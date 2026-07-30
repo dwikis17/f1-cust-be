@@ -101,6 +101,10 @@ export const homeHeroSchema = z.object({
 }).strict();
 export const homeHeroStatusSchema = z.object({ active: z.boolean() }).strict();
 export const homeHeroOrderSchema = z.object({ ids: z.array(idSchema).max(1_000) }).strict();
+export const homeCollectionBlockSchema = z.object({
+  collectionId: idSchema,
+  active: formBooleanSchema.default(false),
+}).strict();
 
 export const sizingGuideSchema = z.object({
   unit: z.enum(["cm", "in"]),

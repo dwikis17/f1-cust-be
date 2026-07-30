@@ -34,6 +34,11 @@ export class MediaRepository {
       prisma.collection.count({ where: { imageUrl: value } }),
       prisma.productPhoto.count({ where: { path: value } }),
       prisma.homeHero.count({ where: { OR: [{ desktopImageUrl: value }, { mobileImageUrl: value }] } }),
+      prisma.homeCollectionBlock.count({
+        where: {
+          OR: [{ leadImageUrl: value }, { sideImageOneUrl: value }, { sideImageTwoUrl: value }],
+        },
+      }),
     ]);
     return counts.reduce((total, count) => total + count, 0);
   }
