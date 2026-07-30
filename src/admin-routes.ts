@@ -9,9 +9,10 @@ import { OrderController } from "./controllers/admin/order-controller.js";
 import { ProductController } from "./controllers/admin/product-controller.js";
 import { PromoCodeController } from "./controllers/promo-code-controller.js";
 import { FaqController } from "./controllers/faq-controller.js";
+import { HomeController } from "./controllers/home-controller.js";
 
 const router = Router();
-const upload = multer({ storage: multer.memoryStorage(), limits: { fileSize: config.maxUploadBytes, files: 1 } });
+const upload = multer({ storage: multer.memoryStorage(), limits: { fileSize: config.maxUploadBytes, files: 2 } });
 
 router.post("/auth/login", AuthController.login);
 router.use(AuthController.requireAdmin);
@@ -38,6 +39,16 @@ router.get("/faqs", FaqController.list);
 router.post("/faqs", FaqController.create);
 router.patch("/faqs/:id", FaqController.update);
 router.delete("/faqs/:id", FaqController.remove);
+
+router.get("/home", HomeController.getAdmin);
+router.put(
+  "/home",
+  upload.fields([
+    { name: "desktopImage", maxCount: 1 },
+    { name: "mobileImage", maxCount: 1 },
+  ]),
+  HomeController.save,
+);
 
 router.get("/promo-codes", PromoCodeController.list);
 router.post("/promo-codes", PromoCodeController.create);

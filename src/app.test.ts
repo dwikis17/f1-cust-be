@@ -32,6 +32,7 @@ before(async () => {
   await prisma.order.deleteMany();
   await prisma.promoCode.deleteMany();
   await prisma.faq.deleteMany();
+  await prisma.homeHero.deleteMany();
   await prisma.productPhoto.deleteMany();
   await prisma.productVariant.deleteMany();
   await prisma.productTag.deleteMany();
@@ -881,6 +882,72 @@ test("collection image uploads validate, replace, publish, and clean up files", 
   await assert.rejects(access(firstPath));
   await request(app).patch(`/api/admin/teams/${teamId}`).set("authorization", `Bearer ${token}`)
     .send({ logoUrl: "https://example.com/ferrari.webp" }).expect(200);
+});
+
+test("home hero is managed once, localized publicly, and safely replaces images", async () => {
+  const endpoint = "/api/admin/home";
+  const pngHeader = Buffer.from([0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a]);
+  const fields = {
+    eyebrow: "Valyde / Race week",
+    eyebrowId: "Valyde / Pekan balap",
+    title: "Built for",
+    titleId: "Dibuat untuk",
+    outlinedTitle: "Race day",
+    body: "A focused edit for the next lights out.",
+    bodyId: "Pilihan khusus menjelang balapan berikutnya.",
+    ctaLabel: "Shop Ferrari",
+    ctaLabelId: "Belanja Ferrari",
+    collectionId: ferrariCollectionId,
+  };
+
+  await request(app).get(endpoint).expect(401);
+  await request(app).get("/api/home").expect(200, null);
+  await request(app).put(endpoint).set("authorization", `Bearer ${token}`).field(fields).expect(400);
+  await request(app).put(endpoint).set("authorization", `Bearer ${token}`)
+    .field({ ...fields, collectionId: randomUUID() })
+    .attach("desktopImage", pngHeader, "desktop.png")
+    .attach("mobileImage", pngHeader, "mobile.png")
+    .expect(400);
+  await request(app).put(endpoint).set("authorization", `Bearer ${token}`)
+    .field(fields)
+    .attach("desktopImage", Buffer.from("not-image"), "desktop.png")
+    .attach("mobileImage", pngHeader, "mobile.png")
+    .expect(400);
+
+  const created = await request(app).put(endpoint).set("authorization", `Bearer ${token}`)
+    .field(fields)
+    .attach("desktopImage", pngHeader, "desktop.png")
+    .attach("mobileImage", pngHeader, "mobile.png")
+    .expect(200);
+  assert.equal(created.body.id, "home");
+  assert.equal(created.body.collection.id, ferrariCollectionId);
+  const desktopPath = path.join(config.uploadDir, created.body.desktopImageUrl.replace("/uploads/", ""));
+  const mobilePath = path.join(config.uploadDir, created.body.mobileImageUrl.replace("/uploads/", ""));
+  await Promise.all([access(desktopPath), access(mobilePath)]);
+
+  const english = await request(app).get("/api/home?locale=en").expect(200);
+  assert.equal(english.body.title, "Built for");
+  assert.equal(english.body.outlinedTitle, "Race day");
+  assert.deepEqual(english.body.collection, { name: "Ferrari", slug: "ferrari" });
+  const indonesian = await request(app).get("/api/home?locale=id").expect(200);
+  assert.equal(indonesian.body.title, "Dibuat untuk");
+  assert.equal(indonesian.body.outlinedTitle, "Race day");
+  await request(app).get("/api/home?locale=fr").expect(400);
+
+  const replaced = await request(app).put(endpoint).set("authorization", `Bearer ${token}`)
+    .field({ ...fields, body: "Updated campaign copy." })
+    .attach("desktopImage", pngHeader, "desktop-new.png")
+    .expect(200);
+  assert.equal(replaced.body.mobileImageUrl, created.body.mobileImageUrl);
+  assert.notEqual(replaced.body.desktopImageUrl, created.body.desktopImageUrl);
+  await assert.rejects(access(desktopPath));
+  await access(mobilePath);
+
+  await request(app).patch(`/api/admin/collections/${ferrariCollectionId}`)
+    .set("authorization", `Bearer ${token}`).send({ active: false }).expect(200);
+  await request(app).get("/api/home").expect(200, null);
+  await request(app).patch(`/api/admin/collections/${ferrariCollectionId}`)
+    .set("authorization", `Bearer ${token}`).send({ active: true }).expect(200);
 });
 
 test("admin can update and delete unreferenced teams and drivers", async () => {

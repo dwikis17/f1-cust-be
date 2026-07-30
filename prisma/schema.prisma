@@ -210,6 +210,7 @@ model Collection {
   position    Int                 @default(0)
   active      Boolean             @default(true)
   products    ProductCollection[]
+  homeHeroes HomeHero[]
   createdAt   DateTime            @default(now())
   updatedAt   DateTime            @updatedAt
 
@@ -217,6 +218,28 @@ model Collection {
   @@index([kind, active])
   @@index([teamId])
   @@index([driverId])
+}
+
+model HomeHero {
+  id                 String     @id @default("home")
+  eyebrow            String
+  eyebrowId          String?
+  title              String
+  titleId            String?
+  outlinedTitle      String
+  outlinedTitleId    String?
+  body               String
+  bodyId              String?
+  ctaLabel           String
+  ctaLabelId         String?
+  desktopImageUrl    String
+  mobileImageUrl     String
+  collectionId       String?    @db.Uuid
+  collection         Collection? @relation(fields: [collectionId], references: [id], onDelete: SetNull)
+  createdAt          DateTime   @default(now())
+  updatedAt          DateTime   @updatedAt
+
+  @@index([collectionId])
 }
 
 model ProductCollection {

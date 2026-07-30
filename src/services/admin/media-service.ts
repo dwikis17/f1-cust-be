@@ -25,7 +25,7 @@ export class MediaService {
     };
   }
 
-  private static async deleteManagedImage(url?: string | null) {
+  static async deleteManagedImage(url?: string | null) {
     if (!url) return;
     const key = MediaRepository.storedPhotoKey(url);
     if (!key) return;

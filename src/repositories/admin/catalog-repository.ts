@@ -116,6 +116,7 @@ export class CatalogRepository {
       prisma.driver.count({ where: { photoUrl: value } }),
       prisma.collection.count({ where: { imageUrl: value } }),
       prisma.productPhoto.count({ where: { path: value } }),
+      prisma.homeHero.count({ where: { OR: [{ desktopImageUrl: value }, { mobileImageUrl: value }] } }),
     ]);
     return counts.reduce((total, count) => total + count, 0);
   }

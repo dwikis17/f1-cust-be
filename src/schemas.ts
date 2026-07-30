@@ -79,6 +79,22 @@ export const collectionMembershipSchema = z.object({
   }
 });
 
+const nullableHomeText = (max: number) =>
+  z.preprocess((value) => value === "" ? null : value, z.string().trim().min(1).max(max).nullable().optional());
+export const homeHeroSchema = z.object({
+  eyebrow: z.string().trim().min(1).max(80),
+  eyebrowId: nullableHomeText(80),
+  title: z.string().trim().min(1).max(100),
+  titleId: nullableHomeText(100),
+  outlinedTitle: z.string().trim().min(1).max(100),
+  outlinedTitleId: nullableHomeText(100),
+  body: z.string().trim().min(1).max(500),
+  bodyId: nullableHomeText(500),
+  ctaLabel: z.string().trim().min(1).max(60),
+  ctaLabelId: nullableHomeText(60),
+  collectionId: idSchema,
+}).strict();
+
 export const sizingGuideSchema = z.object({
   unit: z.enum(["cm", "in"]),
   measurements: z.object({
