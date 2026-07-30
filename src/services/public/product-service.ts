@@ -49,7 +49,7 @@ export class PublicProductService {
       productType: category,
       drivers: drivers.map(({ driver }) => driver),
       collections: collections.map(({ collection }) => publicCollection(collection, locale)),
-      variants: variants.map(({ stockQuantity, ...variant }) => ({ ...variant, available: stockQuantity > 0 })),
+      variants: variants.map((variant) => ({ ...variant, available: variant.stockQuantity > 0 })),
       photos: photos.map((photo) => ({ ...photo, url: PublicProductRepository.storedPhotoUrl(photo.path) })),
     };
   }
@@ -174,6 +174,7 @@ export class PublicProductService {
           sku: value.sku,
           size: value.size,
           color: value.color,
+          stockQuantity: value.stockQuantity,
           available: value.stockQuantity > 0,
         },
       }];

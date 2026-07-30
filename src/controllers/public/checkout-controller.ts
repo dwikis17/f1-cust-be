@@ -45,7 +45,9 @@ export class PublicCheckoutController {
     response.set("cache-control", "no-store");
     const { turnstileToken, ...input } = parse(checkoutSchema, request.body);
     await verifyCheckoutHuman(turnstileToken, request.get("cf-connecting-ip"));
-    response.status(201).json(await PublicCheckoutService.create(input));
+    const checkout = await PublicCheckoutService.create(input);
+    revalidateStorefront(["catalog:products"]);
+    response.status(201).json(checkout);
   }
 
   static async find(request: Request, response: Response) {

@@ -61,9 +61,22 @@ const biteshipTrackingSchema = z.object({
   link: z.string().url().nullish(),
   status: z.string(),
 }).passthrough();
+const midtransStatusSchema = z.object({
+  order_id: z.string().uuid(),
+  status_code: z.string().min(1).max(10),
+  gross_amount: z.string().regex(/^\d+(?:\.\d{1,2})?$/),
+  signature_key: z.string().min(1).max(256),
+  merchant_id: z.string().min(1).max(100),
+  transaction_status: z.string().min(1).max(40),
+  fraud_status: z.string().max(40).optional(),
+  transaction_id: z.string().max(100).optional(),
+  payment_type: z.string().max(80).optional(),
+}).passthrough();
 
 type OrderWithItems = Prisma.OrderGetPayload<{ include: { items: true } }>;
 type VariantSnapshot = Pick<OrderWithItems["items"][number], "productName" | "sku" | "color" | "size">;
+const RECONCILIATION_STALE_MS = 15 * 60 * 1_000;
+const RECONCILIATION_BATCH_SIZE = 50;
 
 function prismaCode(error: unknown) {
   return error && typeof error === "object" && "code" in error && typeof error.code === "string" ? error.code : undefined;
@@ -344,6 +357,16 @@ function secureEqual(left: string, right: string) {
   return timingSafeEqual(leftHash, rightHash);
 }
 
+function verifyMidtrans(input: MidtransNotification) {
+  const payment = requirePaymentConfig();
+  const signature = createHash("sha512")
+    .update(`${input.order_id}${input.status_code}${input.gross_amount}${payment.serverKey}`)
+    .digest("hex");
+  if (!secureEqual(input.signature_key, signature) || !secureEqual(input.merchant_id, payment.merchantId)) {
+    throw new HttpError(401, "INVALID_NOTIFICATION", "Payment notification could not be verified");
+  }
+}
+
 export class PublicCheckoutService {
   static async create(input: CheckoutInput) {
     requirePaymentConfig();
@@ -555,13 +578,7 @@ export class PublicCheckoutService {
   }
 
   static async notification(input: MidtransNotification) {
-    const payment = requirePaymentConfig();
-    const signature = createHash("sha512")
-      .update(`${input.order_id}${input.status_code}${input.gross_amount}${payment.serverKey}`)
-      .digest("hex");
-    if (!secureEqual(input.signature_key, signature) || !secureEqual(input.merchant_id, payment.merchantId)) {
-      throw new HttpError(401, "INVALID_NOTIFICATION", "Payment notification could not be verified");
-    }
+    verifyMidtrans(input);
 
     const order = await prisma.order.findUnique({ where: { id: input.order_id }, select: { totalIdr: true } });
     if (!order) notFound("Order not found");
@@ -593,8 +610,8 @@ export class PublicCheckoutService {
       midtransTransactionId: input.transaction_id,
       midtransPaymentType: input.payment_type,
     };
-    const paid = (input.transaction_status === "capture" || input.transaction_status === "settlement")
-      && input.fraud_status === "accept";
+    const paid = input.transaction_status === "settlement"
+      || (input.transaction_status === "capture" && input.fraud_status === "accept");
     const terminal = input.transaction_status === "deny" || input.transaction_status === "failure"
       ? "FAILED"
       : input.transaction_status === "expire" ? "EXPIRED"
@@ -761,5 +778,80 @@ export class PublicCheckoutService {
       });
     }
     return { received: true };
+  }
+
+  static async reconcilePendingPayments(now = new Date()) {
+    const payment = requirePaymentConfig();
+    const staleBefore = new Date(now.getTime() - RECONCILIATION_STALE_MS);
+    const orders = await prisma.order.findMany({
+      where: {
+        paymentStatus: "PENDING",
+        midtransSnapToken: { not: null },
+        createdAt: { lte: staleBefore },
+        updatedAt: { lte: staleBefore },
+      },
+      select: { id: true, totalIdr: true },
+      orderBy: [{ updatedAt: "asc" }, { id: "asc" }],
+      take: RECONCILIATION_BATCH_SIZE,
+    });
+    const baseUrl = config.midtransEnv === "production" ? "https://api.midtrans.com" : "https://api.sandbox.midtrans.com";
+    let reconciled = 0;
+    let failed = 0;
+    let catalogChanged = false;
+
+    for (const order of orders) {
+      try {
+        const response = await fetch(`${baseUrl}/v2/${encodeURIComponent(order.id)}/status`, {
+          headers: {
+            accept: "application/json",
+            authorization: `Basic ${Buffer.from(`${payment.serverKey}:`).toString("base64")}`,
+          },
+          signal: AbortSignal.timeout(8_000),
+        });
+        const body: unknown = await response.json().catch(() => undefined);
+        const parsed = midtransStatusSchema.safeParse(body);
+        if (!response.ok || !parsed.success) throw new Error("Midtrans status lookup failed");
+
+        const input: MidtransNotification = {
+          ...parsed.data,
+          transaction_status: parsed.data.transaction_status.toLowerCase(),
+          fraud_status: parsed.data.fraud_status?.toLowerCase(),
+        };
+        if (input.order_id !== order.id) throw new Error("Midtrans returned a different order");
+        verifyMidtrans(input);
+        const amount = Number(input.gross_amount);
+        if (!Number.isInteger(amount) || amount !== order.totalIdr) throw new Error("Payment amount does not match the order");
+
+        const isPaid = input.transaction_status === "settlement"
+          || (input.transaction_status === "capture" && input.fraud_status === "accept");
+        const isTerminal = ["deny", "failure", "expire", "cancel"].includes(input.transaction_status);
+        if (isPaid || isTerminal) {
+          await PublicCheckoutService.notification(input);
+          catalogChanged = true;
+        } else {
+          await prisma.order.updateMany({
+            where: { id: order.id, paymentStatus: "PENDING" },
+            data: {
+              midtransStatus: input.transaction_status,
+              midtransTransactionId: input.transaction_id,
+              midtransPaymentType: input.payment_type,
+            },
+          });
+        }
+        reconciled += 1;
+      } catch (error) {
+        failed += 1;
+        await prisma.orderAuditEvent.create({
+          data: {
+            orderId: order.id,
+            action: "PAYMENT_RECONCILIATION_FAILED",
+            outcome: "FAILED",
+            details: { message: error instanceof Error ? error.message : "Unknown reconciliation error" },
+          },
+        });
+      }
+    }
+
+    return { checked: orders.length, reconciled, failed, catalogChanged };
   }
 }

@@ -10,6 +10,7 @@ import { config } from "./config.js";
 import { prisma } from "./db-node.js";
 import { setDefaultEmailSender } from "./email-service.js";
 import { storePhoto } from "./photo-storage.js";
+import { PublicCheckoutService } from "./services/public/checkout-service.js";
 
 const app = createApp();
 import { hashPassword, hashToken } from "./security.js";
@@ -931,7 +932,7 @@ test("public team and driver references support catalog filters", async () => {
   assert.equal(mercedesDrivers.body.length, 0);
 });
 
-test("active products are filterable without exposing exact stock", async () => {
+test("active products are filterable with exact variant stock", async () => {
   await request(app).patch(`/api/admin/products/${productId}`).set("authorization", `Bearer ${token}`)
     .send({ status: "ACTIVE", sizingNote: "  Allow a 1 cm tolerance.  " }).expect(200);
   const response = await request(app)
@@ -948,7 +949,7 @@ test("active products are filterable without exposing exact stock", async () => 
   );
   assert.equal(response.body.data[0].audience, "UNISEX");
   assert.equal(response.body.data[0].variants[0].available, true);
-  assert.equal(response.body.data[0].variants[0].stockQuantity, undefined);
+  assert.equal(response.body.data[0].variants[0].stockQuantity, 8);
   assert.equal(response.body.data[0].name, "Ferrari Team Jersey");
   assert.equal(response.body.data[0].nameId, undefined);
   assert.equal(response.body.data[0].descriptionId, undefined);
@@ -1146,6 +1147,7 @@ test("cart items return only requested active variants and report missing ids", 
   assert.equal(response.body.data[0].product.merchandisingLabel, "Ferrari");
   assert.equal(response.body.data[0].variant.id, variantId);
   assert.equal(response.body.data[0].variant.available, true);
+  assert.equal(response.body.data[0].variant.stockQuantity, 8);
   assert.deepEqual(response.body.missingVariantIds, [missingId]);
   assert.equal(response.body.data[0].product.description, undefined);
   await request(app).post("/api/products/cart-items").send({ variantIds: [], locale: "en" }).expect(400);
@@ -1338,6 +1340,7 @@ test("checkout verifies payment notifications, reserves stock, and waits for man
   let trackingCalls = 0;
   let trackingMode: "success" | "unavailable" | "malformed" = "success";
   let failNextBooking = false;
+  const statusResponses = new Map<string, Record<string, unknown> | "upstream-error">();
   const sentEmails: EmailMessageBuilder[] = [];
   setDefaultEmailSender({
     async send(message) {
@@ -1383,6 +1386,13 @@ test("checkout verifies payment notifications, reserves stock, and waits for man
         status: 201,
         headers: { "content-type": "application/json" },
       });
+    }
+    const statusOrderId = url.match(/midtrans\.com\/v2\/([^/]+)\/status$/)?.[1];
+    if (statusOrderId) {
+      const status = statusResponses.get(decodeURIComponent(statusOrderId));
+      if (status === "upstream-error") return Response.json({ status_message: "Unavailable" }, { status: 503 });
+      if (status) return Response.json(status);
+      return Response.json({ status_message: "Transaction does not exist" }, { status: 404 });
     }
     if (url.endsWith("/v1/orders")) {
       bookingCalls += 1;
@@ -1792,6 +1802,39 @@ test("checkout verifies payment notifications, reserves stock, and waits for man
     const refunded = await prisma.order.findUniqueOrThrow({ where: { id: checkout.body.orderId } });
     assert.equal(refunded.paymentStatus, "REFUNDED");
     assert.ok(refunded.promoRedeemedAt);
+
+    const stockBeforeReconciliation = (await prisma.productVariant.findUniqueOrThrow({ where: { id: variantId } })).stockQuantity;
+    const confirmationCount = sentEmails.length;
+    const reconciliationPaid = await request(app).post("/api/checkout")
+      .send({ ...payload, idempotencyKey: randomUUID() }).expect(201);
+    const reconciliationExpired = await request(app).post("/api/checkout")
+      .send({ ...payload, idempotencyKey: randomUUID() }).expect(201);
+    const reconciliationInvalid = await request(app).post("/api/checkout")
+      .send({ ...payload, idempotencyKey: randomUUID() }).expect(201);
+    const staleAt = new Date(Date.now() - 20 * 60 * 1_000);
+    await prisma.order.updateMany({
+      where: { id: { in: [reconciliationPaid.body.orderId, reconciliationExpired.body.orderId, reconciliationInvalid.body.orderId] } },
+      data: { createdAt: staleAt, updatedAt: staleAt },
+    });
+    statusResponses.set(reconciliationPaid.body.orderId, notification(reconciliationPaid.body.orderId, "settlement"));
+    statusResponses.set(reconciliationExpired.body.orderId, notification(reconciliationExpired.body.orderId, "expire"));
+    statusResponses.set(reconciliationInvalid.body.orderId, {
+      ...notification(reconciliationInvalid.body.orderId, "pending"),
+      signature_key: "invalid",
+    });
+
+    const reconciliation = await PublicCheckoutService.reconcilePendingPayments();
+    assert.deepEqual(reconciliation, { checked: 3, reconciled: 2, failed: 1, catalogChanged: true });
+    assert.equal((await prisma.order.findUniqueOrThrow({ where: { id: reconciliationPaid.body.orderId } })).paymentStatus, "PAID");
+    assert.equal((await prisma.order.findUniqueOrThrow({ where: { id: reconciliationExpired.body.orderId } })).paymentStatus, "EXPIRED");
+    assert.equal((await prisma.order.findUniqueOrThrow({ where: { id: reconciliationInvalid.body.orderId } })).paymentStatus, "PENDING");
+    assert.equal((await prisma.productVariant.findUniqueOrThrow({ where: { id: variantId } })).stockQuantity, stockBeforeReconciliation - 2);
+    assert.equal(sentEmails.length, confirmationCount + 1);
+    assert.equal(await prisma.orderAuditEvent.count({
+      where: { orderId: reconciliationInvalid.body.orderId, action: "PAYMENT_RECONCILIATION_FAILED" },
+    }), 1);
+    await request(app).post("/api/payments/midtrans/notification")
+      .send(notification(reconciliationInvalid.body.orderId, "expire")).expect(200);
   } finally {
     globalThis.fetch = originalFetch;
     config.biteshipApiKey = originalConfig.apiKey;
@@ -1907,6 +1950,7 @@ test("optionless products use a default SKU without fake size or color", async (
   assert.equal(cap.body.variants[0].sizingGuide, null);
   const publicCap = await request(app).get("/api/products/ferrari-team-cap").expect(200);
   assert.equal(publicCap.body.variants[0].available, true);
+  assert.equal(publicCap.body.variants[0].stockQuantity, 3);
   await request(app).patch(`/api/admin/collections/${ferrariCollectionId}`)
     .set("authorization", `Bearer ${token}`).send({ active: false }).expect(409);
   const sizedProduct = await request(app).post("/api/admin/products").set("authorization", `Bearer ${token}`)

@@ -4,6 +4,8 @@ import { createPrisma, runWithPrisma } from "./db.js";
 import { runWithEmailSender } from "./email-service.js";
 import { runWithPhotoBucket } from "./photo-storage.js";
 import { runWithExecutionContext } from "./background.js";
+import { PublicCheckoutService } from "./services/public/checkout-service.js";
+import { revalidateStorefront } from "./storefront-revalidation.js";
 
 const port = 3000;
 const app = createApp({ localUploads: false });
@@ -24,6 +26,19 @@ export default {
             return expressHandler.fetch.call(expressHandler, request, env, ctx);
           }),
         ),
+      ));
+    } finally {
+      await prisma.$disconnect();
+    }
+  },
+  async scheduled(_controller, env, ctx): Promise<void> {
+    const prisma = createPrisma(env.HYPERDRIVE.connectionString);
+    try {
+      await runWithExecutionContext(ctx, () => runWithEmailSender(env.EMAIL, () =>
+        runWithPrisma(prisma, async () => {
+          const result = await PublicCheckoutService.reconcilePendingPayments();
+          if (result.catalogChanged) revalidateStorefront(["catalog:products"]);
+        }),
       ));
     } finally {
       await prisma.$disconnect();
