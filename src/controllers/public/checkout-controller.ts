@@ -4,7 +4,7 @@ import { parse } from "../../http.js";
 import { idSchema, promoCodeValueSchema } from "../../schemas.js";
 import { PublicCheckoutService } from "../../services/public/checkout-service.js";
 import { revalidateStorefront } from "../../storefront-revalidation.js";
-import { verifyCheckoutHuman } from "../../turnstile.js";
+import { verifyHuman } from "../../turnstile.js";
 
 const checkoutSchema = z.object({
   idempotencyKey: idSchema,
@@ -44,7 +44,7 @@ export class PublicCheckoutController {
   static async create(request: Request, response: Response) {
     response.set("cache-control", "no-store");
     const { turnstileToken, ...input } = parse(checkoutSchema, request.body);
-    await verifyCheckoutHuman(turnstileToken, request.get("cf-connecting-ip"));
+    await verifyHuman(turnstileToken, "checkout", request.get("cf-connecting-ip"));
     const checkout = await PublicCheckoutService.create(input);
     revalidateStorefront(["catalog:products"]);
     response.status(201).json(checkout);

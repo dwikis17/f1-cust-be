@@ -1379,17 +1379,35 @@ test("shipping rates use authoritative cart data and normalize Biteship response
     apiKey: config.biteshipApiKey,
     originPostalCode: config.biteshipOriginPostalCode,
     couriers: config.biteshipCouriers,
+    turnstileSecretKey: config.turnstileSecretKey,
+    storefrontUrl: config.storefrontUrl,
   };
   const product = await request(app).get("/api/products/ferrari-team-jersey").expect(200);
   const variantId = product.body.variants[0].id as string;
   config.biteshipApiKey = "biteship_test.test-key";
   config.biteshipOriginPostalCode = "12440";
   config.biteshipCouriers = ["jne", "sicepat"];
+  config.turnstileSecretKey = "turnstile-test-secret";
+  config.storefrontUrl = "https://valydejersey.com";
   await prisma.product.update({ where: { id: productId }, data: { salePriceIdr: 900_000 } });
 
   try {
     let upstreamBody: Record<string, unknown> | undefined;
-    globalThis.fetch = async (_input, init) => {
+    let biteshipCalls = 0;
+    const withTurnstile = (biteshipFetch: typeof fetch): typeof fetch => async (input, init) => {
+      if (String(input).endsWith("/turnstile/v0/siteverify")) {
+        const body = JSON.parse(String(init?.body)) as { response: string };
+        if (body.response === "turnstile-rejected") return Response.json({ success: false });
+        return Response.json({
+          success: true,
+          action: body.response === "turnstile-wrong-action" ? "checkout" : "shipping-rates",
+          hostname: body.response === "turnstile-wrong-hostname" ? "example.com" : "valydejersey.com",
+        });
+      }
+      biteshipCalls += 1;
+      return biteshipFetch(input, init);
+    };
+    globalThis.fetch = withTurnstile(async (_input, init) => {
       assert.equal(init?.headers && (init.headers as Record<string, string>).authorization, "biteship_test.test-key");
       upstreamBody = JSON.parse(String(init?.body)) as Record<string, unknown>;
       return new Response(JSON.stringify({
@@ -1406,12 +1424,24 @@ test("shipping rates use authoritative cart data and normalize Biteship response
           },
         ],
       }), { status: 200, headers: { "content-type": "application/json" } });
+    });
+
+    const protectedRequest = {
+      destinationPostalCode: "12240",
+      items: [{ variantId, quantity: 1 }],
     };
+    await request(app).post("/api/shipping/rates").send(protectedRequest).expect(403);
+    for (const turnstileToken of ["turnstile-rejected", "turnstile-wrong-action", "turnstile-wrong-hostname"]) {
+      await request(app).post("/api/shipping/rates").send({ ...protectedRequest, turnstileToken }).expect(403);
+    }
+    assert.equal(biteshipCalls, 0);
 
     const quote = await request(app).post("/api/shipping/rates").send({
       destinationPostalCode: "12240",
       items: [{ variantId, quantity: 2 }, { variantId, quantity: 1 }],
+      turnstileToken: "turnstile-valid",
     }).expect("cache-control", "no-store").expect(200);
+    assert.equal(biteshipCalls, 1);
     assert.deepEqual(quote.body.rates.map((rate: { price: number }) => rate.price), [18_000, 32_000]);
     assert.deepEqual(upstreamBody, {
       origin_postal_code: 12440,
@@ -1424,41 +1454,43 @@ test("shipping rates use authoritative cart data and normalize Biteship response
     });
 
     await request(app).post("/api/shipping/rates")
-      .send({ destinationPostalCode: "123", items: [{ variantId, quantity: 1 }] }).expect(400);
+      .send({ destinationPostalCode: "123", items: [{ variantId, quantity: 1 }], turnstileToken: "turnstile-valid" }).expect(400);
     await request(app).post("/api/shipping/rates")
-      .send({ destinationPostalCode: "12240", items: [{ variantId: randomUUID(), quantity: 1 }] }).expect(409);
+      .send({ destinationPostalCode: "12240", items: [{ variantId: randomUUID(), quantity: 1 }], turnstileToken: "turnstile-valid" }).expect(409);
     await request(app).post("/api/shipping/rates")
-      .send({ destinationPostalCode: "12240", items: [{ variantId, quantity: 9 }] }).expect(409);
+      .send({ destinationPostalCode: "12240", items: [{ variantId, quantity: 9 }], turnstileToken: "turnstile-valid" }).expect(409);
 
-    globalThis.fetch = async () => new Response(JSON.stringify({ code: 40001001, message: "Invalid postal code" }), {
+    globalThis.fetch = withTurnstile(async () => new Response(JSON.stringify({ code: 40001001, message: "Invalid postal code" }), {
       status: 400,
       headers: { "content-type": "application/json" },
-    });
+    }));
     await request(app).post("/api/shipping/rates")
-      .send({ destinationPostalCode: "99999", items: [{ variantId, quantity: 1 }] })
+      .send({ destinationPostalCode: "99999", items: [{ variantId, quantity: 1 }], turnstileToken: "turnstile-valid" })
       .expect(422, { error: { code: "INVALID_DESTINATION", message: "The destination postal code is not supported" } });
 
-    globalThis.fetch = async () => { throw new DOMException("Timed out", "TimeoutError"); };
+    globalThis.fetch = withTurnstile(async () => { throw new DOMException("Timed out", "TimeoutError"); });
     await request(app).post("/api/shipping/rates")
-      .send({ destinationPostalCode: "12240", items: [{ variantId, quantity: 1 }] }).expect(504);
+      .send({ destinationPostalCode: "12240", items: [{ variantId, quantity: 1 }], turnstileToken: "turnstile-valid" }).expect(504);
 
-    globalThis.fetch = async () => new Response(JSON.stringify({ pricing: [] }), {
+    globalThis.fetch = withTurnstile(async () => new Response(JSON.stringify({ pricing: [] }), {
       status: 200,
       headers: { "content-type": "application/json" },
-    });
+    }));
     const empty = await request(app).post("/api/shipping/rates")
-      .send({ destinationPostalCode: "12240", items: [{ variantId, quantity: 1 }] }).expect(200);
+      .send({ destinationPostalCode: "12240", items: [{ variantId, quantity: 1 }], turnstileToken: "turnstile-valid" }).expect(200);
     assert.deepEqual(empty.body.rates, []);
 
     config.biteshipApiKey = undefined;
     await request(app).post("/api/shipping/rates")
-      .send({ destinationPostalCode: "12240", items: [{ variantId, quantity: 1 }] }).expect(503);
+      .send({ destinationPostalCode: "12240", items: [{ variantId, quantity: 1 }], turnstileToken: "turnstile-valid" }).expect(503);
   } finally {
     await prisma.product.update({ where: { id: productId }, data: { salePriceIdr: null } });
     globalThis.fetch = originalFetch;
     config.biteshipApiKey = originalShippingConfig.apiKey;
     config.biteshipOriginPostalCode = originalShippingConfig.originPostalCode;
     config.biteshipCouriers = originalShippingConfig.couriers;
+    config.turnstileSecretKey = originalShippingConfig.turnstileSecretKey;
+    config.storefrontUrl = originalShippingConfig.storefrontUrl;
   }
 });
 
