@@ -40,15 +40,26 @@ router.post("/faqs", FaqController.create);
 router.patch("/faqs/:id", FaqController.update);
 router.delete("/faqs/:id", FaqController.remove);
 
-router.get("/home", HomeController.getAdmin);
-router.put(
+router.get("/home", HomeController.listAdmin);
+router.post(
   "/home",
   upload.fields([
     { name: "desktopImage", maxCount: 1 },
     { name: "mobileImage", maxCount: 1 },
   ]),
-  HomeController.save,
+  HomeController.create,
 );
+router.put("/home/order", HomeController.reorder);
+router.put(
+  "/home/:id",
+  upload.fields([
+    { name: "desktopImage", maxCount: 1 },
+    { name: "mobileImage", maxCount: 1 },
+  ]),
+  HomeController.update,
+);
+router.patch("/home/:id", HomeController.setActive);
+router.delete("/home/:id", HomeController.remove);
 
 router.get("/promo-codes", PromoCodeController.list);
 router.post("/promo-codes", PromoCodeController.create);

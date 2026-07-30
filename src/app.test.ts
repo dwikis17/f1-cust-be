@@ -884,13 +884,13 @@ test("collection image uploads validate, replace, publish, and clean up files", 
     .send({ logoUrl: "https://example.com/ferrari.webp" }).expect(200);
 });
 
-test("home hero is managed once, localized publicly, and safely replaces images", async () => {
+test("home campaigns support ordered CRUD, localization, activation limits, and image cleanup", async () => {
   const endpoint = "/api/admin/home";
   const pngHeader = Buffer.from([0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a]);
-  const fields = {
+  const fields = (title: string, active = false) => ({
     eyebrow: "Valyde / Race week",
     eyebrowId: "Valyde / Pekan balap",
-    title: "Built for",
+    title,
     titleId: "Dibuat untuk",
     outlinedTitle: "Race day",
     body: "A focused edit for the next lights out.",
@@ -898,56 +898,92 @@ test("home hero is managed once, localized publicly, and safely replaces images"
     ctaLabel: "Shop Ferrari",
     ctaLabelId: "Belanja Ferrari",
     collectionId: ferrariCollectionId,
-  };
+    active: String(active),
+  });
+  const create = (title: string, active = false) => request(app).post(endpoint)
+    .set("authorization", `Bearer ${token}`)
+    .field(fields(title, active))
+    .attach("desktopImage", pngHeader, `${title}-desktop.png`)
+    .attach("mobileImage", pngHeader, `${title}-mobile.png`);
 
   await request(app).get(endpoint).expect(401);
-  await request(app).get("/api/home").expect(200, null);
-  await request(app).put(endpoint).set("authorization", `Bearer ${token}`).field(fields).expect(400);
-  await request(app).put(endpoint).set("authorization", `Bearer ${token}`)
-    .field({ ...fields, collectionId: randomUUID() })
+  await request(app).get("/api/home").expect(200, []);
+  await request(app).post(endpoint).set("authorization", `Bearer ${token}`)
+    .field(fields("Missing images")).expect(400);
+  await request(app).post(endpoint).set("authorization", `Bearer ${token}`)
+    .field({ ...fields("Unknown collection"), collectionId: randomUUID() })
     .attach("desktopImage", pngHeader, "desktop.png")
     .attach("mobileImage", pngHeader, "mobile.png")
     .expect(400);
-  await request(app).put(endpoint).set("authorization", `Bearer ${token}`)
-    .field(fields)
+  await request(app).post(endpoint).set("authorization", `Bearer ${token}`)
+    .field(fields("Invalid image"))
     .attach("desktopImage", Buffer.from("not-image"), "desktop.png")
     .attach("mobileImage", pngHeader, "mobile.png")
     .expect(400);
 
-  const created = await request(app).put(endpoint).set("authorization", `Bearer ${token}`)
-    .field(fields)
-    .attach("desktopImage", pngHeader, "desktop.png")
-    .attach("mobileImage", pngHeader, "mobile.png")
-    .expect(200);
-  assert.equal(created.body.id, "home");
-  assert.equal(created.body.collection.id, ferrariCollectionId);
-  const desktopPath = path.join(config.uploadDir, created.body.desktopImageUrl.replace("/uploads/", ""));
-  const mobilePath = path.join(config.uploadDir, created.body.mobileImageUrl.replace("/uploads/", ""));
+  const first = await create("Built for", true).expect(201);
+  const second = await create("Second campaign").expect(201);
+  assert.match(first.body.id, /^[0-9a-f-]{36}$/);
+  assert.equal(first.body.active, true);
+  assert.equal(first.body.position, 0);
+  assert.equal(second.body.active, false);
+  assert.equal(second.body.position, 1);
+  const desktopPath = path.join(config.uploadDir, first.body.desktopImageUrl.replace("/uploads/", ""));
+  const mobilePath = path.join(config.uploadDir, first.body.mobileImageUrl.replace("/uploads/", ""));
   await Promise.all([access(desktopPath), access(mobilePath)]);
 
   const english = await request(app).get("/api/home?locale=en").expect(200);
-  assert.equal(english.body.title, "Built for");
-  assert.equal(english.body.outlinedTitle, "Race day");
-  assert.deepEqual(english.body.collection, { name: "Ferrari", slug: "ferrari" });
+  assert.equal(english.body.length, 1);
+  assert.equal(english.body[0].title, "Built for");
+  assert.deepEqual(english.body[0].collection, { name: "Ferrari", slug: "ferrari" });
   const indonesian = await request(app).get("/api/home?locale=id").expect(200);
-  assert.equal(indonesian.body.title, "Dibuat untuk");
-  assert.equal(indonesian.body.outlinedTitle, "Race day");
+  assert.equal(indonesian.body[0].title, "Dibuat untuk");
+  assert.equal(indonesian.body[0].outlinedTitle, "Race day");
   await request(app).get("/api/home?locale=fr").expect(400);
 
-  const replaced = await request(app).put(endpoint).set("authorization", `Bearer ${token}`)
-    .field({ ...fields, body: "Updated campaign copy." })
+  const replaced = await request(app).put(`${endpoint}/${first.body.id}`).set("authorization", `Bearer ${token}`)
+    .field({ ...fields("Built for", true), body: "Updated campaign copy." })
     .attach("desktopImage", pngHeader, "desktop-new.png")
     .expect(200);
-  assert.equal(replaced.body.mobileImageUrl, created.body.mobileImageUrl);
-  assert.notEqual(replaced.body.desktopImageUrl, created.body.desktopImageUrl);
+  assert.equal(replaced.body.mobileImageUrl, first.body.mobileImageUrl);
+  assert.notEqual(replaced.body.desktopImageUrl, first.body.desktopImageUrl);
   await assert.rejects(access(desktopPath));
   await access(mobilePath);
 
+  await request(app).patch(`${endpoint}/${second.body.id}`).set("authorization", `Bearer ${token}`)
+    .send({ active: true }).expect(200);
+  const reordered = await request(app).put(`${endpoint}/order`).set("authorization", `Bearer ${token}`)
+    .send({ ids: [second.body.id, first.body.id] }).expect(200);
+  assert.deepEqual(reordered.body.map((campaign: { id: string; position: number }) => [campaign.id, campaign.position]), [
+    [second.body.id, 0],
+    [first.body.id, 1],
+  ]);
+  assert.deepEqual(
+    (await request(app).get("/api/home").expect(200)).body.map((campaign: { title: string }) => campaign.title),
+    ["Second campaign", "Built for"],
+  );
+  await request(app).put(`${endpoint}/order`).set("authorization", `Bearer ${token}`)
+    .send({ ids: [first.body.id] }).expect(400);
+
+  for (let index = 3; index <= 6; index += 1) await create(`Campaign ${index}`, true).expect(201);
+  const seventh = await create("Campaign 7").expect(201);
+  await request(app).patch(`${endpoint}/${seventh.body.id}`).set("authorization", `Bearer ${token}`)
+    .send({ active: true }).expect(409);
+
   await request(app).patch(`/api/admin/collections/${ferrariCollectionId}`)
     .set("authorization", `Bearer ${token}`).send({ active: false }).expect(200);
-  await request(app).get("/api/home").expect(200, null);
+  await request(app).get("/api/home").expect(200, []);
   await request(app).patch(`/api/admin/collections/${ferrariCollectionId}`)
     .set("authorization", `Bearer ${token}`).send({ active: true }).expect(200);
+
+  await request(app).patch(`${endpoint}/${randomUUID()}`).set("authorization", `Bearer ${token}`)
+    .send({ active: false }).expect(404);
+  const campaigns = await request(app).get(endpoint).set("authorization", `Bearer ${token}`).expect(200);
+  for (const campaign of campaigns.body as Array<{ id: string }>) {
+    await request(app).delete(`${endpoint}/${campaign.id}`).set("authorization", `Bearer ${token}`).expect(204);
+  }
+  await request(app).get("/api/home").expect(200, []);
+  await assert.rejects(access(mobilePath));
 });
 
 test("admin can update and delete unreferenced teams and drivers", async () => {

@@ -81,6 +81,10 @@ export const collectionMembershipSchema = z.object({
 
 const nullableHomeText = (max: number) =>
   z.preprocess((value) => value === "" ? null : value, z.string().trim().min(1).max(max).nullable().optional());
+const formBooleanSchema = z.preprocess(
+  (value) => value === "true" ? true : value === "false" ? false : value,
+  z.boolean(),
+);
 export const homeHeroSchema = z.object({
   eyebrow: z.string().trim().min(1).max(80),
   eyebrowId: nullableHomeText(80),
@@ -93,7 +97,10 @@ export const homeHeroSchema = z.object({
   ctaLabel: z.string().trim().min(1).max(60),
   ctaLabelId: nullableHomeText(60),
   collectionId: idSchema,
+  active: formBooleanSchema.default(false),
 }).strict();
+export const homeHeroStatusSchema = z.object({ active: z.boolean() }).strict();
+export const homeHeroOrderSchema = z.object({ ids: z.array(idSchema).max(1_000) }).strict();
 
 export const sizingGuideSchema = z.object({
   unit: z.enum(["cm", "in"]),

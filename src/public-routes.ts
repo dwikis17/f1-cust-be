@@ -20,7 +20,7 @@ router.get("/products", PublicProductController.listProducts);
 router.post("/products/cart-items", PublicProductController.cartItems);
 router.get("/products/:slug", PublicProductController.findProduct);
 router.get("/faqs", FaqController.listPublic);
-router.get("/home", HomeController.getPublic);
+router.get("/home", HomeController.listPublic);
 router.post("/shipping/rates", PublicShippingController.rates);
 router.post("/promo-codes/preview", PromoCodeController.preview);
 router.post("/checkout", PublicCheckoutController.create);
