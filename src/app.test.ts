@@ -1530,6 +1530,11 @@ test("Biteship status webhooks update provider data without changing order lifec
   config.biteshipWebhookSecret = secret;
 
   try {
+    const installationProbe = await request(app).post("/api/webhooks/biteship")
+      .set("content-type", "application/json")
+      .send().expect("content-type", /text\/plain/).expect(200);
+    assert.equal(installationProbe.text, "ok");
+
     await request(app).post("/api/webhooks/biteship")
       .send({ event: "order.status", order_id: providerOrderId, status: "delivered" }).expect(401);
     await request(app).post("/api/webhooks/biteship")

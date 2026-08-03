@@ -32,8 +32,15 @@ function verifyAuthorization(request: Request) {
 
 export class BiteshipWebhookController {
   static async status(request: Request, response: Response) {
+    const body = request.body as unknown;
+    const emptyBody = body == null
+      || (typeof body === "object" && !Array.isArray(body) && Object.keys(body as object).length === 0);
+    if (emptyBody) {
+      response.type("text/plain").send("ok");
+      return;
+    }
     verifyAuthorization(request);
-    const input = parse(statusWebhookSchema, request.body);
+    const input = parse(statusWebhookSchema, body);
     const matched = await OrderService.applyBiteshipStatus({
       providerOrderId: input.order_id,
       status: input.status,

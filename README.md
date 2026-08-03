@@ -127,7 +127,7 @@ npx wrangler secret put BITESHIP_WEBHOOK_SECRET
 npx wrangler secret put BITESHIP_ORIGIN_POSTAL_CODE
 ```
 
-Configure Biteship's [`order.status` webhook](https://biteship.com/id/docs/api/webhook/overview) to `POST https://<api-host>/api/webhooks/biteship` with `Authorization: Bearer <BITESHIP_WEBHOOK_SECRET>`. The endpoint updates the matching order's latest Biteship status, tracking ID, and waybill ID; it does not change F1 payment or lifecycle state. A valid webhook for an unknown Biteship order is acknowledged without creating a local order.
+Configure Biteship's [`order.status` webhook](https://biteship.com/id/docs/api/webhook/overview) to `POST https://<api-host>/api/webhooks/biteship` with `Authorization: Bearer <BITESHIP_WEBHOOK_SECRET>`. During webhook installation, an empty `application/json` request returns plain-text `ok`; non-empty webhook requests require authentication and validation. The endpoint updates the matching order's latest Biteship status, tracking ID, and waybill ID; it does not change F1 payment or lifecycle state. A valid webhook for an unknown Biteship order is acknowledged without creating a local order.
 
 Before production traffic, add an edge rate-limit rule for `POST /api/shipping/rates` (default: 10 requests per minute per IP). Biteship Rates requests use paid live data even with a testing key, so automated tests mock Biteship and never make billable calls.
 
