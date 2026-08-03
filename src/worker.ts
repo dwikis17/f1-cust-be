@@ -2,7 +2,7 @@ import { httpServerHandler } from "cloudflare:node";
 import { createApp } from "./app.js";
 import { createPrisma, runWithPrisma } from "./db.js";
 import { runWithEmailSender } from "./email-service.js";
-import { runWithPhotoBucket } from "./photo-storage.js";
+import { photoPrefixForRequest, runWithPhotoBucket } from "./photo-storage.js";
 import { runWithExecutionContext } from "./background.js";
 import { PublicCheckoutService } from "./services/public/checkout-service.js";
 import { revalidateStorefront } from "./storefront-revalidation.js";
@@ -17,7 +17,7 @@ export default {
   async fetch(request, env, ctx): Promise<Response> {
     const prisma = createPrisma(env.HYPERDRIVE.connectionString);
     const hostname = new URL(request.url).hostname;
-    const photoPrefix = hostname === "localhost" || hostname === "127.0.0.1" ? "development/" : "production/";
+    const photoPrefix = photoPrefixForRequest(hostname, env.APP_ENV);
     try {
       return await runWithExecutionContext(ctx, () => runWithEmailSender(env.EMAIL, () =>
         runWithPhotoBucket(env.PHOTO_BUCKET, photoPrefix, env.PHOTO_PUBLIC_BASE_URL, () =>

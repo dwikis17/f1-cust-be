@@ -8,7 +8,7 @@ import request from "supertest";
 import { createApp } from "./app.js";
 import { config } from "./config.js";
 import { prisma } from "./db-node.js";
-import { setDefaultEmailSender } from "./email-service.js";
+import { sendPaymentConfirmationEmail, setDefaultEmailSender } from "./email-service.js";
 import { storePhoto } from "./photo-storage.js";
 import { PublicCheckoutService } from "./services/public/checkout-service.js";
 
@@ -1671,11 +1671,13 @@ test("checkout verifies payment notifications, reserves stock, and waits for man
     midtransEnv: config.midtransEnv,
     merchantId: config.midtransMerchantId,
     serverKey: config.midtransServerKey,
+    notificationUrl: config.midtransNotificationUrl,
     storefrontUrl: config.storefrontUrl,
     turnstileSecretKey: config.turnstileSecretKey,
     emailFromAddress: config.emailFromAddress,
     emailFromName: config.emailFromName,
     emailReplyTo: config.emailReplyTo,
+    emailDeliveryEnabled: config.emailDeliveryEnabled,
   };
   const product = await request(app).get("/api/products/ferrari-team-jersey").expect(200);
   const variantId = product.body.variants[0].id as string;
@@ -1688,11 +1690,13 @@ test("checkout verifies payment notifications, reserves stock, and waits for man
   config.midtransEnv = "sandbox";
   config.midtransMerchantId = "merchant-test";
   config.midtransServerKey = "server-test";
+  config.midtransNotificationUrl = "https://dev-api.valydejersey.com/api/payments/midtrans/notification";
   config.storefrontUrl = "http://localhost:3001";
   config.turnstileSecretKey = "turnstile-test-secret";
   config.emailFromAddress = "orders@valydejersey.com";
   config.emailFromName = "Valyde Jersey";
   config.emailReplyTo = "support@valydejersey.com";
+  config.emailDeliveryEnabled = true;
 
   let rateCalls = 0;
   let snapCalls = 0;
@@ -1736,6 +1740,10 @@ test("checkout verifies payment notifications, reserves stock, and waits for man
     }
     if (url.includes("midtrans.com/snap/v1/transactions")) {
       snapCalls += 1;
+      assert.equal(
+        new Headers(init?.headers).get("X-Override-Notification"),
+        "https://dev-api.valydejersey.com/api/payments/midtrans/notification",
+      );
       const body = JSON.parse(String(init?.body)) as typeof snapBodies[number];
       snapBodies.push(body);
       assert.equal(
@@ -1930,6 +1938,10 @@ test("checkout verifies payment notifications, reserves stock, and waits for man
     assert.match(sentEmails[0].text ?? "", /Total paid: Rp\s?1\.168\.000/);
     assert.match(sentEmails[0].html ?? "", /Track your order/);
     assert.ok((await prisma.order.findUniqueOrThrow({ where: { id: checkout.body.orderId } })).paymentConfirmationEmailSentAt);
+    config.emailDeliveryEnabled = false;
+    assert.equal(await sendPaymentConfirmationEmail(checkout.body.orderId, { force: true }), false);
+    assert.equal(sentEmails.length, 1);
+    config.emailDeliveryEnabled = true;
     await request(app).get(`/api/admin/orders/${checkout.body.orderId}/payment-events`).expect(401);
     await request(app).get(`/api/admin/orders/${randomUUID()}/payment-events`)
       .set("authorization", `Bearer ${token}`).expect(404);
@@ -2206,11 +2218,13 @@ test("checkout verifies payment notifications, reserves stock, and waits for man
     config.midtransEnv = originalConfig.midtransEnv;
     config.midtransMerchantId = originalConfig.merchantId;
     config.midtransServerKey = originalConfig.serverKey;
+    config.midtransNotificationUrl = originalConfig.notificationUrl;
     config.storefrontUrl = originalConfig.storefrontUrl;
     config.turnstileSecretKey = originalConfig.turnstileSecretKey;
     config.emailFromAddress = originalConfig.emailFromAddress;
     config.emailFromName = originalConfig.emailFromName;
     config.emailReplyTo = originalConfig.emailReplyTo;
+    config.emailDeliveryEnabled = originalConfig.emailDeliveryEnabled;
     setDefaultEmailSender();
   }
 });

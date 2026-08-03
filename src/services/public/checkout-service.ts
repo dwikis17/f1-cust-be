@@ -175,6 +175,7 @@ function requirePaymentConfig() {
   return {
     merchantId: config.midtransMerchantId,
     serverKey: config.midtransServerKey,
+    notificationUrl: config.midtransNotificationUrl,
     snapUrl: config.midtransEnv === "production"
       ? "https://app.midtrans.com/snap/v1/transactions"
       : "https://app.sandbox.midtrans.com/snap/v1/transactions",
@@ -223,6 +224,7 @@ async function createSnapToken(order: Awaited<ReturnType<typeof prisma.order.fin
       accept: "application/json",
       authorization: `Basic ${Buffer.from(`${payment.serverKey}:`).toString("base64")}`,
       "content-type": "application/json",
+      ...(payment.notificationUrl ? { "X-Override-Notification": payment.notificationUrl } : {}),
     },
     body: JSON.stringify({
       transaction_details: { order_id: order.id, gross_amount: order.totalIdr },
