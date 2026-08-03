@@ -3,6 +3,7 @@ import { PublicCatalogController } from "./controllers/public/catalog-controller
 import { PublicProductController } from "./controllers/public/product-controller.js";
 import { PublicShippingController } from "./controllers/public/shipping-controller.js";
 import { PublicCheckoutController } from "./controllers/public/checkout-controller.js";
+import { BiteshipWebhookController } from "./controllers/public/biteship-webhook-controller.js";
 import { PromoCodeController } from "./controllers/promo-code-controller.js";
 import { FaqController } from "./controllers/faq-controller.js";
 import { HomeController } from "./controllers/home-controller.js";
@@ -28,5 +29,6 @@ router.post("/checkout", PublicCheckoutController.create);
 router.post("/orders/track", PublicCheckoutController.track);
 router.get("/orders/:id", PublicCheckoutController.find);
 router.post("/payments/midtrans/notification", PublicCheckoutController.midtransNotification);
+router.post("/webhooks/biteship", BiteshipWebhookController.status);
 
 export default router;

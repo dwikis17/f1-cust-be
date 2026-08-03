@@ -1494,6 +1494,103 @@ test("shipping rates use authoritative cart data and normalize Biteship response
   }
 });
 
+test("Biteship status webhooks update provider data without changing order lifecycle", async () => {
+  const originalSecret = config.biteshipWebhookSecret;
+  const secret = "biteship-webhook-test-secret-1234567890";
+  const providerOrderId = `biteship-webhook-${randomUUID()}`;
+  const order = await prisma.order.create({
+    data: {
+      orderNumber: `WEBHOOK-${randomUUID().slice(0, 8).toUpperCase()}`,
+      idempotencyKey: randomUUID(),
+      email: "webhook@example.com",
+      firstName: "Webhook",
+      lastName: "Buyer",
+      phone: "+628123456789",
+      address: "Jl. Webhook 1",
+      city: "Jakarta Selatan",
+      province: "DKI Jakarta",
+      postalCode: "12240",
+      subtotalIdr: 100_000,
+      shippingIdr: 20_000,
+      totalIdr: 120_000,
+      courierCode: "jne",
+      courierName: "JNE",
+      courierServiceCode: "reg",
+      courierServiceName: "Regular",
+      courierDuration: "1 - 2 days",
+      paymentStatus: "PAID",
+      lifecycleStatus: "PROCESSING",
+      shipmentBookingStatus: "UNFULFILLED",
+      biteshipOrderId: providerOrderId,
+      biteshipTrackingId: "tracking-before",
+      biteshipWaybillId: "waybill-before",
+      biteshipStatus: "confirmed",
+    },
+  });
+  config.biteshipWebhookSecret = secret;
+
+  try {
+    await request(app).post("/api/webhooks/biteship")
+      .send({ event: "order.status", order_id: providerOrderId, status: "delivered" }).expect(401);
+    await request(app).post("/api/webhooks/biteship")
+      .set("authorization", "Bearer wrong-secret")
+      .send({ event: "order.status", order_id: providerOrderId, status: "delivered" }).expect(401);
+
+    config.biteshipWebhookSecret = undefined;
+    await request(app).post("/api/webhooks/biteship")
+      .set("authorization", `Bearer ${secret}`)
+      .send({ event: "order.status", order_id: providerOrderId, status: "delivered" }).expect(503);
+    config.biteshipWebhookSecret = secret;
+
+    await request(app).post("/api/webhooks/biteship")
+      .set("authorization", `Bearer ${secret}`)
+      .set("content-type", "application/json")
+      .send("{").expect(400);
+    await request(app).post("/api/webhooks/biteship")
+      .set("authorization", `Bearer ${secret}`)
+      .send({ event: "order.status", status: "delivered" }).expect(400);
+    await request(app).post("/api/webhooks/biteship")
+      .set("authorization", `Bearer ${secret}`)
+      .send({ event: "order.price", order_id: providerOrderId, status: "delivered" }).expect(400);
+
+    const unknown = await request(app).post("/api/webhooks/biteship")
+      .set("authorization", `Bearer ${secret}`)
+      .send({ event: "order.status", order_id: "biteship-unknown", status: "delivered" }).expect(200);
+    assert.deepEqual(unknown.body, { received: true, matched: false });
+
+    await request(app).post("/api/webhooks/biteship")
+      .set("authorization", `Bearer ${secret}`)
+      .send({ event: "order.status", order_id: providerOrderId, status: "future_provider_status" }).expect(200);
+
+    const delivered = await request(app).post("/api/webhooks/biteship")
+      .set("authorization", `Bearer ${secret}`)
+      .send({
+        event: "order.status",
+        order_id: providerOrderId,
+        status: "delivered",
+        courier_tracking_id: "tracking-after",
+        courier_waybill_id: "waybill-after",
+      }).expect(200);
+    assert.deepEqual(delivered.body, { received: true, matched: true });
+
+    const updated = await prisma.order.findUniqueOrThrow({ where: { id: order.id } });
+    assert.equal(updated.biteshipStatus, "delivered");
+    assert.equal(updated.biteshipTrackingId, "tracking-after");
+    assert.equal(updated.biteshipWaybillId, "waybill-after");
+    assert.equal(updated.paymentStatus, "PAID");
+    assert.equal(updated.lifecycleStatus, "PROCESSING");
+    assert.equal(updated.shipmentBookingStatus, "UNFULFILLED");
+
+    const duplicate = await request(app).post("/api/webhooks/biteship")
+      .set("authorization", `Bearer ${secret}`)
+      .send({ event: "order.status", order_id: providerOrderId, status: "delivered" }).expect(200);
+    assert.deepEqual(duplicate.body, { received: true, matched: true });
+  } finally {
+    config.biteshipWebhookSecret = originalSecret;
+    await prisma.order.delete({ where: { id: order.id } });
+  }
+});
+
 test("promo codes are normalized, validated, previewed, and managed by admins", async () => {
   const product = await request(app).get("/api/products/ferrari-team-jersey").expect(200);
   const variantId = product.body.variants[0].id as string;

@@ -36,6 +36,10 @@ export function errorHandler(error: unknown, _request: Request, response: Respon
     });
     return;
   }
+  if (error instanceof SyntaxError && "body" in error) {
+    response.status(400).json({ error: { code: "INVALID_JSON", message: "Request body must be valid JSON" } });
+    return;
+  }
   if (error instanceof multer.MulterError) {
     response.status(400).json({ error: { code: "UPLOAD_ERROR", message: error.message } });
     return;

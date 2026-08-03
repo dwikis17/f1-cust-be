@@ -673,6 +673,23 @@ export class OrderService {
     };
   }
 
+  static async applyBiteshipStatus(input: {
+    providerOrderId: string;
+    status: string;
+    trackingId?: string | null;
+    waybillId?: string | null;
+  }) {
+    const updated = await prisma.order.updateMany({
+      where: { biteshipOrderId: input.providerOrderId },
+      data: {
+        biteshipStatus: input.status,
+        ...(input.trackingId ? { biteshipTrackingId: input.trackingId } : {}),
+        ...(input.waybillId ? { biteshipWaybillId: input.waybillId } : {}),
+      },
+    });
+    return updated.count > 0;
+  }
+
   static async invoice(orderId: string, adminId: string) {
     const order = await prisma.order.findUnique({ where: { id: orderId }, include: { items: true } });
     if (!order) notFound("Order not found");

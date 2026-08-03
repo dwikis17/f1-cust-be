@@ -51,6 +51,7 @@ Public endpoints:
 - `POST /api/orders/track`
 - `GET /api/orders/:id`
 - `POST /api/payments/midtrans/notification`
+- `POST /api/webhooks/biteship`
 
 Admin authentication:
 
@@ -118,12 +119,15 @@ Prices use integer Indonesian rupiah. Public product responses expose `available
 
 `POST /api/shipping/rates` accepts a five-digit destination postal code and cart lines shaped as `{ variantId, quantity }`. The API resolves price, stock, weight, and package dimensions from the database before requesting live Biteship courier rates, so clients cannot supply shipping measurements.
 
-For local development, set `BITESHIP_API_KEY`, `BITESHIP_ORIGIN_POSTAL_CODE`, and optionally `BITESHIP_COURIERS` in `.env`. The courier list defaults to `jne,jnt,sicepat,anteraja`. For the deployed Worker, keep the API key secret and set the origin independently for each environment:
+For local development, set `BITESHIP_API_KEY`, `BITESHIP_WEBHOOK_SECRET`, `BITESHIP_ORIGIN_POSTAL_CODE`, and optionally `BITESHIP_COURIERS` in `.env`. The courier list defaults to `jne,jnt,sicepat,anteraja`. For the deployed Worker, keep the API key and webhook secret private and set them independently for each environment:
 
 ```sh
 npx wrangler secret put BITESHIP_API_KEY
+npx wrangler secret put BITESHIP_WEBHOOK_SECRET
 npx wrangler secret put BITESHIP_ORIGIN_POSTAL_CODE
 ```
+
+Configure Biteship's [`order.status` webhook](https://biteship.com/id/docs/api/webhook/overview) to `POST https://<api-host>/api/webhooks/biteship` with `Authorization: Bearer <BITESHIP_WEBHOOK_SECRET>`. The endpoint updates the matching order's latest Biteship status, tracking ID, and waybill ID; it does not change F1 payment or lifecycle state. A valid webhook for an unknown Biteship order is acknowledged without creating a local order.
 
 Before production traffic, add an edge rate-limit rule for `POST /api/shipping/rates` (default: 10 requests per minute per IP). Biteship Rates requests use paid live data even with a testing key, so automated tests mock Biteship and never make billable calls.
 
