@@ -4,11 +4,13 @@ import { z } from "zod";
 import { config } from "../../config.js";
 import { prisma } from "../../db.js";
 import { sendPaymentConfirmationEmail } from "../../email-service.js";
+import { scheduleBackground } from "../../background.js";
 import type { Prisma } from "../../generated/prisma/client.js";
 import { HttpError, notFound } from "../../http.js";
 import { effectivePriceIdr } from "../../product-price.js";
 import { calculatePromoDiscount } from "../promo-code-service.js";
 import { PublicShippingService } from "./shipping-service.js";
+import { sendTelegramPaymentNotification } from "../../telegram-service.js";
 
 export type CheckoutInput = {
   idempotencyKey: string;
@@ -175,10 +177,18 @@ function requirePaymentConfig() {
   return {
     merchantId: config.midtransMerchantId,
     serverKey: config.midtransServerKey,
+    notificationUrl: config.midtransNotificationUrl,
     snapUrl: config.midtransEnv === "production"
       ? "https://app.midtrans.com/snap/v1/transactions"
       : "https://app.sandbox.midtrans.com/snap/v1/transactions",
   };
+}
+
+function telegramPaidFields(order: { paymentStatus: string; telegramNotificationQueuedAt: Date | null }) {
+  if (!config.telegramBotToken || !config.telegramChatId || order.paymentStatus === "PAID" || order.telegramNotificationQueuedAt) {
+    return {};
+  }
+  return { telegramNotificationQueuedAt: new Date() };
 }
 
 async function releaseStock(orderId: string, paymentStatus: "FAILED" | "EXPIRED" | "CANCELLED", midtransStatus: string) {
@@ -223,6 +233,7 @@ async function createSnapToken(order: Awaited<ReturnType<typeof prisma.order.fin
       accept: "application/json",
       authorization: `Basic ${Buffer.from(`${payment.serverKey}:`).toString("base64")}`,
       "content-type": "application/json",
+      ...(payment.notificationUrl ? { "X-Override-Notification": payment.notificationUrl } : {}),
     },
     body: JSON.stringify({
       transaction_details: { order_id: order.id, gross_amount: order.totalIdr },
@@ -628,7 +639,7 @@ export class PublicCheckoutService {
       if (paid && order.lifecycleStatus === "CANCELLED" && order.paymentStatus !== "REFUNDED") {
         await tx.order.update({
           where: { id: order.id },
-          data: { ...transaction, paymentStatus: "PAID" },
+          data: { ...transaction, ...telegramPaidFields(order), paymentStatus: "PAID" },
         });
         await tx.orderAuditEvent.create({
           data: {
@@ -656,6 +667,7 @@ export class PublicCheckoutService {
                 data: {
                   ...transaction,
                   ...redemption,
+                  ...telegramPaidFields(order),
                   paymentStatus: "PAID",
                   lifecycleStatus: "CANCELLED",
                   shipmentBookingStatus: "UNFULFILLED",
@@ -684,6 +696,7 @@ export class PublicCheckoutService {
               data: {
                 ...transaction,
                 ...redemption,
+                ...telegramPaidFields(order),
                 paymentStatus: "PAID",
                 lifecycleStatus: "CANCELLED",
                 shipmentBookingStatus: "UNFULFILLED",
@@ -707,6 +720,7 @@ export class PublicCheckoutService {
             data: {
               ...transaction,
               ...redemption,
+              ...telegramPaidFields(order),
               paymentStatus: "PAID",
               shipmentBookingStatus: order.shipmentBookingStatus === "BOOKED" ? "BOOKED" : "UNFULFILLED",
               stockReleasedAt: null,
@@ -715,7 +729,7 @@ export class PublicCheckoutService {
         } else {
           await tx.order.update({
             where: { id: order.id },
-            data: { ...transaction, ...redemption, paymentStatus: "PAID" },
+            data: { ...transaction, ...redemption, ...telegramPaidFields(order), paymentStatus: "PAID" },
           });
         }
       } else if (terminal && order.paymentStatus === "PENDING") {
@@ -746,6 +760,10 @@ export class PublicCheckoutService {
       });
       return { stockUnavailable: false, cancelled: false };
     }, { timeout: 10_000 });
+
+    scheduleBackground(sendTelegramPaymentNotification(input.order_id).catch((error) => {
+      console.error(`Telegram payment notification crashed for order ${input.order_id}`, error);
+    }));
 
     let emailDeliveryFailed = false;
     if (!result.cancelled) {

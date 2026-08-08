@@ -7,6 +7,7 @@ import type { Prisma } from "../../generated/prisma/client.js";
 import { HttpError, notFound } from "../../http.js";
 import { createOrderInvoice, createShippingLabel } from "../../order-invoice.js";
 import { requestShipmentBooking } from "../public/checkout-service.js";
+import { sendTelegramPaymentNotification } from "../../telegram-service.js";
 
 export type OrderQueue = "READY_TO_PROCESS" | "PACKING" | "BOOKING_FAILED";
 
@@ -262,6 +263,9 @@ export class OrderService {
       idempotencyKey: _idempotencyKey,
       midtransSnapToken: _midtransSnapToken,
       paymentConfirmationEmailSendingAt: _paymentConfirmationEmailSendingAt,
+      telegramNotificationSendingAt: _telegramNotificationSendingAt,
+      telegramNotificationAttempts: _telegramNotificationAttempts,
+      telegramNotificationLastError: _telegramNotificationLastError,
       shipmentConfirmationEmailSendingAt: _shipmentConfirmationEmailSendingAt,
       ...safeOrder
     } = order;
@@ -596,6 +600,36 @@ export class OrderService {
         action: "CONFIRMATION_EMAIL_RESEND_FAILED",
         outcome: "FAILED",
         details: { message: error instanceof Error ? error.message : "Unknown email error" },
+      });
+      throw error;
+    }
+  }
+
+  static async resendTelegramNotification(orderId: string, adminId: string) {
+    try {
+      const order = await prisma.order.findUnique({
+        where: { id: orderId },
+        select: {
+          telegramNotificationQueuedAt: true,
+          telegramNotificationSentAt: true,
+          telegramNotificationFailedAt: true,
+        },
+      });
+      if (!order) notFound("Order not found");
+      if (!order.telegramNotificationQueuedAt || order.telegramNotificationSentAt || !order.telegramNotificationFailedAt) {
+        throw new HttpError(409, "TELEGRAM_RESEND_NOT_ALLOWED", "Only failed Telegram notifications can be resent");
+      }
+      const sent = await sendTelegramPaymentNotification(orderId, { force: true });
+      if (!sent) throw new HttpError(502, "TELEGRAM_DELIVERY_FAILED", "Telegram notification could not be sent");
+      await audit({ orderId, adminId, action: "TELEGRAM_NOTIFICATION_RESENT", outcome: "SUCCEEDED" });
+      return { sent: true };
+    } catch (error) {
+      await audit({
+        orderId,
+        adminId,
+        action: "TELEGRAM_NOTIFICATION_RESEND_FAILED",
+        outcome: "FAILED",
+        details: { message: error instanceof Error ? error.message : "Unknown Telegram error" },
       });
       throw error;
     }

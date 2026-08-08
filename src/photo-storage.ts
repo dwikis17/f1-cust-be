@@ -14,6 +14,10 @@ type StoredPhoto = { body: Uint8Array; contentType: string; etag: string };
 
 const requestStorage = new AsyncLocalStorage<PhotoStorageContext>();
 
+export function photoPrefixForRequest(hostname: string, appEnv: "production" | "staging") {
+  return hostname === "localhost" || hostname === "127.0.0.1" ? "development/" : `${appEnv}/`;
+}
+
 export function normalizePhotoPublicBaseUrl(value: string) {
   const url = new URL(value);
   if (

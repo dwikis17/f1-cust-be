@@ -4,6 +4,7 @@ import {
   deletePhoto,
   normalizePhotoPublicBaseUrl,
   type PhotoBucket,
+  photoPrefixForRequest,
   photoKey,
   photoUrl,
   readStoredPhoto,
@@ -13,6 +14,12 @@ import {
   storedPhotoUrl,
   storePhoto,
 } from "./photo-storage.js";
+
+test("deployed photo namespaces follow the selected environment", () => {
+  assert.equal(photoPrefixForRequest("localhost", "staging"), "development/");
+  assert.equal(photoPrefixForRequest("dev-api.valydejersey.com", "staging"), "staging/");
+  assert.equal(photoPrefixForRequest("api.valydejersey.com", "production"), "production/");
+});
 
 test("R2 photo lifecycle uses the request namespace", async () => {
   const objects = new Map<string, { body: Uint8Array; contentType: string }>();

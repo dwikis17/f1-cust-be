@@ -93,6 +93,10 @@ export class OrderController {
     response.json(await OrderService.resendConfirmation(orderId(request), adminId(response)));
   }
 
+  static async resendTelegramNotification(request: Request, response: Response) {
+    response.json(await OrderService.resendTelegramNotification(orderId(request), adminId(response)));
+  }
+
   static async resendShipmentConfirmation(request: Request, response: Response) {
     response.json(await OrderService.resendShipmentConfirmation(orderId(request), adminId(response)));
   }

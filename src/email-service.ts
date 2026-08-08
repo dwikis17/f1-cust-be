@@ -133,6 +133,7 @@ ${config.emailFromName}`,
 }
 
 export async function sendPaymentConfirmationEmail(orderId: string, options: { force?: boolean } = {}) {
+  if (!config.emailDeliveryEnabled) return false;
   const claimedAt = new Date();
   const staleBefore = new Date(claimedAt.getTime() - 10 * 60 * 1_000);
   const claimed = await prisma.order.updateMany({
@@ -170,6 +171,7 @@ export async function sendPaymentConfirmationEmail(orderId: string, options: { f
 }
 
 export async function sendShipmentConfirmationEmail(orderId: string, options: { force?: boolean } = {}) {
+  if (!config.emailDeliveryEnabled) return false;
   const claimedAt = new Date();
   const staleBefore = new Date(claimedAt.getTime() - 10 * 60 * 1_000);
   const claimed = await prisma.order.updateMany({
