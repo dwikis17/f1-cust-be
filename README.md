@@ -74,6 +74,7 @@ Send the login token as `Authorization: Bearer <token>` for all remaining admin 
 - `GET|POST /api/admin/products`
 - `GET|PATCH /api/admin/products/:id`
 - `GET /api/admin/orders/:id/payment-events`
+- `POST /api/admin/orders/:id/telegram-notification/resend`
 - `POST /api/admin/products/:productId/variants`
 - `PATCH|DELETE /api/admin/products/:productId/variants/:id`
 - `POST /api/admin/products/:productId/photos` using multipart fields `photo`, `altText`, optional `color`, and optional `position`
@@ -144,6 +145,17 @@ Guest checkout uses Midtrans Snap. The backend owns all price and stock calculat
 Checkout also requires a Cloudflare Turnstile token with action `checkout`. Local development uses the always-pass test secret from `.env.example`; configure the production secret with `npx wrangler secret put TURNSTILE_SECRET_KEY`. The storefront loads Snap using `NEXT_PUBLIC_MIDTRANS_CLIENT_KEY`. Biteship booking also requires the full pickup contact and address variables; a paid order remains visible as `BOOKING_FAILED` and a replayed Midtrans notification safely retries it.
 
 Accepted `capture` and `settlement` notifications also send a payment confirmation through the Worker `EMAIL` binding. The message contains the order lines, totals, delivery service, destination, tracking number when available, and a link to `/track-order`. Delivery is idempotent across repeated Midtrans notifications and is retried when Cloudflare temporarily rejects a send. Configure `EMAIL_FROM_ADDRESS`, `EMAIL_FROM_NAME`, and optional `EMAIL_REPLY_TO`; the sender domain must first be onboarded in Cloudflare Email Service.
+
+Accepted `capture` and `settlement` notifications also queue one Indonesian Telegram alert for the configured private chat. Telegram delivery runs after the payment transaction commits, retries transient failures every five minutes, and never changes payment state when Telegram is unavailable. Configure `TELEGRAM_BOT_TOKEN` and `TELEGRAM_CHAT_ID`; production payments refuse to start without both values. Create the bot with BotFather, have the recipient start the bot, then obtain the private chat ID from Telegram's `getUpdates` response. The bot is outbound-only and does not need a Telegram webhook.
+
+For production Workers, store both values as secrets:
+
+```sh
+npx wrangler secret put TELEGRAM_BOT_TOKEN
+npx wrangler secret put TELEGRAM_CHAT_ID
+```
+
+Failed permanent deliveries can be retried from the authenticated admin order page. The normal Telegram message includes the order number, customer name and phone, items and quantities, total, payment method, destination city/province, and the admin order link; it does not include the customer's email or full address.
 
 ## Cloudflare Worker deployment
 

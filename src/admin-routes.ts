@@ -36,6 +36,7 @@ router.get("/orders/:id/shipment", OrderController.shipment);
 router.post("/orders/:id/cancel", OrderController.cancel);
 router.post("/orders/:id/external-refund", OrderController.markExternalRefund);
 router.post("/orders/:id/confirmation-email/resend", OrderController.resendConfirmation);
+router.post("/orders/:id/telegram-notification/resend", OrderController.resendTelegramNotification);
 router.post("/orders/:id/shipment-email/resend", OrderController.resendShipmentConfirmation);
 router.get("/orders/:id/invoice.pdf", OrderController.invoice);
 router.get("/orders/:id/shipping-label.pdf", OrderController.shippingLabel);

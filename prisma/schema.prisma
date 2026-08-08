@@ -363,6 +363,12 @@ model Order {
   midtransSnapToken                  String?
   paymentConfirmationEmailSendingAt  DateTime?
   paymentConfirmationEmailSentAt     DateTime?
+  telegramNotificationQueuedAt      DateTime?
+  telegramNotificationSendingAt     DateTime?
+  telegramNotificationSentAt        DateTime?
+  telegramNotificationFailedAt      DateTime?
+  telegramNotificationAttempts      Int                    @default(0)
+  telegramNotificationLastError     String?
   shipmentConfirmationEmailSendingAt DateTime?
   shipmentConfirmationEmailSentAt    DateTime?
   stockReleasedAt                    DateTime?
@@ -385,6 +391,7 @@ model Order {
   updatedAt                          DateTime               @updatedAt
 
   @@index([paymentStatus, createdAt])
+  @@index([telegramNotificationQueuedAt, telegramNotificationSentAt])
   @@index([shipmentBookingStatus, createdAt])
   @@index([shipmentBookingStartedAt])
   @@index([lifecycleStatus, createdAt])

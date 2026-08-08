@@ -3,9 +3,10 @@ import { createApp } from "./app.js";
 import { createPrisma, runWithPrisma } from "./db.js";
 import { runWithEmailSender } from "./email-service.js";
 import { photoPrefixForRequest, runWithPhotoBucket } from "./photo-storage.js";
-import { runWithExecutionContext } from "./background.js";
+import { runWithExecutionContext, waitForBackgroundTasks } from "./background.js";
 import { PublicCheckoutService } from "./services/public/checkout-service.js";
 import { revalidateStorefront } from "./storefront-revalidation.js";
+import { reconcilePendingTelegramNotifications } from "./telegram-service.js";
 
 const port = 3000;
 const app = createApp({ localUploads: false });
@@ -18,30 +19,54 @@ export default {
     const prisma = createPrisma(env.HYPERDRIVE.connectionString);
     const hostname = new URL(request.url).hostname;
     const photoPrefix = photoPrefixForRequest(hostname, env.APP_ENV);
+    let backgroundTasks: Promise<unknown> | undefined;
     try {
-      return await runWithExecutionContext(ctx, () => runWithEmailSender(env.EMAIL, () =>
-        runWithPhotoBucket(env.PHOTO_BUCKET, photoPrefix, env.PHOTO_PUBLIC_BASE_URL, () =>
-          runWithPrisma(prisma, async () => {
-            if (!expressHandler.fetch) throw new Error("Express Worker handler is unavailable");
-            return expressHandler.fetch.call(expressHandler, request, env, ctx);
-          }),
-        ),
-      ));
-    } finally {
-      await prisma.$disconnect();
+      const response = await runWithExecutionContext(ctx, async () => {
+        try {
+          return await runWithEmailSender(env.EMAIL, () => runWithPhotoBucket(
+            env.PHOTO_BUCKET,
+            photoPrefix,
+            env.PHOTO_PUBLIC_BASE_URL,
+            () => runWithPrisma(prisma, async () => {
+              if (!expressHandler.fetch) throw new Error("Express Worker handler is unavailable");
+              return expressHandler.fetch.call(expressHandler, request, env, ctx);
+            }),
+          ));
+        } finally {
+          backgroundTasks = waitForBackgroundTasks();
+        }
+      });
+      ctx.waitUntil((backgroundTasks ?? Promise.resolve()).finally(() => prisma.$disconnect()));
+      return response;
+    } catch (error) {
+      if (backgroundTasks) ctx.waitUntil(backgroundTasks.finally(() => prisma.$disconnect()));
+      else await prisma.$disconnect();
+      throw error;
     }
   },
-  async scheduled(_controller, env, ctx): Promise<void> {
+  async scheduled(controller, env, ctx): Promise<void> {
     const prisma = createPrisma(env.HYPERDRIVE.connectionString);
+    let backgroundTasks: Promise<unknown> | undefined;
     try {
-      await runWithExecutionContext(ctx, () => runWithEmailSender(env.EMAIL, () =>
-        runWithPrisma(prisma, async () => {
-          const result = await PublicCheckoutService.reconcilePendingPayments();
-          if (result.catalogChanged) revalidateStorefront(["catalog:products"]);
-        }),
-      ));
-    } finally {
-      await prisma.$disconnect();
+      await runWithExecutionContext(ctx, async () => {
+        try {
+          await runWithEmailSender(env.EMAIL, () => runWithPrisma(prisma, async () => {
+            if (controller.cron === "*/5 * * * *") {
+              await reconcilePendingTelegramNotifications();
+              return;
+            }
+            const result = await PublicCheckoutService.reconcilePendingPayments();
+            if (result.catalogChanged) revalidateStorefront(["catalog:products"]);
+          }));
+        } finally {
+          backgroundTasks = waitForBackgroundTasks();
+        }
+      });
+      ctx.waitUntil((backgroundTasks ?? Promise.resolve()).finally(() => prisma.$disconnect()));
+    } catch (error) {
+      if (backgroundTasks) ctx.waitUntil(backgroundTasks.finally(() => prisma.$disconnect()));
+      else await prisma.$disconnect();
+      throw error;
     }
   },
 } satisfies ExportedHandler<Env>;

@@ -11,6 +11,7 @@ import { prisma } from "./db-node.js";
 import { sendPaymentConfirmationEmail, setDefaultEmailSender } from "./email-service.js";
 import { storePhoto } from "./photo-storage.js";
 import { PublicCheckoutService } from "./services/public/checkout-service.js";
+import { reconcilePendingTelegramNotifications } from "./telegram-service.js";
 
 const app = createApp();
 import { hashPassword, hashToken } from "./security.js";
@@ -1678,6 +1679,8 @@ test("checkout verifies payment notifications, reserves stock, and waits for man
     emailFromName: config.emailFromName,
     emailReplyTo: config.emailReplyTo,
     emailDeliveryEnabled: config.emailDeliveryEnabled,
+    telegramBotToken: config.telegramBotToken,
+    telegramChatId: config.telegramChatId,
   };
   const product = await request(app).get("/api/products/ferrari-team-jersey").expect(200);
   const variantId = product.body.variants[0].id as string;
@@ -1697,15 +1700,20 @@ test("checkout verifies payment notifications, reserves stock, and waits for man
   config.emailFromName = "Valyde Jersey";
   config.emailReplyTo = "support@valydejersey.com";
   config.emailDeliveryEnabled = true;
+  config.telegramBotToken = "telegram-test-token";
+  config.telegramChatId = "123456789";
 
   let rateCalls = 0;
   let snapCalls = 0;
   let bookingCalls = 0;
   let trackingCalls = 0;
+  let telegramCalls = 0;
+  let telegramMode: "success" | "transient" | "permanent" = "success";
   let trackingMode: "success" | "unavailable" | "malformed" = "success";
   let failNextBooking = false;
   const statusResponses = new Map<string, Record<string, unknown> | "upstream-error">();
   const sentEmails: EmailMessageBuilder[] = [];
+  const telegramBodies: Array<{ chat_id: string; text: string; disable_web_page_preview: boolean }> = [];
   setDefaultEmailSender({
     async send(message) {
       sentEmails.push(message);
@@ -1810,8 +1818,50 @@ test("checkout verifies payment notifications, reserves stock, and waits for man
         status: "in_transit",
       }), { status: 200, headers: { "content-type": "application/json" } });
     }
+    if (url === "https://api.telegram.org/bottelegram-test-token/sendMessage") {
+      telegramCalls += 1;
+      const body = JSON.parse(String(init?.body)) as typeof telegramBodies[number];
+      telegramBodies.push(body);
+      if (telegramMode === "transient") {
+        return Response.json({ ok: false, error_code: 500, description: "Telegram is temporarily unavailable" }, { status: 500 });
+      }
+      if (telegramMode === "permanent") {
+        return Response.json({ ok: false, error_code: 401, description: "Unauthorized" }, { status: 401 });
+      }
+      return Response.json({ ok: true, result: { message_id: telegramCalls } });
+    }
     throw new Error(`Unexpected fetch ${url}`);
   };
+
+  async function waitForTelegram(orderId: string) {
+    const deadline = Date.now() + 2_000;
+    while (Date.now() < deadline) {
+      const order = await prisma.order.findUnique({
+        where: { id: orderId },
+        select: { telegramNotificationSentAt: true },
+      });
+      if (order?.telegramNotificationSentAt) return order;
+      await new Promise((resolve) => setTimeout(resolve, 10));
+    }
+    throw new Error(`Telegram notification did not send for ${orderId}`);
+  }
+
+  async function waitForTelegramAttempt(orderId: string, attempts: number) {
+    const deadline = Date.now() + 2_000;
+    while (Date.now() < deadline) {
+      const order = await prisma.order.findUnique({
+        where: { id: orderId },
+        select: {
+          telegramNotificationAttempts: true,
+          telegramNotificationFailedAt: true,
+          telegramNotificationSentAt: true,
+        },
+      });
+      if (order && order.telegramNotificationAttempts >= attempts) return order;
+      await new Promise((resolve) => setTimeout(resolve, 10));
+    }
+    throw new Error(`Telegram notification did not reach attempt ${attempts} for ${orderId}`);
+  }
 
   function notification(orderId: string, status: string, grossAmount = "1268000.00") {
     const statusCode = status === "settlement" ? "200" : "201";
@@ -1928,6 +1978,13 @@ test("checkout verifies payment notifications, reserves stock, and waits for man
       .send(notification(checkout.body.orderId, "settlement", "1168000.00")).expect(200);
     await request(app).post("/api/payments/midtrans/notification")
       .send(notification(checkout.body.orderId, "settlement", "1168000.00")).expect(200);
+    await waitForTelegram(checkout.body.orderId);
+    assert.equal(telegramCalls, 1);
+    assert.equal(telegramBodies[0].chat_id, "123456789");
+    assert.match(telegramBodies[0].text, /✅ Pembayaran berhasil/);
+    assert.match(telegramBodies[0].text, /Pelanggan: Ayu Racer · 081234567890/);
+    assert.match(telegramBodies[0].text, /Item: Ferrari Team Jersey \(Red \/ M\) x1/);
+    assert.match(telegramBodies[0].text, /Detail: http:\/\/localhost:3001\/dashboard\/orders\//);
     assert.equal(bookingCalls, 0);
     assert.equal(sentEmails.length, 1);
     assert.deepEqual(sentEmails[0].to, { email: "buyer@example.com", name: "Ayu Racer" });
@@ -2207,6 +2264,76 @@ test("checkout verifies payment notifications, reserves stock, and waits for man
     }), 1);
     await request(app).post("/api/payments/midtrans/notification")
       .send(notification(reconciliationInvalid.body.orderId, "expire")).expect(200);
+
+    const telegramProduct = await prisma.product.create({
+      data: {
+        name: "Telegram Test Product",
+        slug: "telegram-test-product",
+        priceIdr: 100_000,
+        status: "ACTIVE",
+        condition: "BNIB",
+        categoryId,
+        variants: {
+          create: [{
+            sku: "TELEGRAM-TEST",
+            stockQuantity: 10,
+            packageLengthMm: 100,
+            packageWidthMm: 100,
+            packageHeightMm: 100,
+            packageWeightG: 100,
+          }],
+        },
+      },
+      include: { variants: true },
+    });
+    const telegramPayload = {
+      ...payload,
+      items: [{ variantId: telegramProduct.variants[0].id, quantity: 1 }],
+    };
+    const transientTelegramCheckout = await request(app).post("/api/checkout")
+      .send({ ...telegramPayload, idempotencyKey: randomUUID() }).expect(201);
+    telegramMode = "transient";
+    await request(app).post("/api/payments/midtrans/notification")
+      .send(notification(transientTelegramCheckout.body.orderId, "settlement", "118000.00")).expect(200);
+    const transientFailure = await waitForTelegramAttempt(transientTelegramCheckout.body.orderId, 1);
+    assert.equal(transientFailure.telegramNotificationFailedAt, null);
+    assert.equal((await prisma.order.findUniqueOrThrow({ where: { id: transientTelegramCheckout.body.orderId } })).paymentStatus, "PAID");
+    telegramMode = "success";
+    const retryResult = await reconcilePendingTelegramNotifications();
+    assert.equal(retryResult.checked >= 1, true);
+    await waitForTelegram(transientTelegramCheckout.body.orderId);
+    const retried = await prisma.order.findUniqueOrThrow({ where: { id: transientTelegramCheckout.body.orderId } });
+    assert.equal(retried.telegramNotificationAttempts, 2);
+
+    const permanentTelegramCheckout = await request(app).post("/api/checkout")
+      .send({ ...telegramPayload, idempotencyKey: randomUUID() }).expect(201);
+    telegramMode = "permanent";
+    await request(app).post("/api/payments/midtrans/notification")
+      .send(notification(permanentTelegramCheckout.body.orderId, "settlement", "118000.00")).expect(200);
+    const permanentFailure = await waitForTelegramAttempt(permanentTelegramCheckout.body.orderId, 1);
+    assert.ok(permanentFailure.telegramNotificationFailedAt);
+    await request(app).post(`/api/admin/orders/${permanentTelegramCheckout.body.orderId}/telegram-notification/resend`)
+      .expect(401);
+    telegramMode = "success";
+    await request(app).post(`/api/admin/orders/${permanentTelegramCheckout.body.orderId}/telegram-notification/resend`)
+      .set("authorization", `Bearer ${token}`).expect(200, { sent: true });
+    await waitForTelegram(permanentTelegramCheckout.body.orderId);
+
+    const refundedTelegramCheckout = await request(app).post("/api/checkout")
+      .send({ ...telegramPayload, idempotencyKey: randomUUID() }).expect(201);
+    telegramMode = "transient";
+    await request(app).post("/api/payments/midtrans/notification")
+      .send(notification(refundedTelegramCheckout.body.orderId, "settlement", "118000.00")).expect(200);
+    await waitForTelegramAttempt(refundedTelegramCheckout.body.orderId, 1);
+    await request(app).post("/api/payments/midtrans/notification")
+      .send(notification(refundedTelegramCheckout.body.orderId, "refund", "118000.00")).expect(200);
+    await waitForTelegramAttempt(refundedTelegramCheckout.body.orderId, 2);
+    const refundedTelegramOrder = await prisma.order.findUniqueOrThrow({ where: { id: refundedTelegramCheckout.body.orderId } });
+    assert.equal(refundedTelegramOrder.paymentStatus, "REFUNDED");
+    telegramMode = "success";
+    await reconcilePendingTelegramNotifications();
+    await waitForTelegram(refundedTelegramCheckout.body.orderId);
+    assert.match(telegramBodies.at(-1)?.text ?? "", /pembayaran kemudian direfund/);
   } finally {
     globalThis.fetch = originalFetch;
     config.biteshipApiKey = originalConfig.apiKey;
@@ -2225,6 +2352,8 @@ test("checkout verifies payment notifications, reserves stock, and waits for man
     config.emailFromName = originalConfig.emailFromName;
     config.emailReplyTo = originalConfig.emailReplyTo;
     config.emailDeliveryEnabled = originalConfig.emailDeliveryEnabled;
+    config.telegramBotToken = originalConfig.telegramBotToken;
+    config.telegramChatId = originalConfig.telegramChatId;
     setDefaultEmailSender();
   }
 });

@@ -22,6 +22,8 @@ const env = z.object({
   MIDTRANS_SERVER_KEY: z.string().trim().optional(),
   MIDTRANS_NOTIFICATION_URL: z.string().url().optional(),
   STOREFRONT_URL: z.string().url().optional(),
+  TELEGRAM_BOT_TOKEN: z.string().trim().min(1).optional(),
+  TELEGRAM_CHAT_ID: z.string().trim().regex(/^-?\d+$/).optional(),
   TURNSTILE_SECRET_KEY: z.string().trim().optional(),
   STOREFRONT_REVALIDATE_SECRET: z.string().trim().min(32).optional(),
   EMAIL_FROM_ADDRESS: z.string().trim().email().optional(),
@@ -55,6 +57,8 @@ export const config = {
   midtransServerKey: env.MIDTRANS_SERVER_KEY,
   midtransNotificationUrl: env.MIDTRANS_NOTIFICATION_URL,
   storefrontUrl: env.STOREFRONT_URL?.replace(/\/$/, ""),
+  telegramBotToken: env.TELEGRAM_BOT_TOKEN,
+  telegramChatId: env.TELEGRAM_CHAT_ID,
   turnstileSecretKey: env.TURNSTILE_SECRET_KEY,
   storefrontRevalidateSecret: env.STOREFRONT_REVALIDATE_SECRET,
   emailFromAddress: env.EMAIL_FROM_ADDRESS,
@@ -66,6 +70,10 @@ export const config = {
   invoiceSellerPhone: env.INVOICE_SELLER_PHONE,
   invoiceSellerAddress: env.INVOICE_SELLER_ADDRESS,
 };
+
+if (env.MIDTRANS_ENV === "production" && (!env.TELEGRAM_BOT_TOKEN || !env.TELEGRAM_CHAT_ID)) {
+  throw new Error("TELEGRAM_BOT_TOKEN and TELEGRAM_CHAT_ID are required for production payments");
+}
 
 export function requireDatabaseUrl() {
   if (!config.databaseUrl) throw new Error("DATABASE_URL is required outside the Cloudflare Worker runtime");
