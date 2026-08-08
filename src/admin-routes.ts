@@ -14,6 +14,11 @@ import { HomeController } from "./controllers/home-controller.js";
 const router = Router();
 const upload = multer({ storage: multer.memoryStorage(), limits: { fileSize: config.maxUploadBytes, files: 3 } });
 
+router.use((_request, response, next) => {
+  response.set("cache-control", "no-store");
+  next();
+});
+
 router.post("/auth/login", AuthController.login);
 router.use(AuthController.requireAdmin);
 router.post("/auth/logout", AuthController.logout);

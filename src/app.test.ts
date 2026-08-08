@@ -408,7 +408,7 @@ test("admins search, operate, audit, export, and invoice orders safely", async (
   await request(app).get("/api/admin/orders?limit=101").set("authorization", `Bearer ${token}`).expect(400);
 
   const detail = await request(app).get(`/api/admin/orders/${searchable.id}`)
-    .set("authorization", `Bearer ${token}`).expect(200);
+    .set("authorization", `Bearer ${token}`).expect("cache-control", "no-store").expect(200);
   assert.equal(detail.body.idempotencyKey, undefined);
   assert.equal(detail.body.midtransSnapToken, undefined);
   assert.equal(detail.body.refundState, "NONE");
@@ -419,6 +419,9 @@ test("admins search, operate, audit, export, and invoice orders safely", async (
     .set("authorization", `Bearer ${token}`).send({ status: "PROCESSING" }).expect(409);
   await request(app).patch(`/api/admin/orders/${lifecycle.id}/lifecycle`)
     .set("authorization", `Bearer ${token}`).send({ status: "PROCESSING" }).expect(200);
+  const processingDetail = await request(app).get(`/api/admin/orders/${lifecycle.id}`)
+    .set("authorization", `Bearer ${token}`).expect("cache-control", "no-store").expect(200);
+  assert.equal(processingDetail.body.lifecycleStatus, "PROCESSING");
   await request(app).patch(`/api/admin/orders/${lifecycle.id}/lifecycle`)
     .set("authorization", `Bearer ${token}`).send({ status: "PROCESSING" }).expect(409);
   const failedQueue = await request(app).get("/api/admin/orders?queue=BOOKING_FAILED")
@@ -507,6 +510,10 @@ test("admins search, operate, audit, export, and invoice orders safely", async (
       .set("authorization", `Bearer ${token}`).expect(200);
     assert.equal(firstBooking.body.lifecycleStatus, "FULFILLED");
     assert.equal(firstBooking.body.shipmentBookingStatus, "BOOKED");
+    const bookedDetail = await request(app).get(`/api/admin/orders/${lifecycle.id}`)
+      .set("authorization", `Bearer ${token}`).expect("cache-control", "no-store").expect(200);
+    assert.equal(bookedDetail.body.lifecycleStatus, "FULFILLED");
+    assert.equal(bookedDetail.body.shipmentBookingStatus, "BOOKED");
     assert.equal(shipmentBookingBodies[0].origin_collection_method, "pickup");
     assert.equal(shipmentBookingBodies[0].delivery_type, "now");
     assert.match(previousSenderMessages[0].subject ?? "", /Your order has shipped/);
@@ -2400,10 +2407,18 @@ test("photo uploads validate signatures and clean up files", async () => {
   const storedPath = path.join(config.uploadDir, storedKey);
   await access(storedPath);
   await request(app).get(upload.body.path).expect("content-type", /image\/png/).expect(200);
+  const adminProductAfterUpload = await request(app).get(`/api/admin/products/${productId}`)
+    .set("authorization", `Bearer ${token}`).expect("cache-control", "no-store").expect(200);
+  assert.ok(adminProductAfterUpload.body.photos.some((photo: { id: string }) => photo.id === upload.body.id));
   const publicProduct = await request(app).get("/api/products/ferrari-team-jersey").expect(200);
   assert.equal(publicProduct.body.photos[0].url, upload.body.path);
   await request(app).delete(`/api/admin/products/${productId}/photos/${upload.body.id}`)
     .set("authorization", `Bearer ${token}`).expect(204);
+  const adminProductAfterDelete = await request(app).get(`/api/admin/products/${productId}`)
+    .set("authorization", `Bearer ${token}`).expect("cache-control", "no-store").expect(200);
+  assert.ok(!adminProductAfterDelete.body.photos.some((photo: { id: string }) => photo.id === upload.body.id));
+  await request(app).delete(`/api/admin/products/${productId}/photos/${upload.body.id}`)
+    .set("authorization", `Bearer ${token}`).expect(404);
   await assert.rejects(access(storedPath));
 
   const legacyKey = `legacy-${randomUUID()}.png`;
