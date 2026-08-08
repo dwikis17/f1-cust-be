@@ -20,10 +20,10 @@
     "MAX_PHOTOS_PER_PRODUCT": "12",
     "PHOTO_PUBLIC_BASE_URL": "https://media.valydejersey.com",
     "BITESHIP_COURIERS": "jne,jnt,sicepat,anteraja",
-    "BITESHIP_ORIGIN_POSTAL_CODE": "15318",
-    "BITESHIP_ORIGIN_CONTACT_NAME": "dwiki",
-    "BITESHIP_ORIGIN_CONTACT_PHONE": "081382854010",
-    "BITESHIP_ORIGIN_ADDRESS": "anggrek lok aaf 1",
+    "BITESHIP_ORIGIN_POSTAL_CODE": "28123",
+    "BITESHIP_ORIGIN_CONTACT_NAME": "Valyde Jersey",
+    "BITESHIP_ORIGIN_CONTACT_PHONE": "+6285121565774",
+    "BITESHIP_ORIGIN_ADDRESS": "Jalan Kemiri No 2 Sukajadi Pekanbaru Riau",
     "MIDTRANS_ENV": "production",
     "MIDTRANS_MERCHANT_ID": "M309500554",
     "STOREFRONT_URL": "https://valydejersey.com",
@@ -34,8 +34,8 @@
     "EMAIL_DELIVERY_ENABLED": "true",
     "INVOICE_SELLER_NAME": "Valyde Jersey",
     "INVOICE_SELLER_EMAIL": "support@valydejersey.com",
-    "INVOICE_SELLER_PHONE": "081382854010",
-    "INVOICE_SELLER_ADDRESS": "anggrek lok aaf 1"
+    "INVOICE_SELLER_PHONE": "+6285121565774",
+    "INVOICE_SELLER_ADDRESS": "Jalan Kemiri No 2 Sukajadi Pekanbaru Riau"
   },
   "send_email": [
     {
