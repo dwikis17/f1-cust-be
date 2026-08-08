@@ -155,7 +155,7 @@ npx wrangler secret put TELEGRAM_BOT_TOKEN
 npx wrangler secret put TELEGRAM_CHAT_ID
 ```
 
-Failed permanent deliveries can be retried from the authenticated admin order page. The normal Telegram message includes the order number, customer name and phone, items and quantities, total, payment method, destination city/province, and the admin order link; it does not include the customer's email or full address.
+Failed permanent deliveries can be retried from the authenticated admin order page. Set `ADMIN_DASHBOARD_URL` to the admin host for each environment; the normal Telegram message includes the order number, customer name and phone, items and quantities, total, payment method, destination city/province, and the admin order link; it does not include the customer's email or full address.
 
 ## Cloudflare Worker deployment
 

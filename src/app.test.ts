@@ -1674,6 +1674,7 @@ test("checkout verifies payment notifications, reserves stock, and waits for man
     serverKey: config.midtransServerKey,
     notificationUrl: config.midtransNotificationUrl,
     storefrontUrl: config.storefrontUrl,
+    adminDashboardUrl: config.adminDashboardUrl,
     turnstileSecretKey: config.turnstileSecretKey,
     emailFromAddress: config.emailFromAddress,
     emailFromName: config.emailFromName,
@@ -1695,6 +1696,7 @@ test("checkout verifies payment notifications, reserves stock, and waits for man
   config.midtransServerKey = "server-test";
   config.midtransNotificationUrl = "https://dev-api.valydejersey.com/api/payments/midtrans/notification";
   config.storefrontUrl = "http://localhost:3001";
+  config.adminDashboardUrl = "http://localhost:3002";
   config.turnstileSecretKey = "turnstile-test-secret";
   config.emailFromAddress = "orders@valydejersey.com";
   config.emailFromName = "Valyde Jersey";
@@ -1984,7 +1986,7 @@ test("checkout verifies payment notifications, reserves stock, and waits for man
     assert.match(telegramBodies[0].text, /✅ Pembayaran berhasil/);
     assert.match(telegramBodies[0].text, /Pelanggan: Ayu Racer · 081234567890/);
     assert.match(telegramBodies[0].text, /Item: Ferrari Team Jersey \(Red \/ M\) x1/);
-    assert.match(telegramBodies[0].text, /Detail: http:\/\/localhost:3001\/dashboard\/orders\//);
+    assert.match(telegramBodies[0].text, /Detail: http:\/\/localhost:3002\/dashboard\/orders\//);
     assert.equal(bookingCalls, 0);
     assert.equal(sentEmails.length, 1);
     assert.deepEqual(sentEmails[0].to, { email: "buyer@example.com", name: "Ayu Racer" });
@@ -2347,6 +2349,7 @@ test("checkout verifies payment notifications, reserves stock, and waits for man
     config.midtransServerKey = originalConfig.serverKey;
     config.midtransNotificationUrl = originalConfig.notificationUrl;
     config.storefrontUrl = originalConfig.storefrontUrl;
+    config.adminDashboardUrl = originalConfig.adminDashboardUrl;
     config.turnstileSecretKey = originalConfig.turnstileSecretKey;
     config.emailFromAddress = originalConfig.emailFromAddress;
     config.emailFromName = originalConfig.emailFromName;

@@ -76,7 +76,7 @@ function statusLine(order: TelegramOrder) {
 }
 
 function detailUrl(order: TelegramOrder) {
-  return config.storefrontUrl ? `${config.storefrontUrl}/dashboard/orders/${order.id}` : null;
+  return config.adminDashboardUrl ? `${config.adminDashboardUrl}/dashboard/orders/${order.id}` : null;
 }
 
 export function buildTelegramMessage(order: TelegramOrder) {
