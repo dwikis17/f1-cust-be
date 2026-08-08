@@ -8,8 +8,12 @@ import { scheduleBackground } from "../../background.js";
 import type { Prisma } from "../../generated/prisma/client.js";
 import { HttpError, notFound } from "../../http.js";
 import { effectivePriceIdr } from "../../product-price.js";
+import {
+  toDbCollectionMethod,
+  type ShipmentCollectionMethod,
+} from "../../shipment-collection.js";
 import { calculatePromoDiscount } from "../promo-code-service.js";
-import { PublicShippingService } from "./shipping-service.js";
+import { PublicShippingService, requestBiteshipRates } from "./shipping-service.js";
 import { sendTelegramPaymentNotification } from "../../telegram-service.js";
 
 export type CheckoutInput = {
@@ -75,7 +79,7 @@ const midtransStatusSchema = z.object({
   payment_type: z.string().max(80).optional(),
 }).passthrough();
 
-type OrderWithItems = Prisma.OrderGetPayload<{ include: { items: true } }>;
+export type OrderWithItems = Prisma.OrderGetPayload<{ include: { items: true } }>;
 type VariantSnapshot = Pick<OrderWithItems["items"][number], "productName" | "sku" | "color" | "size">;
 const RECONCILIATION_STALE_MS = 15 * 60 * 1_000;
 const RECONCILIATION_BATCH_SIZE = 50;
@@ -278,16 +282,79 @@ export type ShipmentBookingResult = {
   waybillId: string | null;
   priceIdr: number | null;
   providerStatus: string;
+  collectionMethod: ShipmentCollectionMethod;
+  availableCollectionMethods: ShipmentCollectionMethod[];
 } | {
   success: false;
-  code: "CONFIGURATION" | "UPSTREAM" | "INVALID_RESPONSE";
+  code: "CONFIGURATION" | "UPSTREAM" | "INVALID_RESPONSE" | "COLLECTION_METHOD_UNAVAILABLE" | "RATE_UNAVAILABLE";
   message: string;
+  availableCollectionMethods?: ShipmentCollectionMethod[];
 };
 
-export async function requestShipmentBooking(order: OrderWithItems): Promise<ShipmentBookingResult> {
+function biteshipItems(order: OrderWithItems) {
+  return order.items.map((item) => {
+    const description = variantDescription(item);
+    return {
+      name: variantName(item),
+      ...(description ? { description } : {}),
+      category: "fashion",
+      sku: item.sku,
+      value: item.unitPriceIdr,
+      quantity: item.quantity,
+      weight: item.packageWeightG,
+      height: item.packageHeightMm / 10,
+      length: item.packageLengthMm / 10,
+      width: item.packageWidthMm / 10,
+    };
+  });
+}
+
+export async function getShipmentCollectionOptions(order: OrderWithItems) {
+  const rates = await requestBiteshipRates({
+    destinationPostalCode: order.postalCode,
+    items: biteshipItems(order),
+  });
+  const rate = rates.find((item) => item.courierCode === order.courierCode && item.serviceCode === order.courierServiceCode);
+  if (!rate) throw new HttpError(409, "SHIPMENT_RATE_UNAVAILABLE", "The selected shipping service is no longer available");
+  return { rate, availableCollectionMethods: rate.availableCollectionMethods };
+}
+
+export async function requestShipmentBooking(
+  order: OrderWithItems,
+  requestedCollectionMethod: ShipmentCollectionMethod = "drop_off",
+): Promise<ShipmentBookingResult> {
   if (!config.biteshipApiKey || !config.biteshipOriginPostalCode || !config.biteshipOriginContactName
     || !config.biteshipOriginContactPhone || !config.biteshipOriginAddress) {
-    return { success: false, code: "CONFIGURATION", message: "Biteship pickup is not configured" };
+    return { success: false, code: "CONFIGURATION", message: "Biteship shipment booking is not configured" };
+  }
+
+  let availableCollectionMethods: ShipmentCollectionMethod[];
+  try {
+    ({ availableCollectionMethods } = await getShipmentCollectionOptions(order));
+  } catch (error) {
+    if (error instanceof HttpError) {
+      return {
+        success: false,
+        code: error.code === "SHIPMENT_RATE_UNAVAILABLE" ? "RATE_UNAVAILABLE" : error.code === "SHIPPING_NOT_CONFIGURED" ? "CONFIGURATION" : "UPSTREAM",
+        message: error.message,
+        ...(error.code === "SHIPMENT_RATE_UNAVAILABLE" ? { availableCollectionMethods: [] } : {}),
+      };
+    }
+    return { success: false, code: "UPSTREAM", message: "Biteship rates are temporarily unavailable" };
+  }
+
+  const collectionMethod = requestedCollectionMethod === "drop_off"
+    && !availableCollectionMethods.includes("drop_off")
+    && availableCollectionMethods.includes("pickup")
+    ? "pickup"
+    : requestedCollectionMethod;
+  if (!availableCollectionMethods.includes(collectionMethod)) {
+    return {
+      success: false,
+      code: "COLLECTION_METHOD_UNAVAILABLE",
+      message: "The selected handover method is no longer available; choose another method",
+      availableCollectionMethods,
+    };
   }
 
   let response: Response;
@@ -300,7 +367,7 @@ export async function requestShipmentBooking(order: OrderWithItems): Promise<Shi
         origin_contact_phone: config.biteshipOriginContactPhone,
         origin_address: config.biteshipOriginAddress,
         origin_postal_code: Number(config.biteshipOriginPostalCode),
-        origin_collection_method: "pickup",
+        origin_collection_method: collectionMethod,
         destination_contact_name: `${order.firstName} ${order.lastName}`,
         destination_contact_phone: order.phone,
         destination_contact_email: order.email,
@@ -310,21 +377,7 @@ export async function requestShipmentBooking(order: OrderWithItems): Promise<Shi
         courier_type: order.courierServiceCode,
         delivery_type: "now",
         reference_id: order.id,
-        items: order.items.map((item) => {
-          const description = variantDescription(item);
-          return {
-            name: variantName(item),
-            ...(description ? { description } : {}),
-            category: "fashion",
-            sku: item.sku,
-            value: item.unitPriceIdr,
-            quantity: item.quantity,
-            weight: item.packageWeightG,
-            height: item.packageHeightMm / 10,
-            length: item.packageLengthMm / 10,
-            width: item.packageWidthMm / 10,
-          };
-        }),
+        items: biteshipItems(order),
       }),
       signal: AbortSignal.timeout(3_000),
     });
@@ -347,6 +400,8 @@ export async function requestShipmentBooking(order: OrderWithItems): Promise<Shi
       waybillId: created.data.courier.waybill_id ?? null,
       priceIdr: created.data.price,
       providerStatus: created.data.status,
+      collectionMethod,
+      availableCollectionMethods,
     };
   }
   if (!duplicate.success) {
@@ -359,6 +414,8 @@ export async function requestShipmentBooking(order: OrderWithItems): Promise<Shi
     waybillId: duplicate.data.details.waybill_id ?? null,
     priceIdr: null,
     providerStatus: "confirmed",
+    collectionMethod,
+    availableCollectionMethods,
   };
 }
 
@@ -457,6 +514,7 @@ export class PublicCheckoutService {
             courierServiceCode: rate.serviceCode,
             courierServiceName: rate.serviceName,
             courierDuration: rate.duration,
+            shipmentAvailableCollectionMethods: rate.availableCollectionMethods.map(toDbCollectionMethod),
             items: {
               create: variants.map((variant) => ({
                 variantId: variant.id,

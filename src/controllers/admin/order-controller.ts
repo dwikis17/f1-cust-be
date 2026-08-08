@@ -4,6 +4,7 @@ import { z } from "zod";
 import { parse } from "../../http.js";
 import { idSchema } from "../../schemas.js";
 import { OrderService, type OrderListInput } from "../../services/admin/order-service.js";
+import { shipmentCollectionMethodSchema } from "../../shipment-collection.js";
 
 const paymentStatus = z.enum(["PENDING", "PAID", "FAILED", "EXPIRED", "CANCELLED", "REFUNDED"]);
 const lifecycleStatus = z.enum(["UNFULFILLED", "PROCESSING", "FULFILLED", "CANCELLED"]);
@@ -25,6 +26,7 @@ const listQuerySchema = z.object({
 }).strict();
 const lifecycleBodySchema = z.object({ status: z.literal("PROCESSING") }).strict();
 const reasonBodySchema = z.object({ reason: z.string().trim().min(3).max(500) }).strict();
+const shipmentBookingBodySchema = z.object({ collectionMethod: shipmentCollectionMethodSchema.optional() }).strict();
 
 function jakartaDate(value: string, endExclusive = false) {
   const date = new Date(`${value}T00:00:00+07:00`);
@@ -50,6 +52,10 @@ function adminId(response: Response) {
   return response.locals.admin.id as string;
 }
 
+function shipmentBookingInput(request: Request) {
+  return parse(shipmentBookingBodySchema, request.body ?? {});
+}
+
 export class OrderController {
   static async list(request: Request, response: Response) {
     response.set("cache-control", "no-store");
@@ -72,11 +78,13 @@ export class OrderController {
   }
 
   static async retryShipment(request: Request, response: Response) {
-    response.json(await OrderService.retryShipment(orderId(request), adminId(response)));
+    const { collectionMethod } = shipmentBookingInput(request);
+    response.json(await OrderService.retryShipment(orderId(request), adminId(response), collectionMethod));
   }
 
   static async bookShipment(request: Request, response: Response) {
-    response.json(await OrderService.bookShipment(orderId(request), adminId(response)));
+    const { collectionMethod } = shipmentBookingInput(request);
+    response.json(await OrderService.bookShipment(orderId(request), adminId(response), collectionMethod));
   }
 
   static async cancel(request: Request, response: Response) {
@@ -104,6 +112,11 @@ export class OrderController {
   static async shipment(request: Request, response: Response) {
     response.set("cache-control", "no-store");
     response.json(await OrderService.shipment(orderId(request)));
+  }
+
+  static async shipmentOptions(request: Request, response: Response) {
+    response.set("cache-control", "no-store");
+    response.json(await OrderService.shipmentOptions(orderId(request)));
   }
 
   static async invoice(request: Request, response: Response) {

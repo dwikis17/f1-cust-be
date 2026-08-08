@@ -32,6 +32,7 @@ router.get("/orders/:id/payment-events", OrderController.listPaymentEvents);
 router.patch("/orders/:id/lifecycle", OrderController.updateLifecycle);
 router.post("/orders/:id/shipment/book", OrderController.bookShipment);
 router.post("/orders/:id/shipment/retry", OrderController.retryShipment);
+router.get("/orders/:id/shipment/options", OrderController.shipmentOptions);
 router.get("/orders/:id/shipment", OrderController.shipment);
 router.post("/orders/:id/cancel", OrderController.cancel);
 router.post("/orders/:id/external-refund", OrderController.markExternalRefund);

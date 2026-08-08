@@ -118,7 +118,7 @@ export function buildShipmentConfirmationEmail(order: ConfirmationOrder): EmailM
     subject: `Your order has shipped — ${order.orderNumber}`,
     text: `Hi ${customerName},
 
-Your order ${order.orderNumber} has been packed and booked for pickup.
+Your order ${order.orderNumber} has been packed and the shipment has been booked.
 
 Courier: ${order.courierName} ${order.courierServiceName}
 Estimate: ${order.courierDuration}${waybillText}
@@ -128,7 +128,7 @@ Use order number ${order.orderNumber} and this email address on the tracking pag
 
 Thank you,
 ${config.emailFromName}`,
-    html: `<!doctype html><html><body style="margin:0;background:#f4f4f4;color:#151515;font-family:Arial,sans-serif"><table role="presentation" width="100%" cellspacing="0" cellpadding="0"><tr><td style="padding:32px 16px"><table role="presentation" width="100%" cellspacing="0" cellpadding="0" style="max-width:640px;margin:auto;background:#fff;border:1px solid #ddd"><tr><td style="padding:30px 32px;background:#151515;color:#fff"><div style="font-size:13px;letter-spacing:2px;text-transform:uppercase">${escapeHtml(config.emailFromName)}</div><h1 style="margin:12px 0 0;font-size:28px">Your order has shipped</h1></td></tr><tr><td style="padding:32px"><p style="margin-top:0">Hi ${escapeHtml(customerName)},</p><p>Your order <strong>${escapeHtml(order.orderNumber)}</strong> has been packed and booked for pickup.</p><div style="margin:24px 0;padding:20px;background:#f5f5f5"><strong>Delivery</strong><p style="margin:8px 0 0">${escapeHtml(order.courierName)} ${escapeHtml(order.courierServiceName)} (${escapeHtml(order.courierDuration)})</p>${waybillHtml}</div><a href="${escapeHtml(trackUrl)}" style="display:inline-block;padding:13px 20px;background:#151515;color:#fff;text-decoration:none;font-weight:bold">Track your shipment</a><p style="margin:24px 0 0;color:#666;font-size:13px">Use order number <strong>${escapeHtml(order.orderNumber)}</strong> and this email address on the tracking page.</p></td></tr></table></td></tr></table></body></html>`,
+    html: `<!doctype html><html><body style="margin:0;background:#f4f4f4;color:#151515;font-family:Arial,sans-serif"><table role="presentation" width="100%" cellspacing="0" cellpadding="0"><tr><td style="padding:32px 16px"><table role="presentation" width="100%" cellspacing="0" cellpadding="0" style="max-width:640px;margin:auto;background:#fff;border:1px solid #ddd"><tr><td style="padding:30px 32px;background:#151515;color:#fff"><div style="font-size:13px;letter-spacing:2px;text-transform:uppercase">${escapeHtml(config.emailFromName)}</div><h1 style="margin:12px 0 0;font-size:28px">Your order has shipped</h1></td></tr><tr><td style="padding:32px"><p style="margin-top:0">Hi ${escapeHtml(customerName)},</p><p>Your order <strong>${escapeHtml(order.orderNumber)}</strong> has been packed and the shipment has been booked.</p><div style="margin:24px 0;padding:20px;background:#f5f5f5"><strong>Delivery</strong><p style="margin:8px 0 0">${escapeHtml(order.courierName)} ${escapeHtml(order.courierServiceName)} (${escapeHtml(order.courierDuration)})</p>${waybillHtml}</div><a href="${escapeHtml(trackUrl)}" style="display:inline-block;padding:13px 20px;background:#151515;color:#fff;text-decoration:none;font-weight:bold">Track your shipment</a><p style="margin:24px 0 0;color:#666;font-size:13px">Use order number <strong>${escapeHtml(order.orderNumber)}</strong> and this email address on the tracking page.</p></td></tr></table></td></tr></table></body></html>`,
   };
 }
 
