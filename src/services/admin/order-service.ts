@@ -6,7 +6,17 @@ import { sendPaymentConfirmationEmail, sendShipmentConfirmationEmail } from "../
 import type { Prisma } from "../../generated/prisma/client.js";
 import { HttpError, notFound } from "../../http.js";
 import { createOrderInvoice, createShippingLabel } from "../../order-invoice.js";
-import { requestShipmentBooking } from "../public/checkout-service.js";
+import {
+  getShipmentCollectionOptions,
+  requestShipmentBooking,
+  type OrderWithItems,
+} from "../public/checkout-service.js";
+import {
+  defaultCollectionMethod,
+  fromDbCollectionMethod,
+  toDbCollectionMethod,
+  type ShipmentCollectionMethod,
+} from "../../shipment-collection.js";
 import { sendTelegramPaymentNotification } from "../../telegram-service.js";
 
 export type OrderQueue = "READY_TO_PROCESS" | "PACKING" | "BOOKING_FAILED";
@@ -271,6 +281,10 @@ export class OrderService {
     } = order;
     return {
       ...safeOrder,
+      shipmentCollectionMethod: order.shipmentCollectionMethod
+        ? fromDbCollectionMethod(order.shipmentCollectionMethod)
+        : null,
+      shipmentAvailableCollectionMethods: order.shipmentAvailableCollectionMethods.map(fromDbCollectionMethod),
       refundState: refundState(order),
       shipmentBookingInProgress: Boolean(
         order.shipmentBookingStartedAt
@@ -345,10 +359,11 @@ export class OrderService {
     }
   }
 
-  static async bookShipment(orderId: string, adminId: string) {
+  static async bookShipment(orderId: string, adminId: string, requestedCollectionMethod?: ShipmentCollectionMethod) {
     const claimedAt = new Date();
     const staleBefore = new Date(claimedAt.getTime() - BOOKING_CLAIM_MS);
-    let order: Prisma.OrderGetPayload<{ include: { items: true } }>;
+    let order: OrderWithItems;
+    let collectionMethod: ShipmentCollectionMethod = requestedCollectionMethod ?? "drop_off";
     try {
       order = await prisma.$transaction(async (tx) => {
         await tx.$queryRaw`SELECT "id" FROM "Order" WHERE "id" = ${orderId}::uuid FOR UPDATE`;
@@ -365,9 +380,15 @@ export class OrderService {
         if (current.shipmentBookingStartedAt && current.shipmentBookingStartedAt >= staleBefore) {
           throw new HttpError(409, "SHIPMENT_BOOKING_IN_PROGRESS", "A shipment booking is already in progress");
         }
+        const availableCollectionMethods = current.shipmentAvailableCollectionMethods.map(fromDbCollectionMethod);
+        collectionMethod = requestedCollectionMethod
+          ?? (current.shipmentCollectionMethod ? fromDbCollectionMethod(current.shipmentCollectionMethod) : defaultCollectionMethod(availableCollectionMethods));
         await tx.order.update({
           where: { id: orderId },
-          data: { shipmentBookingStartedAt: claimedAt },
+          data: {
+            shipmentBookingStartedAt: claimedAt,
+            shipmentCollectionMethod: toDbCollectionMethod(collectionMethod),
+          },
         });
         return current;
       });
@@ -382,7 +403,7 @@ export class OrderService {
       throw error;
     }
 
-    const result = await requestShipmentBooking(order);
+    const result = await requestShipmentBooking(order, collectionMethod);
     const action = order.shipmentBookingStatus === "BOOKING_FAILED"
       ? "SHIPMENT_BOOKING_RETRIED"
       : "SHIPMENT_BOOKED";
@@ -395,7 +416,13 @@ export class OrderService {
         }
         await tx.order.update({
           where: { id: orderId },
-          data: { shipmentBookingStartedAt: null, shipmentBookingStatus: "BOOKING_FAILED" },
+          data: {
+            shipmentBookingStartedAt: null,
+            shipmentBookingStatus: "BOOKING_FAILED",
+            ...(result.availableCollectionMethods
+              ? { shipmentAvailableCollectionMethods: result.availableCollectionMethods.map(toDbCollectionMethod) }
+              : {}),
+          },
         });
         await tx.orderAuditEvent.create({
           data: {
@@ -403,10 +430,19 @@ export class OrderService {
             adminId,
             action,
             outcome: "FAILED",
-            details: { code: result.code, message: result.message },
+            details: {
+              code: result.code,
+              message: result.message,
+              availableCollectionMethods: result.availableCollectionMethods ?? [],
+            },
           },
         });
       });
+      if (result.code === "COLLECTION_METHOD_UNAVAILABLE") {
+        throw new HttpError(409, result.code, result.message, {
+          availableCollectionMethods: result.availableCollectionMethods ?? [],
+        });
+      }
       throw new HttpError(502, "SHIPMENT_BOOKING_FAILED", result.message);
     }
 
@@ -422,6 +458,8 @@ export class OrderService {
         data: {
           shipmentBookingStartedAt: null,
           shipmentBookingStatus: "BOOKED",
+          shipmentCollectionMethod: toDbCollectionMethod(result.collectionMethod),
+          shipmentAvailableCollectionMethods: result.availableCollectionMethods.map(toDbCollectionMethod),
           lifecycleStatus: "FULFILLED",
           biteshipOrderId: result.providerOrderId,
           biteshipTrackingId: result.trackingId,
@@ -440,6 +478,7 @@ export class OrderService {
             providerOrderId: result.providerOrderId,
             waybillId: result.waybillId,
             providerStatus: result.providerStatus,
+            collectionMethod: result.collectionMethod,
           },
         },
       });
@@ -459,8 +498,8 @@ export class OrderService {
     return OrderService.find(orderId);
   }
 
-  static retryShipment(orderId: string, adminId: string) {
-    return OrderService.bookShipment(orderId, adminId);
+  static retryShipment(orderId: string, adminId: string, collectionMethod?: ShipmentCollectionMethod) {
+    return OrderService.bookShipment(orderId, adminId, collectionMethod);
   }
 
   static async cancel(orderId: string, adminId: string, reason: string) {
@@ -655,6 +694,30 @@ export class OrderService {
     }
   }
 
+  static async shipmentOptions(orderId: string) {
+    const order = await prisma.order.findUnique({ where: { id: orderId }, include: { items: true } });
+    if (!order) notFound("Order not found");
+
+    let availableCollectionMethods = order.shipmentAvailableCollectionMethods.map(fromDbCollectionMethod);
+    if (availableCollectionMethods.length === 0) {
+      const quote = await getShipmentCollectionOptions(order);
+      availableCollectionMethods = quote.availableCollectionMethods;
+      await prisma.order.update({
+        where: { id: orderId },
+        data: { shipmentAvailableCollectionMethods: availableCollectionMethods.map(toDbCollectionMethod) },
+      });
+    }
+    const storedCollectionMethod = order.shipmentCollectionMethod
+      ? fromDbCollectionMethod(order.shipmentCollectionMethod)
+      : null;
+    return {
+      collectionMethod: storedCollectionMethod && availableCollectionMethods.includes(storedCollectionMethod)
+        ? storedCollectionMethod
+        : defaultCollectionMethod(availableCollectionMethods),
+      availableCollectionMethods,
+    };
+  }
+
   static async shipment(orderId: string) {
     const order = await prisma.order.findUnique({ where: { id: orderId } });
     if (!order) notFound("Order not found");
@@ -665,6 +728,10 @@ export class OrderService {
       waybillId: order.biteshipWaybillId,
       providerStatus: order.biteshipStatus,
       priceIdr: order.biteshipPriceIdr,
+      collectionMethod: order.shipmentCollectionMethod
+        ? fromDbCollectionMethod(order.shipmentCollectionMethod)
+        : null,
+      availableCollectionMethods: order.shipmentAvailableCollectionMethods.map(fromDbCollectionMethod),
       courier: {
         code: order.courierCode,
         name: order.courierName,

@@ -438,6 +438,7 @@ test("admins search, operate, audit, export, and invoice orders safely", async (
     delivery_type: string;
   }> = [];
   let rejectShipmentCancellation = true;
+  let operationsRateMethods = ["pickup", "drop_off"];
   config.biteshipApiKey = "biteship_test.operations";
   config.biteshipOriginPostalCode = "12240";
   config.biteshipOriginContactName = "Valyde Jersey";
@@ -457,6 +458,13 @@ test("admins search, operate, audit, export, and invoice orders safely", async (
   setDefaultEmailSender(operationsSender);
   globalThis.fetch = async (input, init) => {
     const url = String(input);
+    if (url.endsWith("/v1/rates/couriers")) {
+      return Response.json({ pricing: [{
+        courier_code: "jne", courier_name: "JNE", courier_service_code: "reg", courier_service_name: "Regular",
+        description: "Regular service", duration: "1 - 2 days", service_type: "standard", currency: "IDR",
+        price: 20_000, available_collection_method: operationsRateMethods,
+      }] });
+    }
     if (url.endsWith("/v1/orders")) {
       const body = JSON.parse(String(init?.body)) as typeof shipmentBookingBodies[number];
       shipmentBookingBodies.push(body);
@@ -507,14 +515,22 @@ test("admins search, operate, audit, export, and invoice orders safely", async (
     assert.equal((await prisma.order.findUniqueOrThrow({ where: { id: searchable.id } })).paymentStatus, "PAID");
     setDefaultEmailSender(operationsSender);
 
-    const firstBooking = await request(app).post(`/api/admin/orders/${lifecycle.id}/shipment/book`)
+    const legacyOptions = await request(app).get(`/api/admin/orders/${lifecycle.id}/shipment/options`)
       .set("authorization", `Bearer ${token}`).expect(200);
+    assert.deepEqual(legacyOptions.body, {
+      collectionMethod: "drop_off",
+      availableCollectionMethods: ["pickup", "drop_off"],
+    });
+    const firstBooking = await request(app).post(`/api/admin/orders/${lifecycle.id}/shipment/book`)
+      .set("authorization", `Bearer ${token}`).send({ collectionMethod: "pickup" }).expect(200);
     assert.equal(firstBooking.body.lifecycleStatus, "FULFILLED");
     assert.equal(firstBooking.body.shipmentBookingStatus, "BOOKED");
     const bookedDetail = await request(app).get(`/api/admin/orders/${lifecycle.id}`)
       .set("authorization", `Bearer ${token}`).expect("cache-control", "no-store").expect(200);
     assert.equal(bookedDetail.body.lifecycleStatus, "FULFILLED");
     assert.equal(bookedDetail.body.shipmentBookingStatus, "BOOKED");
+    assert.equal(bookedDetail.body.shipmentCollectionMethod, "pickup");
+    assert.deepEqual(bookedDetail.body.shipmentAvailableCollectionMethods, ["pickup", "drop_off"]);
     assert.equal(shipmentBookingBodies[0].origin_collection_method, "pickup");
     assert.equal(shipmentBookingBodies[0].delivery_type, "now");
     assert.match(previousSenderMessages[0].subject ?? "", /Your order has shipped/);
@@ -524,12 +540,16 @@ test("admins search, operate, audit, export, and invoice orders safely", async (
       data: { shipmentBookingStartedAt: new Date(Date.now() - 11 * 60 * 1_000) },
     });
     setDefaultEmailSender({ async send() { throw new Error("Simulated shipment delivery failure"); } });
+    operationsRateMethods = ["pickup"];
     await request(app).post(`/api/admin/orders/${retry.id}/shipment/retry`)
-      .set("authorization", `Bearer ${token}`).expect(200);
+      .set("authorization", `Bearer ${token}`).send({ collectionMethod: "drop_off" }).expect(200);
+    operationsRateMethods = ["pickup", "drop_off"];
     setDefaultEmailSender(operationsSender);
     const retried = await prisma.order.findUniqueOrThrow({ where: { id: retry.id } });
     assert.equal(retried.shipmentBookingStatus, "BOOKED");
     assert.equal(retried.lifecycleStatus, "FULFILLED");
+    assert.equal(retried.shipmentCollectionMethod, "PICKUP");
+    assert.equal(shipmentBookingBodies[1].origin_collection_method, "pickup");
     await request(app).post(`/api/admin/orders/${retry.id}/shipment/retry`)
       .set("authorization", `Bearer ${token}`).expect(409);
 
@@ -1423,12 +1443,17 @@ test("shipping rates use authoritative cart data and normalize Biteship response
           {
             courier_code: "sicepat", courier_name: "SiCepat", courier_service_code: "reg",
             courier_service_name: "Reguler", description: "Regular service", duration: "1 - 2 days",
-            service_type: "standard", currency: "IDR", price: 32_000,
+            service_type: "standard", currency: "IDR", price: 32_000, available_collection_method: ["pickup"],
           },
           {
             courier_code: "jne", courier_name: "JNE", courier_service_code: "reg",
             courier_service_name: "Reguler", description: "Regular service", duration: "2 - 3 days",
-            service_type: "standard", currency: "IDR", price: 18_000,
+            service_type: "standard", currency: "IDR", price: 18_000, available_collection_method: ["pickup", "drop_off"],
+          },
+          {
+            courier_code: "anteraja", courier_name: "AnterAja", courier_service_code: "reg",
+            courier_service_name: "Reguler", description: "Regular service", duration: "2 - 4 days",
+            service_type: "standard", currency: "IDR", price: 25_000, available_collection_method: ["drop_off"],
           },
         ],
       }), { status: 200, headers: { "content-type": "application/json" } });
@@ -1450,7 +1475,10 @@ test("shipping rates use authoritative cart data and normalize Biteship response
       turnstileToken: "turnstile-valid",
     }).expect("cache-control", "no-store").expect(200);
     assert.equal(biteshipCalls, 1);
-    assert.deepEqual(quote.body.rates.map((rate: { price: number }) => rate.price), [18_000, 32_000]);
+    assert.deepEqual(quote.body.rates.map((rate: { price: number }) => rate.price), [18_000, 25_000, 32_000]);
+    assert.deepEqual(quote.body.rates.map((rate: { availableCollectionMethods: string[] }) => rate.availableCollectionMethods), [
+      ["pickup", "drop_off"], ["drop_off"], ["pickup"],
+    ]);
     assert.deepEqual(upstreamBody, {
       origin_postal_code: 12440,
       destination_postal_code: 12240,
@@ -1713,6 +1741,7 @@ test("checkout verifies payment notifications, reserves stock, and waits for man
   let telegramMode: "success" | "transient" | "permanent" = "success";
   let trackingMode: "success" | "unavailable" | "malformed" = "success";
   let failNextBooking = false;
+  let rateCollectionMethods = ["pickup", "drop_off"];
   const statusResponses = new Map<string, Record<string, unknown> | "upstream-error">();
   const sentEmails: EmailMessageBuilder[] = [];
   const telegramBodies: Array<{ chat_id: string; text: string; disable_web_page_preview: boolean }> = [];
@@ -1730,6 +1759,7 @@ test("checkout verifies payment notifications, reserves stock, and waits for man
     reference_id: string;
     courier_company: string;
     courier_type: string;
+    origin_collection_method: string;
     items: Array<{ name: string; description?: string; sku: string }>;
   }> = [];
   globalThis.fetch = async (input, init) => {
@@ -1745,7 +1775,7 @@ test("checkout verifies payment notifications, reserves stock, and waits for man
       return new Response(JSON.stringify({ pricing: [{
         courier_code: "jne", courier_name: "JNE", courier_service_code: "reg", courier_service_name: "Reguler",
         description: "Regular service", duration: "2 - 3 days", service_type: "standard", currency: "IDR",
-        price: 18_000, available_collection_method: ["pickup"],
+        price: 18_000, available_collection_method: rateCollectionMethods,
       }] }), { status: 200, headers: { "content-type": "application/json" } });
     }
     if (url.includes("midtrans.com/snap/v1/transactions")) {
@@ -1935,6 +1965,10 @@ test("checkout verifies payment notifications, reserves stock, and waits for man
     assert.equal(itemSnapshot.sku, "FER-JER-RED-M");
     assert.equal(itemSnapshot.color, "Red");
     assert.equal(itemSnapshot.size, "M");
+    assert.deepEqual(
+      (await prisma.order.findUniqueOrThrow({ where: { id: checkout.body.orderId } })).shipmentAvailableCollectionMethods,
+      ["PICKUP", "DROP_OFF"],
+    );
 
     await request(app).patch(`/api/admin/promo-codes/${promoCodeId}`)
       .set("authorization", `Bearer ${token}`).send({ active: false }).expect(200);
@@ -2027,18 +2061,21 @@ test("checkout verifies payment notifications, reserves stock, and waits for man
       .set("authorization", `Bearer ${token}`).send({ status: "PROCESSING" }).expect(200);
     const manualBookings = await Promise.all([
       request(app).post(`/api/admin/orders/${checkout.body.orderId}/shipment/book`)
-        .set("authorization", `Bearer ${token}`),
+        .set("authorization", `Bearer ${token}`).send({ collectionMethod: "drop_off" }),
       request(app).post(`/api/admin/orders/${checkout.body.orderId}/shipment/book`)
         .set("authorization", `Bearer ${token}`),
     ]);
     assert.deepEqual(manualBookings.map((result) => result.status).sort(), [200, 409]);
     assert.equal(bookingCalls, 1);
+    assert.equal(bookingBodies.find((body) => body.reference_id === checkout.body.orderId)?.origin_collection_method, "drop_off");
     const shipped = await request(app).get(`/api/orders/${checkout.body.orderId}`).expect(200);
     assert.equal(shipped.body.lifecycleStatus, "FULFILLED");
     assert.equal(shipped.body.fulfillmentStatus, "BOOKED");
     assert.equal(shipped.body.tracking.waybillId, "waybill-1");
     assert.equal(sentEmails.length, 2);
     assert.equal(sentEmails[1].subject, `Your order has shipped — ${checkout.body.orderNumber}`);
+    assert.match(sentEmails[1].text ?? "", /shipment has been booked/);
+    assert.doesNotMatch(sentEmails[1].text ?? "", /booked for pickup/);
     assert.match(sentEmails[1].text ?? "", /Tracking number: waybill-1/);
     const tracked = await request(app).post("/api/orders/track")
       .send({ orderNumber: shipped.body.orderNumber.toLowerCase(), email: "BUYER@EXAMPLE.COM" }).expect(200);
@@ -2113,9 +2150,22 @@ test("checkout verifies payment notifications, reserves stock, and waits for man
     assert.equal(bookingCalls, 1);
     await request(app).patch(`/api/admin/orders/${retrying.body.orderId}/lifecycle`)
       .set("authorization", `Bearer ${token}`).send({ status: "PROCESSING" }).expect(200);
+    rateCollectionMethods = ["drop_off"];
+    await request(app).post(`/api/admin/orders/${retrying.body.orderId}/shipment/book`)
+      .set("authorization", `Bearer ${token}`).send({ collectionMethod: "pickup" }).expect(409, {
+        error: {
+          code: "COLLECTION_METHOD_UNAVAILABLE",
+          message: "The selected handover method is no longer available; choose another method",
+          fields: { availableCollectionMethods: ["drop_off"] },
+        },
+      });
+    const unchangedAfterStaleMethod = await prisma.order.findUniqueOrThrow({ where: { id: retrying.body.orderId } });
+    assert.equal(unchangedAfterStaleMethod.shippingIdr, 18_000);
+    assert.equal(unchangedAfterStaleMethod.totalIdr, 1_268_000);
+    rateCollectionMethods = ["pickup", "drop_off"];
     failNextBooking = true;
     await request(app).post(`/api/admin/orders/${retrying.body.orderId}/shipment/book`)
-      .set("authorization", `Bearer ${token}`).expect(502);
+      .set("authorization", `Bearer ${token}`).send({ collectionMethod: "drop_off" }).expect(502);
     const failedBooking = await request(app).get(`/api/orders/${retrying.body.orderId}`).expect(200);
     assert.equal(failedBooking.body.paymentStatus, "PAID");
     assert.equal(failedBooking.body.lifecycleStatus, "PROCESSING");
