@@ -1,4 +1,4 @@
-import type { Request, Response } from "express";
+import type { NextFunction, Request, Response } from "express";
 import { z } from "zod";
 import { parse } from "../../http.js";
 import type { ProductFilters, ProductSort } from "../../repositories/public/product-repository.js";
@@ -72,33 +72,49 @@ function filters(query: z.infer<typeof listQuerySchema>): ProductFilters {
 }
 
 export class PublicProductController {
-  static async cartItems(request: Request, response: Response) {
-    const body = parse(cartItemsSchema, request.body);
-    response.set("cache-control", "no-store").json(await PublicProductService.cartItems(body.variantIds, body.locale));
+  static async cartItems(request: Request, response: Response, next: NextFunction) {
+    try {
+      const body = parse(cartItemsSchema, request.body);
+      response.set("cache-control", "no-store").json(await PublicProductService.cartItems(body.variantIds, body.locale));
+    } catch (error) {
+      next(error);
+    }
   }
-  static async listProducts(request: Request, response: Response) {
-    const query = parse(listQuerySchema, request.query);
-    response.json(await PublicProductService.listProducts(
-      filters(query),
-      (query.sort ?? "newest") as ProductSort,
-      query.page,
-      query.limit,
-      query.locale,
-    ));
+  static async listProducts(request: Request, response: Response, next: NextFunction) {
+    try {
+      const query = parse(listQuerySchema, request.query);
+      response.json(await PublicProductService.listProducts(
+        filters(query),
+        (query.sort ?? "newest") as ProductSort,
+        query.page,
+        query.limit,
+        query.locale,
+      ));
+    } catch (error) {
+      next(error);
+    }
   }
-  static async listCollectionProducts(request: Request, response: Response) {
-    const query = parse(listQuerySchema, request.query);
-    response.json(await PublicProductService.listCollectionProducts(
-      String(request.params.slug),
-      filters(query),
-      (query.sort ?? "featured") as ProductSort,
-      query.page,
-      query.limit,
-      query.locale,
-    ));
+  static async listCollectionProducts(request: Request, response: Response, next: NextFunction) {
+    try {
+      const query = parse(listQuerySchema, request.query);
+      response.json(await PublicProductService.listCollectionProducts(
+        String(request.params.slug),
+        filters(query),
+        (query.sort ?? "featured") as ProductSort,
+        query.page,
+        query.limit,
+        query.locale,
+      ));
+    } catch (error) {
+      next(error);
+    }
   }
-  static async findProduct(request: Request, response: Response) {
-    const query = parse(z.object({ locale: localeSchema.default("en") }).strict(), request.query);
-    response.json(await PublicProductService.findProduct(String(request.params.slug), query.locale));
+  static async findProduct(request: Request, response: Response, next: NextFunction) {
+    try {
+      const query = parse(z.object({ locale: localeSchema.default("en") }).strict(), request.query);
+      response.json(await PublicProductService.findProduct(String(request.params.slug), query.locale));
+    } catch (error) {
+      next(error);
+    }
   }
 }

@@ -5,18 +5,17 @@ type Locale = "en" | "id";
 type PublicCollectionItem = Omit<CollectionItem, "descriptionId">;
 type CollectionTreeNode = PublicCollectionItem & { children: CollectionTreeNode[] };
 
-export function publicCollection<T extends { description: string; descriptionId: string | null }>(
-  collection: T,
-  locale: Locale,
-) {
-  const { descriptionId, ...value } = collection;
-  return {
-    ...value,
-    description: locale === "id" ? descriptionId ?? collection.description : collection.description,
-  };
-}
-
 export class PublicCatalogService {
+  static publicCollection<T extends { description: string; descriptionId: string | null }>(
+    collection: T,
+    locale: Locale,
+  ) {
+    const { descriptionId, ...value } = collection;
+    return {
+      ...value,
+      description: locale === "id" ? descriptionId ?? collection.description : collection.description,
+    };
+  }
   static listCategories() { return PublicCatalogRepository.listCategories(); }
   static listTags() { return PublicCatalogRepository.listTags(); }
   static listTeams() { return PublicCatalogRepository.listTeams(); }
@@ -31,7 +30,7 @@ export class PublicCatalogService {
     }
     const build = (parentId: string | null): CollectionTreeNode[] =>
       (byParent.get(parentId) ?? []).map((collection) => ({
-        ...publicCollection(collection, locale),
+        ...PublicCatalogService.publicCollection(collection, locale),
         children: build(collection.id),
       }));
     return build(null);
@@ -39,9 +38,11 @@ export class PublicCatalogService {
   static async findCollection(slug: string, locale: Locale) {
     const collection = await PublicCatalogRepository.findCollection(slug);
     return collection ? {
-      ...publicCollection(collection, locale),
-      parent: collection.parent ? publicCollection(collection.parent, locale) : null,
-      children: collection.children.map((child) => publicCollection(child, locale)),
+      ...PublicCatalogService.publicCollection(collection, locale),
+      parent: collection.parent ? PublicCatalogService.publicCollection(collection.parent, locale) : null,
+      children: collection.children.map((child) => PublicCatalogService.publicCollection(child, locale)),
     } : null;
   }
 }
+
+export const publicCollection = PublicCatalogService.publicCollection;

@@ -1,5 +1,5 @@
 import { createHash, timingSafeEqual } from "node:crypto";
-import type { Request, Response } from "express";
+import type { NextFunction, Request, Response } from "express";
 import { z } from "zod";
 import { config } from "../../config.js";
 import { HttpError, parse } from "../../http.js";
@@ -31,22 +31,26 @@ function verifyAuthorization(request: Request) {
 }
 
 export class BiteshipWebhookController {
-  static async status(request: Request, response: Response) {
-    const body = request.body as unknown;
-    const emptyBody = body == null
-      || (typeof body === "object" && !Array.isArray(body) && Object.keys(body as object).length === 0);
-    if (emptyBody) {
-      response.type("text/plain").send("ok");
-      return;
+  static async status(request: Request, response: Response, next: NextFunction) {
+    try {
+      const body = request.body as unknown;
+      const emptyBody = body == null
+        || (typeof body === "object" && !Array.isArray(body) && Object.keys(body as object).length === 0);
+      if (emptyBody) {
+        response.type("text/plain").send("ok");
+        return;
+      }
+      verifyAuthorization(request);
+      const input = parse(statusWebhookSchema, body);
+      const matched = await OrderService.applyBiteshipStatus({
+        providerOrderId: input.order_id,
+        status: input.status,
+        trackingId: input.courier_tracking_id,
+        waybillId: input.courier_waybill_id,
+      });
+      response.json({ received: true, matched });
+    } catch (error) {
+      next(error);
     }
-    verifyAuthorization(request);
-    const input = parse(statusWebhookSchema, body);
-    const matched = await OrderService.applyBiteshipStatus({
-      providerOrderId: input.order_id,
-      status: input.status,
-      trackingId: input.courier_tracking_id,
-      waybillId: input.courier_waybill_id,
-    });
-    response.json({ received: true, matched });
   }
 }

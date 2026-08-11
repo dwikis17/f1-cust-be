@@ -1,40 +1,27 @@
 import { Buffer } from "node:buffer";
 import { z } from "zod";
 import { config } from "../../config.js";
-import { prisma } from "../../db.js";
 import { sendPaymentConfirmationEmail, sendShipmentConfirmationEmail } from "../../email-service.js";
-import type { Prisma } from "../../generated/prisma/client.js";
 import { HttpError, notFound } from "../../http.js";
 import { createOrderInvoice, createShippingLabel } from "../../order-invoice.js";
 import {
+  OrderRepository,
+  type OrderAuditInput,
+  type OrderListInput,
+  type OrderWithItems,
+} from "../../repositories/order-repository.js";
+import {
   getShipmentCollectionOptions,
   requestShipmentBooking,
-  type OrderWithItems,
 } from "../public/checkout-service.js";
 import {
   defaultCollectionMethod,
   fromDbCollectionMethod,
-  toDbCollectionMethod,
   type ShipmentCollectionMethod,
 } from "../../shipment-collection.js";
 import { sendTelegramPaymentNotification } from "../../telegram-service.js";
 
-export type OrderQueue = "READY_TO_PROCESS" | "PACKING" | "BOOKING_FAILED";
-
-export type OrderListInput = {
-  search?: string;
-  paymentStatus?: "PENDING" | "PAID" | "FAILED" | "EXPIRED" | "CANCELLED" | "REFUNDED";
-  lifecycleStatus?: "UNFULFILLED" | "PROCESSING" | "FULFILLED" | "CANCELLED";
-  shipmentBookingStatus?: "UNFULFILLED" | "BOOKED" | "BOOKING_FAILED";
-  queue?: OrderQueue;
-  refundState?: "NONE" | "REQUIRED" | "EXTERNALLY_REFUNDED";
-  courier?: string;
-  from?: Date;
-  to?: Date;
-  sort: "createdAt_desc" | "createdAt_asc" | "total_desc" | "total_asc";
-  page: number;
-  limit: number;
-};
+export type { OrderListInput, OrderQueue } from "../../repositories/order-repository.js";
 
 const trackingSchema = z.object({
   success: z.literal(true),
@@ -55,57 +42,10 @@ const cancelShipmentSchema = z.object({
 
 const BOOKING_CLAIM_MS = 10 * 60 * 1_000;
 
-const queueWhere: Record<OrderQueue, Prisma.OrderWhereInput> = {
-  READY_TO_PROCESS: { paymentStatus: "PAID", lifecycleStatus: "UNFULFILLED" },
-  PACKING: { paymentStatus: "PAID", lifecycleStatus: "PROCESSING", shipmentBookingStatus: "UNFULFILLED" },
-  BOOKING_FAILED: { paymentStatus: "PAID", lifecycleStatus: "PROCESSING", shipmentBookingStatus: "BOOKING_FAILED" },
-};
-
 function refundState(order: { externalRefundedAt: Date | null; lifecycleStatus: string; paymentStatus: string }) {
   if (order.externalRefundedAt) return "EXTERNALLY_REFUNDED" as const;
   if (order.lifecycleStatus === "CANCELLED" && order.paymentStatus === "PAID") return "REQUIRED" as const;
   return "NONE" as const;
-}
-
-function orderWhere(input: Omit<OrderListInput, "page" | "limit" | "sort">): Prisma.OrderWhereInput {
-  const search = input.search?.trim();
-  const where: Prisma.OrderWhereInput = {
-    ...(input.paymentStatus ? { paymentStatus: input.paymentStatus } : {}),
-    ...(input.lifecycleStatus ? { lifecycleStatus: input.lifecycleStatus } : {}),
-    ...(input.shipmentBookingStatus ? { shipmentBookingStatus: input.shipmentBookingStatus } : {}),
-    ...(input.courier ? { courierCode: input.courier } : {}),
-    ...(input.from || input.to ? { createdAt: { ...(input.from ? { gte: input.from } : {}), ...(input.to ? { lt: input.to } : {}) } } : {}),
-    ...(search ? {
-      OR: [
-        { orderNumber: { contains: search, mode: "insensitive" } },
-        { firstName: { contains: search, mode: "insensitive" } },
-        { lastName: { contains: search, mode: "insensitive" } },
-        { email: { contains: search, mode: "insensitive" } },
-        { phone: { contains: search, mode: "insensitive" } },
-        { biteshipTrackingId: { contains: search, mode: "insensitive" } },
-        { biteshipWaybillId: { contains: search, mode: "insensitive" } },
-      ],
-    } : {}),
-  };
-  if (input.queue) where.AND = [queueWhere[input.queue]];
-  if (input.refundState === "EXTERNALLY_REFUNDED") where.externalRefundedAt = { not: null };
-  if (input.refundState === "REQUIRED") {
-    Object.assign(where, { lifecycleStatus: "CANCELLED", paymentStatus: "PAID", externalRefundedAt: null });
-  }
-  if (input.refundState === "NONE") {
-    where.NOT = [
-      { externalRefundedAt: { not: null } },
-      { lifecycleStatus: "CANCELLED", paymentStatus: "PAID", externalRefundedAt: null },
-    ];
-  }
-  return where;
-}
-
-function orderBy(sort: OrderListInput["sort"]): Prisma.OrderOrderByWithRelationInput[] {
-  if (sort === "createdAt_asc") return [{ createdAt: "asc" }, { id: "asc" }];
-  if (sort === "total_desc") return [{ totalIdr: "desc" }, { createdAt: "desc" }, { id: "desc" }];
-  if (sort === "total_asc") return [{ totalIdr: "asc" }, { createdAt: "desc" }, { id: "desc" }];
-  return [{ createdAt: "desc" }, { id: "desc" }];
 }
 
 function listRow(order: {
@@ -136,19 +76,12 @@ function listRow(order: {
   };
 }
 
-async function audit(input: {
-  orderId?: string;
-  adminId?: string;
-  action: string;
-  outcome: "SUCCEEDED" | "FAILED";
-  reason?: string;
-  details?: Prisma.InputJsonValue;
-}) {
-  return prisma.orderAuditEvent.create({ data: input });
+async function audit(input: OrderAuditInput) {
+  return OrderRepository.createAudit(input);
 }
 
-async function auditExistingOrder(input: Parameters<typeof audit>[0] & { orderId: string }) {
-  const exists = await prisma.order.count({ where: { id: input.orderId } });
+async function auditExistingOrder(input: OrderAuditInput & { orderId: string }) {
+  const exists = await OrderRepository.exists(input.orderId);
   if (exists) await audit(input);
 }
 
@@ -197,77 +130,18 @@ async function cancelBiteship(orderId: string, reason: string) {
 
 export class OrderService {
   static async list(input: OrderListInput) {
-    const where = orderWhere(input);
-    const [data, total, readyToProcess, packing, bookingFailed] = await Promise.all([
-      prisma.order.findMany({
-        where,
-        orderBy: orderBy(input.sort),
-        skip: (input.page - 1) * input.limit,
-        take: input.limit,
-        select: {
-          id: true,
-          orderNumber: true,
-          firstName: true,
-          lastName: true,
-          email: true,
-          phone: true,
-          totalIdr: true,
-          paymentStatus: true,
-          lifecycleStatus: true,
-          shipmentBookingStatus: true,
-          externalRefundedAt: true,
-          courierCode: true,
-          courierName: true,
-          biteshipWaybillId: true,
-          createdAt: true,
-          updatedAt: true,
-          _count: { select: { items: true } },
-        },
-      }),
-      prisma.order.count({ where }),
-      prisma.order.count({ where: queueWhere.READY_TO_PROCESS }),
-      prisma.order.count({ where: queueWhere.PACKING }),
-      prisma.order.count({ where: queueWhere.BOOKING_FAILED }),
-    ]);
+    const { data, total, queueCounts } = await OrderRepository.list(input);
     return {
       data: data.map(listRow),
       page: input.page,
       limit: input.limit,
       total,
-      queueCounts: { READY_TO_PROCESS: readyToProcess, PACKING: packing, BOOKING_FAILED: bookingFailed },
+      queueCounts,
     };
   }
 
   static async find(id: string) {
-    const order = await prisma.order.findUnique({
-      where: { id },
-      include: {
-        items: { orderBy: [{ createdAt: "asc" }, { id: "asc" }] },
-        promoCode: { select: { code: true } },
-        externalRefundedByAdmin: { select: { id: true, displayName: true, email: true } },
-        paymentEvents: {
-          orderBy: [{ receivedAt: "desc" }, { id: "desc" }],
-          select: {
-            id: true,
-            statusCode: true,
-            grossAmount: true,
-            transactionStatus: true,
-            transactionId: true,
-            fraudStatus: true,
-            paymentType: true,
-            payload: true,
-            processingResult: true,
-            processingError: true,
-            receivedAt: true,
-            processedAt: true,
-          },
-        },
-        auditEvents: {
-          orderBy: [{ createdAt: "desc" }, { id: "desc" }],
-          include: { admin: { select: { id: true, displayName: true, email: true } } },
-        },
-      },
-    });
+    const order = await OrderRepository.find(id);
     if (!order) notFound("Order not found");
     const {
       idempotencyKey: _idempotencyKey,
@@ -294,59 +168,23 @@ export class OrderService {
   }
 
   static async listPaymentEvents(orderId: string) {
-    const order = await prisma.order.findUnique({
-      where: { id: orderId },
-      select: {
-        paymentEvents: {
-          orderBy: [{ receivedAt: "asc" }, { id: "asc" }],
-          select: {
-            id: true,
-            statusCode: true,
-            grossAmount: true,
-            transactionStatus: true,
-            transactionId: true,
-            fraudStatus: true,
-            paymentType: true,
-            payload: true,
-            processingResult: true,
-            processingError: true,
-            receivedAt: true,
-            processedAt: true,
-          },
-        },
-      },
-    });
+    const order = await OrderRepository.findPaymentEvents(orderId);
     if (!order) notFound("Order not found");
     return order.paymentEvents;
   }
 
   static async updateLifecycle(orderId: string, status: "PROCESSING", adminId: string) {
     try {
-      return await prisma.$transaction(async (tx) => {
-        await tx.$queryRaw`SELECT "id" FROM "Order" WHERE "id" = ${orderId}::uuid FOR UPDATE`;
-        const order = await tx.order.findUnique({ where: { id: orderId } });
-        if (!order) notFound("Order not found");
-        const allowed = order.paymentStatus === "PAID" && order.lifecycleStatus === "UNFULFILLED"
-          && !order.stockReleasedAt && order.shipmentBookingStatus !== "BOOKED";
-        if (!allowed) {
-          throw new HttpError(
-            409,
-            "PROCESSING_NOT_ALLOWED",
-            "Only paid orders with reserved stock can start processing",
-          );
-        }
-        const updated = await tx.order.update({ where: { id: orderId }, data: { lifecycleStatus: status } });
-        await tx.orderAuditEvent.create({
-          data: {
-            orderId,
-            adminId,
-            action: "LIFECYCLE_UPDATED",
-            outcome: "SUCCEEDED",
-            details: { from: order.lifecycleStatus, to: status },
-          },
-        });
-        return updated;
-      });
+      const result = await OrderRepository.updateLifecycle(orderId, status, adminId);
+      if (result.status === "NOT_FOUND") notFound("Order not found");
+      if (result.status === "NOT_ALLOWED") {
+        throw new HttpError(
+          409,
+          "PROCESSING_NOT_ALLOWED",
+          "Only paid orders with reserved stock can start processing",
+        );
+      }
+      return result.order;
     } catch (error) {
       await auditExistingOrder({
         orderId,
@@ -363,35 +201,22 @@ export class OrderService {
     const claimedAt = new Date();
     const staleBefore = new Date(claimedAt.getTime() - BOOKING_CLAIM_MS);
     let order: OrderWithItems;
-    let collectionMethod: ShipmentCollectionMethod = requestedCollectionMethod ?? "drop_off";
+    let collectionMethod: ShipmentCollectionMethod;
     try {
-      order = await prisma.$transaction(async (tx) => {
-        await tx.$queryRaw`SELECT "id" FROM "Order" WHERE "id" = ${orderId}::uuid FOR UPDATE`;
-        const current = await tx.order.findUnique({ where: { id: orderId }, include: { items: true } });
-        if (!current) notFound("Order not found");
-        if (current.paymentStatus !== "PAID" || current.lifecycleStatus !== "PROCESSING"
-          || current.stockReleasedAt || current.shipmentBookingStatus === "BOOKED") {
-          throw new HttpError(
-            409,
-            "SHIPMENT_BOOKING_NOT_ALLOWED",
-            "Only paid processing orders with reserved stock can be booked",
-          );
-        }
-        if (current.shipmentBookingStartedAt && current.shipmentBookingStartedAt >= staleBefore) {
-          throw new HttpError(409, "SHIPMENT_BOOKING_IN_PROGRESS", "A shipment booking is already in progress");
-        }
-        const availableCollectionMethods = current.shipmentAvailableCollectionMethods.map(fromDbCollectionMethod);
-        collectionMethod = requestedCollectionMethod
-          ?? (current.shipmentCollectionMethod ? fromDbCollectionMethod(current.shipmentCollectionMethod) : defaultCollectionMethod(availableCollectionMethods));
-        await tx.order.update({
-          where: { id: orderId },
-          data: {
-            shipmentBookingStartedAt: claimedAt,
-            shipmentCollectionMethod: toDbCollectionMethod(collectionMethod),
-          },
-        });
-        return current;
-      });
+      const claimed = await OrderRepository.claimShipment(orderId, claimedAt, staleBefore, requestedCollectionMethod);
+      if (claimed.status === "NOT_FOUND") notFound("Order not found");
+      if (claimed.status === "NOT_ALLOWED") {
+        throw new HttpError(
+          409,
+          "SHIPMENT_BOOKING_NOT_ALLOWED",
+          "Only paid processing orders with reserved stock can be booked",
+        );
+      }
+      if (claimed.status === "IN_PROGRESS") {
+        throw new HttpError(409, "SHIPMENT_BOOKING_IN_PROGRESS", "A shipment booking is already in progress");
+      }
+      order = claimed.order;
+      collectionMethod = claimed.collectionMethod;
     } catch (error) {
       await auditExistingOrder({
         orderId,
@@ -408,36 +233,18 @@ export class OrderService {
       ? "SHIPMENT_BOOKING_RETRIED"
       : "SHIPMENT_BOOKED";
     if (!result.success) {
-      await prisma.$transaction(async (tx) => {
-        await tx.$queryRaw`SELECT "id" FROM "Order" WHERE "id" = ${orderId}::uuid FOR UPDATE`;
-        const current = await tx.order.findUniqueOrThrow({ where: { id: orderId } });
-        if (current.shipmentBookingStartedAt?.getTime() !== claimedAt.getTime()) {
-          throw new HttpError(409, "SHIPMENT_BOOKING_CLAIM_LOST", "Shipment booking ownership expired");
-        }
-        await tx.order.update({
-          where: { id: orderId },
-          data: {
-            shipmentBookingStartedAt: null,
-            shipmentBookingStatus: "BOOKING_FAILED",
-            ...(result.availableCollectionMethods
-              ? { shipmentAvailableCollectionMethods: result.availableCollectionMethods.map(toDbCollectionMethod) }
-              : {}),
-          },
-        });
-        await tx.orderAuditEvent.create({
-          data: {
-            orderId,
-            adminId,
-            action,
-            outcome: "FAILED",
-            details: {
-              code: result.code,
-              message: result.message,
-              availableCollectionMethods: result.availableCollectionMethods ?? [],
-            },
-          },
-        });
+      const recorded = await OrderRepository.recordShipmentFailure({
+        orderId,
+        claimedAt,
+        adminId,
+        action,
+        code: result.code,
+        message: result.message,
+        availableCollectionMethods: result.availableCollectionMethods,
       });
+      if (recorded.status === "CLAIM_LOST") {
+        throw new HttpError(409, "SHIPMENT_BOOKING_CLAIM_LOST", "Shipment booking ownership expired");
+      }
       if (result.code === "COLLECTION_METHOD_UNAVAILABLE") {
         throw new HttpError(409, result.code, result.message, {
           availableCollectionMethods: result.availableCollectionMethods ?? [],
@@ -446,43 +253,16 @@ export class OrderService {
       throw new HttpError(502, "SHIPMENT_BOOKING_FAILED", result.message);
     }
 
-    await prisma.$transaction(async (tx) => {
-      await tx.$queryRaw`SELECT "id" FROM "Order" WHERE "id" = ${orderId}::uuid FOR UPDATE`;
-      const current = await tx.order.findUniqueOrThrow({ where: { id: orderId } });
-      if (current.shipmentBookingStartedAt?.getTime() !== claimedAt.getTime()
-        || current.paymentStatus !== "PAID" || current.lifecycleStatus !== "PROCESSING") {
-        throw new HttpError(409, "SHIPMENT_BOOKING_CLAIM_LOST", "Shipment booking ownership expired");
-      }
-      await tx.order.update({
-        where: { id: orderId },
-        data: {
-          shipmentBookingStartedAt: null,
-          shipmentBookingStatus: "BOOKED",
-          shipmentCollectionMethod: toDbCollectionMethod(result.collectionMethod),
-          shipmentAvailableCollectionMethods: result.availableCollectionMethods.map(toDbCollectionMethod),
-          lifecycleStatus: "FULFILLED",
-          biteshipOrderId: result.providerOrderId,
-          biteshipTrackingId: result.trackingId,
-          biteshipWaybillId: result.waybillId,
-          biteshipPriceIdr: result.priceIdr,
-          biteshipStatus: result.providerStatus,
-        },
-      });
-      await tx.orderAuditEvent.create({
-        data: {
-          orderId,
-          adminId,
-          action,
-          outcome: "SUCCEEDED",
-          details: {
-            providerOrderId: result.providerOrderId,
-            waybillId: result.waybillId,
-            providerStatus: result.providerStatus,
-            collectionMethod: result.collectionMethod,
-          },
-        },
-      });
+    const completed = await OrderRepository.completeShipmentBooking({
+      orderId,
+      claimedAt,
+      adminId,
+      action,
+      result,
     });
+    if (completed.status === "CLAIM_LOST") {
+      throw new HttpError(409, "SHIPMENT_BOOKING_CLAIM_LOST", "Shipment booking ownership expired");
+    }
 
     try {
       await sendShipmentConfirmationEmail(orderId);
@@ -503,7 +283,7 @@ export class OrderService {
   }
 
   static async cancel(orderId: string, adminId: string, reason: string) {
-    const current = await prisma.order.findUnique({ where: { id: orderId }, include: { items: true } });
+    const current = await OrderRepository.findWithItems(orderId);
     if (!current) notFound("Order not found");
     if (current.lifecycleStatus === "CANCELLED") return OrderService.find(orderId);
     const bookingStaleBefore = new Date(Date.now() - BOOKING_CLAIM_MS);
@@ -537,49 +317,20 @@ export class OrderService {
       if (current.shipmentBookingStatus === "BOOKED" && current.biteshipOrderId) {
         biteshipStatus = await cancelBiteship(current.biteshipOrderId, reason);
       }
-      await prisma.$transaction(async (tx) => {
-        await tx.$queryRaw`SELECT "id" FROM "Order" WHERE "id" = ${orderId}::uuid FOR UPDATE`;
-        const order = await tx.order.findUnique({ where: { id: orderId }, include: { items: true } });
-        if (!order) notFound("Order not found");
-        if (order.lifecycleStatus === "CANCELLED") return;
-        if (order.shipmentBookingStartedAt && order.shipmentBookingStartedAt >= bookingStaleBefore) {
-          throw new HttpError(409, "SHIPMENT_BOOKING_IN_PROGRESS", "Shipment booking is in progress");
-        }
-        if (order.lifecycleStatus === "FULFILLED" && !biteshipStatus) {
-          throw new HttpError(409, "ORDER_ALREADY_FULFILLED", "Biteship cancellation was not confirmed");
-        }
-        if (!order.stockReleasedAt) {
-          for (const item of order.items) {
-            if (item.variantId) {
-              await tx.productVariant.updateMany({
-                where: { id: item.variantId },
-                data: { stockQuantity: { increment: item.quantity } },
-              });
-            }
-          }
-        }
-        await tx.order.update({
-          where: { id: orderId },
-          data: {
-            lifecycleStatus: "CANCELLED",
-            shipmentBookingStartedAt: null,
-            cancelledAt: new Date(),
-            stockReleasedAt: order.stockReleasedAt ?? new Date(),
-            ...(order.paymentStatus === "PENDING" ? { paymentStatus: "CANCELLED", midtransStatus: "cancel" } : {}),
-            ...(biteshipStatus ? { biteshipStatus } : {}),
-          },
-        });
-        await tx.orderAuditEvent.create({
-          data: {
-            orderId,
-            adminId,
-            action: "ORDER_CANCELLED",
-            outcome: "SUCCEEDED",
-            reason,
-            details: { paymentStatus: order.paymentStatus, biteshipStatus: biteshipStatus ?? null },
-          },
-        });
+      const cancelled = await OrderRepository.cancelOrder({
+        orderId,
+        adminId,
+        reason,
+        bookingStaleBefore,
+        biteshipStatus,
       });
+      if (cancelled.status === "NOT_FOUND") notFound("Order not found");
+      if (cancelled.status === "BOOKING_IN_PROGRESS") {
+        throw new HttpError(409, "SHIPMENT_BOOKING_IN_PROGRESS", "Shipment booking is in progress");
+      }
+      if (cancelled.status === "FULFILLED_NOT_CONFIRMED") {
+        throw new HttpError(409, "ORDER_ALREADY_FULFILLED", "Biteship cancellation was not confirmed");
+      }
     } catch (error) {
       await audit({
         orderId,
@@ -595,7 +346,7 @@ export class OrderService {
   }
 
   static async markExternalRefund(orderId: string, adminId: string, reason: string) {
-    const current = await prisma.order.findUnique({ where: { id: orderId } });
+    const current = await OrderRepository.find(orderId);
     if (!current) notFound("Order not found");
     if (current.paymentStatus !== "PAID" && current.paymentStatus !== "REFUNDED") {
       await audit({
@@ -612,17 +363,7 @@ export class OrderService {
     if (current.lifecycleStatus !== "FULFILLED" && current.lifecycleStatus !== "CANCELLED") {
       await OrderService.cancel(orderId, adminId, reason);
     }
-    await prisma.$transaction(async (tx) => {
-      const updated = await tx.order.updateMany({
-        where: { id: orderId, externalRefundedAt: null },
-        data: { externalRefundedAt: new Date(), externalRefundedByAdminId: adminId },
-      });
-      if (updated.count) {
-        await tx.orderAuditEvent.create({
-          data: { orderId, adminId, action: "EXTERNAL_REFUND_RECORDED", outcome: "SUCCEEDED", reason },
-        });
-      }
-    });
+    await OrderRepository.recordExternalRefund(orderId, adminId, reason);
     return OrderService.find(orderId);
   }
 
@@ -646,14 +387,7 @@ export class OrderService {
 
   static async resendTelegramNotification(orderId: string, adminId: string) {
     try {
-      const order = await prisma.order.findUnique({
-        where: { id: orderId },
-        select: {
-          telegramNotificationQueuedAt: true,
-          telegramNotificationSentAt: true,
-          telegramNotificationFailedAt: true,
-        },
-      });
+      const order = await OrderRepository.findTelegramNotificationState(orderId);
       if (!order) notFound("Order not found");
       if (!order.telegramNotificationQueuedAt || order.telegramNotificationSentAt || !order.telegramNotificationFailedAt) {
         throw new HttpError(409, "TELEGRAM_RESEND_NOT_ALLOWED", "Only failed Telegram notifications can be resent");
@@ -695,17 +429,14 @@ export class OrderService {
   }
 
   static async shipmentOptions(orderId: string) {
-    const order = await prisma.order.findUnique({ where: { id: orderId }, include: { items: true } });
+    const order = await OrderRepository.findWithItems(orderId);
     if (!order) notFound("Order not found");
 
     let availableCollectionMethods = order.shipmentAvailableCollectionMethods.map(fromDbCollectionMethod);
     if (availableCollectionMethods.length === 0) {
       const quote = await getShipmentCollectionOptions(order);
       availableCollectionMethods = quote.availableCollectionMethods;
-      await prisma.order.update({
-        where: { id: orderId },
-        data: { shipmentAvailableCollectionMethods: availableCollectionMethods.map(toDbCollectionMethod) },
-      });
+      await OrderRepository.updateShipmentCollectionMethods(orderId, availableCollectionMethods);
     }
     const storedCollectionMethod = order.shipmentCollectionMethod
       ? fromDbCollectionMethod(order.shipmentCollectionMethod)
@@ -719,7 +450,7 @@ export class OrderService {
   }
 
   static async shipment(orderId: string) {
-    const order = await prisma.order.findUnique({ where: { id: orderId } });
+    const order = await OrderRepository.find(orderId);
     if (!order) notFound("Order not found");
     const stored = {
       bookingStatus: order.shipmentBookingStatus,
@@ -758,7 +489,7 @@ export class OrderService {
     if (!response.ok || !parsed.success) {
       throw new HttpError(502, "TRACKING_UPSTREAM_ERROR", "Biteship returned an unexpected response");
     }
-    await prisma.order.update({ where: { id: orderId }, data: { biteshipStatus: parsed.data.status } });
+    await OrderRepository.updateBiteshipStatus(orderId, parsed.data.status);
     return {
       ...stored,
       providerStatus: parsed.data.status,
@@ -780,19 +511,12 @@ export class OrderService {
     trackingId?: string | null;
     waybillId?: string | null;
   }) {
-    const updated = await prisma.order.updateMany({
-      where: { biteshipOrderId: input.providerOrderId },
-      data: {
-        biteshipStatus: input.status,
-        ...(input.trackingId ? { biteshipTrackingId: input.trackingId } : {}),
-        ...(input.waybillId ? { biteshipWaybillId: input.waybillId } : {}),
-      },
-    });
+    const updated = await OrderRepository.updateBiteshipStatusByProviderOrder(input);
     return updated.count > 0;
   }
 
   static async invoice(orderId: string, adminId: string) {
-    const order = await prisma.order.findUnique({ where: { id: orderId }, include: { items: true } });
+    const order = await OrderRepository.findWithItems(orderId);
     if (!order) notFound("Order not found");
     const bytes = await createOrderInvoice(order);
     await audit({ orderId, adminId, action: "INVOICE_DOWNLOADED", outcome: "SUCCEEDED" });
@@ -800,7 +524,7 @@ export class OrderService {
   }
 
   static async shippingLabel(orderId: string, adminId: string) {
-    const order = await prisma.order.findUnique({ where: { id: orderId }, include: { items: true } });
+    const order = await OrderRepository.findWithItems(orderId);
     if (!order) notFound("Order not found");
     if (order.shipmentBookingStatus !== "BOOKED" || order.lifecycleStatus !== "FULFILLED" || !order.biteshipWaybillId) {
       throw new HttpError(409, "SHIPPING_LABEL_NOT_AVAILABLE", "A booked shipment with an airway bill is required");
@@ -811,11 +535,7 @@ export class OrderService {
   }
 
   static async exportCsv(input: OrderListInput, adminId: string) {
-    const orders = await prisma.order.findMany({
-      where: orderWhere(input),
-      orderBy: orderBy(input.sort),
-      include: { items: { select: { sku: true, quantity: true } } },
-    });
+    const orders = await OrderRepository.listExportOrders(input);
     const fields = (value: unknown) => {
       const raw = String(value ?? "").replaceAll("\r", " ").replaceAll("\n", " ");
       const safe = /^[\t ]*[=+\-@]/.test(raw) ? `'${raw}` : raw;
@@ -846,7 +566,7 @@ export class OrderService {
       adminId,
       action: "ORDERS_EXPORTED",
       outcome: "SUCCEEDED",
-      details: { rowCount: orders.length, filters: input as unknown as Prisma.InputJsonValue },
+      details: { rowCount: orders.length, filters: input },
     });
     return { csv, filename: `orders-${new Date().toISOString().slice(0, 10)}.csv` };
   }

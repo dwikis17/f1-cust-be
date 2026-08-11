@@ -1,5 +1,4 @@
 import type { z } from "zod";
-import { Prisma } from "../../generated/prisma/client.js";
 import { HttpError, notFound } from "../../http.js";
 import { CatalogRepository } from "../../repositories/admin/catalog-repository.js";
 import {
@@ -106,7 +105,7 @@ export class ProductService {
       variants: {
         create: variants.map((variant) => ({
           ...variant,
-          sizingGuide: variant.sizingGuide ?? Prisma.JsonNull,
+          sizingGuide: variant.sizingGuide,
         })),
       },
     });
@@ -139,7 +138,7 @@ export class ProductService {
   }
 
   static createVariant(productId: string, input: VariantInput) {
-    return ProductRepository.createVariant({ ...input, productId, sizingGuide: input.sizingGuide ?? Prisma.JsonNull });
+    return ProductRepository.createVariant({ ...input, productId });
   }
   static async updateVariant(productId: string, id: string, input: VariantPatch) {
     const current = await ProductRepository.findVariant(id, productId);
@@ -152,7 +151,7 @@ export class ProductService {
     const { sizingGuide, ...variant } = input;
     return ProductRepository.updateVariant(id, {
       ...variant,
-      ...(sizingGuide !== undefined ? { sizingGuide: sizingGuide === null ? Prisma.JsonNull : sizingGuide } : {}),
+      ...(sizingGuide !== undefined ? { sizingGuide } : {}),
     });
   }
   static async deleteVariant(productId: string, id: string) {

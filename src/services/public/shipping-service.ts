@@ -1,8 +1,8 @@
 import { z } from "zod";
 import { config } from "../../config.js";
-import { prisma } from "../../db.js";
 import { HttpError } from "../../http.js";
 import { effectivePriceIdr } from "../../product-price.js";
+import { PublicShippingRepository } from "../../repositories/public/shipping-repository.js";
 import { normalizeCollectionMethods, type ShipmentCollectionMethod } from "../../shipment-collection.js";
 
 type ShippingInput = {
@@ -62,82 +62,68 @@ function assertShippingConfig() {
   }
 }
 
-export async function requestBiteshipRates(input: {
-  destinationPostalCode: string;
-  items: BiteshipRateItem[];
-}) {
-  assertShippingConfig();
-  const apiKey = config.biteshipApiKey;
-  if (!apiKey) throw new HttpError(503, "SHIPPING_NOT_CONFIGURED", "Shipping estimates are not configured");
-
-  let upstream: Response;
-  try {
-    upstream = await fetch("https://api.biteship.com/v1/rates/couriers", {
-      method: "POST",
-      headers: { authorization: apiKey, "content-type": "application/json" },
-      body: JSON.stringify({
-        origin_postal_code: Number(config.biteshipOriginPostalCode),
-        destination_postal_code: Number(input.destinationPostalCode),
-        couriers: config.biteshipCouriers.join(","),
-        items: input.items,
-      }),
-      signal: AbortSignal.timeout(8_000),
-    });
-  } catch (error) {
-    if (error instanceof DOMException && (error.name === "TimeoutError" || error.name === "AbortError")) {
-      throw new HttpError(504, "SHIPPING_TIMEOUT", "Shipping estimates took too long; please try again");
-    }
-    throw new HttpError(502, "SHIPPING_UPSTREAM_ERROR", "Shipping estimates are temporarily unavailable");
-  }
-
-  const body: unknown = await upstream.json().catch(() => undefined);
-  if (!upstream.ok) {
-    const code = upstreamCode(body);
-    if (code === 40001001 || code === 40001010) {
-      throw new HttpError(422, code === 40001001 ? "INVALID_DESTINATION" : "NO_COURIER_AVAILABLE",
-        code === 40001001 ? "The destination postal code is not supported" : "No courier is available for this destination");
-    }
-    throw new HttpError(502, "SHIPPING_UPSTREAM_ERROR", "Shipping estimates are temporarily unavailable");
-  }
-
-  const parsed = biteshipResponseSchema.safeParse(body);
-  if (!parsed.success) throw new HttpError(502, "SHIPPING_UPSTREAM_ERROR", "Biteship returned an unexpected response");
-  return parsed.data.pricing.map((rate): ShippingRate => ({
-    courierCode: rate.courier_code,
-    courierName: rate.courier_name,
-    serviceCode: rate.courier_service_code,
-    serviceName: rate.courier_service_name,
-    description: rate.description ?? "",
-    duration: rate.duration ?? "",
-    serviceType: rate.service_type ?? "",
-    currency: rate.currency ?? "IDR",
-    price: rate.price,
-    availableCollectionMethods: normalizeCollectionMethods(rate.available_collection_method),
-  })).sort((left, right) => left.price - right.price);
-}
-
 export class PublicShippingService {
+  static async requestBiteshipRates(input: {
+    destinationPostalCode: string;
+    items: BiteshipRateItem[];
+  }) {
+    assertShippingConfig();
+    const apiKey = config.biteshipApiKey;
+    if (!apiKey) throw new HttpError(503, "SHIPPING_NOT_CONFIGURED", "Shipping estimates are not configured");
+
+    let upstream: Response;
+    try {
+      upstream = await fetch("https://api.biteship.com/v1/rates/couriers", {
+        method: "POST",
+        headers: { authorization: apiKey, "content-type": "application/json" },
+        body: JSON.stringify({
+          origin_postal_code: Number(config.biteshipOriginPostalCode),
+          destination_postal_code: Number(input.destinationPostalCode),
+          couriers: config.biteshipCouriers.join(","),
+          items: input.items,
+        }),
+        signal: AbortSignal.timeout(8_000),
+      });
+    } catch (error) {
+      if (error instanceof DOMException && (error.name === "TimeoutError" || error.name === "AbortError")) {
+        throw new HttpError(504, "SHIPPING_TIMEOUT", "Shipping estimates took too long; please try again");
+      }
+      throw new HttpError(502, "SHIPPING_UPSTREAM_ERROR", "Shipping estimates are temporarily unavailable");
+    }
+
+    const body: unknown = await upstream.json().catch(() => undefined);
+    if (!upstream.ok) {
+      const code = upstreamCode(body);
+      if (code === 40001001 || code === 40001010) {
+        throw new HttpError(422, code === 40001001 ? "INVALID_DESTINATION" : "NO_COURIER_AVAILABLE",
+          code === 40001001 ? "The destination postal code is not supported" : "No courier is available for this destination");
+      }
+      throw new HttpError(502, "SHIPPING_UPSTREAM_ERROR", "Shipping estimates are temporarily unavailable");
+    }
+
+    const parsed = biteshipResponseSchema.safeParse(body);
+    if (!parsed.success) throw new HttpError(502, "SHIPPING_UPSTREAM_ERROR", "Biteship returned an unexpected response");
+    return parsed.data.pricing.map((rate): ShippingRate => ({
+      courierCode: rate.courier_code,
+      courierName: rate.courier_name,
+      serviceCode: rate.courier_service_code,
+      serviceName: rate.courier_service_name,
+      description: rate.description ?? "",
+      duration: rate.duration ?? "",
+      serviceType: rate.service_type ?? "",
+      currency: rate.currency ?? "IDR",
+      price: rate.price,
+      availableCollectionMethods: normalizeCollectionMethods(rate.available_collection_method),
+    })).sort((left, right) => left.price - right.price);
+  }
+
   static async rates(input: ShippingInput) {
     assertShippingConfig();
     const quantities = new Map<string, number>();
     for (const item of input.items) {
       quantities.set(item.variantId, (quantities.get(item.variantId) ?? 0) + item.quantity);
     }
-    const variants = await prisma.productVariant.findMany({
-      where: { id: { in: [...quantities.keys()] } },
-      select: {
-        id: true,
-        sku: true,
-        stockQuantity: true,
-        packageLengthMm: true,
-        packageWidthMm: true,
-        packageHeightMm: true,
-        packageWeightG: true,
-        product: {
-          select: { name: true, priceIdr: true, salePriceIdr: true, status: true },
-        },
-      },
-    });
+    const variants = await PublicShippingRepository.findRateVariants([...quantities.keys()]);
     if (variants.length !== quantities.size || variants.some((variant) =>
       variant.product.status !== "ACTIVE" || variant.stockQuantity < (quantities.get(variant.id) ?? 0))) {
       throw new HttpError(409, "CART_CHANGED", "One or more cart items are unavailable; refresh your cart and try again");
@@ -145,7 +131,7 @@ export class PublicShippingService {
 
     return {
       destinationPostalCode: input.destinationPostalCode,
-      rates: await requestBiteshipRates({
+      rates: await PublicShippingService.requestBiteshipRates({
         destinationPostalCode: input.destinationPostalCode,
         items: variants.map((variant) => ({
           name: variant.product.name,
@@ -162,3 +148,5 @@ export class PublicShippingService {
     };
   }
 }
+
+export const requestBiteshipRates = PublicShippingService.requestBiteshipRates;

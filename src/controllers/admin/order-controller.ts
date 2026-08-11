@@ -1,5 +1,5 @@
 import { Buffer } from "node:buffer";
-import type { Request, Response } from "express";
+import type { NextFunction, Request, Response } from "express";
 import { z } from "zod";
 import { parse } from "../../http.js";
 import { idSchema } from "../../schemas.js";
@@ -57,95 +57,159 @@ function shipmentBookingInput(request: Request) {
 }
 
 export class OrderController {
-  static async list(request: Request, response: Response) {
-    response.set("cache-control", "no-store");
-    response.json(await OrderService.list(listInput(request)));
+  static async list(request: Request, response: Response, next: NextFunction) {
+    try {
+      response.set("cache-control", "no-store");
+      response.json(await OrderService.list(listInput(request)));
+    } catch (error) {
+      next(error);
+    }
   }
 
-  static async find(request: Request, response: Response) {
-    response.set("cache-control", "no-store");
-    response.json(await OrderService.find(orderId(request)));
+  static async find(request: Request, response: Response, next: NextFunction) {
+    try {
+      response.set("cache-control", "no-store");
+      response.json(await OrderService.find(orderId(request)));
+    } catch (error) {
+      next(error);
+    }
   }
 
-  static async listPaymentEvents(request: Request, response: Response) {
-    response.set("cache-control", "no-store");
-    response.json(await OrderService.listPaymentEvents(orderId(request)));
+  static async listPaymentEvents(request: Request, response: Response, next: NextFunction) {
+    try {
+      response.set("cache-control", "no-store");
+      response.json(await OrderService.listPaymentEvents(orderId(request)));
+    } catch (error) {
+      next(error);
+    }
   }
 
-  static async updateLifecycle(request: Request, response: Response) {
-    const { status } = parse(lifecycleBodySchema, request.body);
-    response.json(await OrderService.updateLifecycle(orderId(request), status, adminId(response)));
+  static async updateLifecycle(request: Request, response: Response, next: NextFunction) {
+    try {
+      const { status } = parse(lifecycleBodySchema, request.body);
+      response.json(await OrderService.updateLifecycle(orderId(request), status, adminId(response)));
+    } catch (error) {
+      next(error);
+    }
   }
 
-  static async retryShipment(request: Request, response: Response) {
-    const { collectionMethod } = shipmentBookingInput(request);
-    response.json(await OrderService.retryShipment(orderId(request), adminId(response), collectionMethod));
+  static async retryShipment(request: Request, response: Response, next: NextFunction) {
+    try {
+      const { collectionMethod } = shipmentBookingInput(request);
+      response.json(await OrderService.retryShipment(orderId(request), adminId(response), collectionMethod));
+    } catch (error) {
+      next(error);
+    }
   }
 
-  static async bookShipment(request: Request, response: Response) {
-    const { collectionMethod } = shipmentBookingInput(request);
-    response.json(await OrderService.bookShipment(orderId(request), adminId(response), collectionMethod));
+  static async bookShipment(request: Request, response: Response, next: NextFunction) {
+    try {
+      const { collectionMethod } = shipmentBookingInput(request);
+      response.json(await OrderService.bookShipment(orderId(request), adminId(response), collectionMethod));
+    } catch (error) {
+      next(error);
+    }
   }
 
-  static async cancel(request: Request, response: Response) {
-    const { reason } = parse(reasonBodySchema, request.body);
-    response.json(await OrderService.cancel(orderId(request), adminId(response), reason));
+  static async cancel(request: Request, response: Response, next: NextFunction) {
+    try {
+      const { reason } = parse(reasonBodySchema, request.body);
+      response.json(await OrderService.cancel(orderId(request), adminId(response), reason));
+    } catch (error) {
+      next(error);
+    }
   }
 
-  static async markExternalRefund(request: Request, response: Response) {
-    const { reason } = parse(reasonBodySchema, request.body);
-    response.json(await OrderService.markExternalRefund(orderId(request), adminId(response), reason));
+  static async markExternalRefund(request: Request, response: Response, next: NextFunction) {
+    try {
+      const { reason } = parse(reasonBodySchema, request.body);
+      response.json(await OrderService.markExternalRefund(orderId(request), adminId(response), reason));
+    } catch (error) {
+      next(error);
+    }
   }
 
-  static async resendConfirmation(request: Request, response: Response) {
-    response.json(await OrderService.resendConfirmation(orderId(request), adminId(response)));
+  static async resendConfirmation(request: Request, response: Response, next: NextFunction) {
+    try {
+      response.json(await OrderService.resendConfirmation(orderId(request), adminId(response)));
+    } catch (error) {
+      next(error);
+    }
   }
 
-  static async resendTelegramNotification(request: Request, response: Response) {
-    response.json(await OrderService.resendTelegramNotification(orderId(request), adminId(response)));
+  static async resendTelegramNotification(request: Request, response: Response, next: NextFunction) {
+    try {
+      response.json(await OrderService.resendTelegramNotification(orderId(request), adminId(response)));
+    } catch (error) {
+      next(error);
+    }
   }
 
-  static async resendShipmentConfirmation(request: Request, response: Response) {
-    response.json(await OrderService.resendShipmentConfirmation(orderId(request), adminId(response)));
+  static async resendShipmentConfirmation(request: Request, response: Response, next: NextFunction) {
+    try {
+      response.json(await OrderService.resendShipmentConfirmation(orderId(request), adminId(response)));
+    } catch (error) {
+      next(error);
+    }
   }
 
-  static async shipment(request: Request, response: Response) {
-    response.set("cache-control", "no-store");
-    response.json(await OrderService.shipment(orderId(request)));
+  static async shipment(request: Request, response: Response, next: NextFunction) {
+    try {
+      response.set("cache-control", "no-store");
+      response.json(await OrderService.shipment(orderId(request)));
+    } catch (error) {
+      next(error);
+    }
   }
 
-  static async shipmentOptions(request: Request, response: Response) {
-    response.set("cache-control", "no-store");
-    response.json(await OrderService.shipmentOptions(orderId(request)));
+  static async shipmentOptions(request: Request, response: Response, next: NextFunction) {
+    try {
+      response.set("cache-control", "no-store");
+      response.json(await OrderService.shipmentOptions(orderId(request)));
+    } catch (error) {
+      next(error);
+    }
   }
 
-  static async invoice(request: Request, response: Response) {
-    const invoice = await OrderService.invoice(orderId(request), adminId(response));
-    response.set({
-      "cache-control": "no-store",
-      "content-disposition": `attachment; filename="${invoice.filename}"`,
-      "content-type": "application/pdf",
-    });
-    response.send(Buffer.from(invoice.bytes));
+  static async invoice(request: Request, response: Response, next: NextFunction) {
+    try {
+      const invoice = await OrderService.invoice(orderId(request), adminId(response));
+      response.set({
+        "cache-control": "no-store",
+        "content-disposition": `attachment; filename="${invoice.filename}"`,
+        "content-type": "application/pdf",
+      });
+      response.send(Buffer.from(invoice.bytes));
+    } catch (error) {
+      next(error);
+    }
   }
 
-  static async shippingLabel(request: Request, response: Response) {
-    const label = await OrderService.shippingLabel(orderId(request), adminId(response));
-    response.set({
-      "cache-control": "no-store",
-      "content-disposition": `attachment; filename="${label.filename}"`,
-      "content-type": "application/pdf",
-    });
-    response.send(Buffer.from(label.bytes));
+  static async shippingLabel(request: Request, response: Response, next: NextFunction) {
+    try {
+      const label = await OrderService.shippingLabel(orderId(request), adminId(response));
+      response.set({
+        "cache-control": "no-store",
+        "content-disposition": `attachment; filename="${label.filename}"`,
+        "content-type": "application/pdf",
+      });
+      response.send(Buffer.from(label.bytes));
+    } catch (error) {
+      next(error);
+    }
   }
 
-  static async exportCsv(request: Request, response: Response) {
-    const exported = await OrderService.exportCsv(listInput(request), adminId(response));
-    response.set({
-      "cache-control": "no-store",
-      "content-disposition": `attachment; filename="${exported.filename}"`,
-      "content-type": "text/csv; charset=utf-8",
-    });
-    response.send(exported.csv);
+  static async exportCsv(request: Request, response: Response, next: NextFunction) {
+    try {
+      const exported = await OrderService.exportCsv(listInput(request), adminId(response));
+      response.set({
+        "cache-control": "no-store",
+        "content-disposition": `attachment; filename="${exported.filename}"`,
+        "content-type": "text/csv; charset=utf-8",
+      });
+      response.send(exported.csv);
+    } catch (error) {
+      next(error);
+    }
   }
 }

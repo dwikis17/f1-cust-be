@@ -1,4 +1,4 @@
-import type { Request, Response } from "express";
+import type { NextFunction, Request, Response } from "express";
 import { z } from "zod";
 import { parse } from "../../http.js";
 import { idSchema, promoCodeValueSchema } from "../../schemas.js";
@@ -41,28 +41,44 @@ const trackingLookupSchema = z.object({
 }).strict();
 
 export class PublicCheckoutController {
-  static async create(request: Request, response: Response) {
-    response.set("cache-control", "no-store");
-    const { turnstileToken, ...input } = parse(checkoutSchema, request.body);
-    await verifyHuman(turnstileToken, "checkout", request.get("cf-connecting-ip"));
-    const checkout = await PublicCheckoutService.create(input);
-    revalidateStorefront(["catalog:products"]);
-    response.status(201).json(checkout);
+  static async create(request: Request, response: Response, next: NextFunction) {
+    try {
+      response.set("cache-control", "no-store");
+      const { turnstileToken, ...input } = parse(checkoutSchema, request.body);
+      await verifyHuman(turnstileToken, "checkout", request.get("cf-connecting-ip"));
+      const checkout = await PublicCheckoutService.create(input);
+      revalidateStorefront(["catalog:products"]);
+      response.status(201).json(checkout);
+    } catch (error) {
+      next(error);
+    }
   }
 
-  static async find(request: Request, response: Response) {
-    response.set("cache-control", "no-store");
-    response.json(await PublicCheckoutService.find(parse(idSchema, String(request.params.id))));
+  static async find(request: Request, response: Response, next: NextFunction) {
+    try {
+      response.set("cache-control", "no-store");
+      response.json(await PublicCheckoutService.find(parse(idSchema, String(request.params.id))));
+    } catch (error) {
+      next(error);
+    }
   }
 
-  static async track(request: Request, response: Response) {
-    response.set("cache-control", "no-store");
-    response.json(await PublicCheckoutService.track(parse(trackingLookupSchema, request.body)));
+  static async track(request: Request, response: Response, next: NextFunction) {
+    try {
+      response.set("cache-control", "no-store");
+      response.json(await PublicCheckoutService.track(parse(trackingLookupSchema, request.body)));
+    } catch (error) {
+      next(error);
+    }
   }
 
-  static async midtransNotification(request: Request, response: Response) {
-    const value = await PublicCheckoutService.notification(parse(notificationSchema, request.body));
-    revalidateStorefront(["catalog:products"]);
-    response.json(value);
+  static async midtransNotification(request: Request, response: Response, next: NextFunction) {
+    try {
+      const value = await PublicCheckoutService.notification(parse(notificationSchema, request.body));
+      revalidateStorefront(["catalog:products"]);
+      response.json(value);
+    } catch (error) {
+      next(error);
+    }
   }
 }
