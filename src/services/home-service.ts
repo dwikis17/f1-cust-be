@@ -230,11 +230,8 @@ export class HomeCollectionBlockService {
   static async listPublic(locale: "en" | "id") {
     const blocks = await HomeRepository.listPublicBlocks(MAX_ACTIVE_COLLECTION_BLOCKS);
     const values = await Promise.all(blocks.map(async (block) => {
-      const [, memberships] = await PublicProductRepository.listCollectionProducts(
+      const memberships = await PublicProductRepository.listFeaturedCollectionProductCards(
         block.collection!.slug,
-        {},
-        "featured",
-        1,
         5,
       );
       if (!memberships.length) return null;
@@ -249,7 +246,7 @@ export class HomeCollectionBlockService {
           slug: collection.slug,
           description: locale === "id" ? collection.descriptionId ?? collection.description : collection.description,
         },
-        products: memberships.map(({ product }) => PublicProductService.publicProduct(product, locale)),
+        products: memberships.map(({ product }) => PublicProductService.publicProductCard(product, locale)),
       };
     }));
     return values.filter((value) => value !== null);

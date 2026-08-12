@@ -852,7 +852,7 @@ test("admin creates catalog data and public API hides drafts", async () => {
   assert.equal(product.body.team.slug, "ferrari");
   assert.deepEqual(product.body.drivers.map((driver: { slug: string }) => driver.slug), ["charles-leclerc", "niki-lauda"]);
   assert.equal(product.body.collections.length, 3);
-  assert.deepEqual(product.body.tags.map((tag: { slug: string }) => tag.slug), ["limited-edition"]);
+  assert.deepEqual(product.body.tags.map(({ tag }: { tag: { slug: string } }) => tag.slug), ["limited-edition"]);
   const unassigned = await request(app).post("/api/admin/products").set("authorization", `Bearer ${token}`)
     .send({ name: "General F1 Cap", slug: "general-f1-cap", priceIdr: 300_000, condition: "BNWT", categoryId })
     .expect(201);
@@ -1073,20 +1073,22 @@ test("active products are filterable with exact variant stock", async () => {
     .expect(200);
   assert.equal(response.body.total, 1);
   assert.equal(response.body.data[0].priceIdr, 1_250_000);
-  assert.equal(response.body.data[0].sizingNote, "Allow a 1 cm tolerance.");
   assert.equal(response.body.data[0].condition, "BNWT");
-  assert.equal(response.body.data[0].team.slug, "ferrari");
+  assert.equal(response.body.data[0].team.name, "Ferrari");
+  assert.equal(response.body.data[0].name, "Ferrari Team Jersey");
+  assert.equal(response.body.data[0].variants, undefined);
+  assert.equal(response.body.data[0].collections, undefined);
+  const english = await request(app).get("/api/products/ferrari-team-jersey").expect(200);
+  assert.equal(english.body.sizingNote, "Allow a 1 cm tolerance.");
+  assert.equal(english.body.team.slug, "ferrari");
   assert.deepEqual(
-    response.body.data[0].drivers.map((driver: { slug: string }) => driver.slug),
+    english.body.drivers.map((driver: { slug: string }) => driver.slug),
     ["charles-leclerc", "niki-lauda"],
   );
-  assert.equal(response.body.data[0].audience, "UNISEX");
-  assert.equal(response.body.data[0].variants[0].available, true);
-  assert.equal(response.body.data[0].variants[0].stockQuantity, 8);
-  assert.equal(response.body.data[0].name, "Ferrari Team Jersey");
-  assert.equal(response.body.data[0].nameId, undefined);
-  assert.equal(response.body.data[0].descriptionId, undefined);
-  const publicFerrariCollection = response.body.data[0].collections
+  assert.equal(english.body.audience, "UNISEX");
+  assert.equal(english.body.variants[0].available, true);
+  assert.equal(english.body.variants[0].stockQuantity, 8);
+  const publicFerrariCollection = english.body.collections
     .find((collection: { slug: string }) => collection.slug === "ferrari");
   assert.equal(publicFerrariCollection.description, "Shop the Ferrari collection.");
   assert.equal(publicFerrariCollection.descriptionId, undefined);
@@ -1217,6 +1219,10 @@ test("home collection blocks support ordered CRUD, ranked products, limits, loca
     assert.equal(english.body[0].products.length, 5);
     assert.equal(english.body[0].products[0].id, extraProducts[4].id);
     assert.equal(english.body[0].products.some((product: { id: string }) => product.id === extraProducts[3].id), false);
+    assert.ok(english.body[0].products.every((product: { photos: unknown[] }) => product.photos.length <= 2));
+    assert.equal(english.body[0].products[0].description, undefined);
+    assert.equal(english.body[0].products[0].variants, undefined);
+    assert.equal(english.body[0].products[0].collections, undefined);
     const indonesian = await request(app).get("/api/home/collection-blocks?locale=id").expect(200);
     assert.equal(indonesian.body[0].collection.description, "Jelajahi koleksi Ferrari.");
     assert.equal(indonesian.body[0].products.find((product: { id: string }) => product.id === productId).name, "Jersey Tim Ferrari");
@@ -1371,6 +1377,20 @@ test("product sales validate and price public catalog results until cleared", as
     assert.deepEqual(saleCatalog.body.facets.price, { min: 800_000, max: 900_000 });
     const defaultCatalog = await request(app).get("/api/products?limit=100").expect(200);
     assert.equal(defaultCatalog.body.facets, undefined);
+    assert.deepEqual(Object.keys(defaultCatalog.body.data[0]).sort(), [
+      "condition",
+      "id",
+      "name",
+      "originalPriceIdr",
+      "photos",
+      "priceIdr",
+      "productType",
+      "salePercentage",
+      "slug",
+      "tags",
+      "team",
+    ]);
+    assert.ok(defaultCatalog.body.data.every((product: { photos: unknown[] }) => product.photos.length <= 2));
     await request(app).get("/api/products?sale=invalid").expect(400);
 
     const publicProduct = await request(app).get("/api/products/ferrari-team-jersey").expect(200);
@@ -1411,7 +1431,7 @@ test("product sales validate and price public catalog results until cleared", as
 
 test("cart items return only requested active variants and report missing ids", async () => {
   const product = await request(app).get("/api/products/ferrari-team-jersey").expect(200);
-  const variantId = product.body.variants[0].id as string;
+  const variantId = product.body.variants.find(({ sku }: { sku: string }) => sku === "FER-JER-RED-M").id as string;
   const missingId = randomUUID();
   const response = await request(app).post("/api/products/cart-items").send({
     variantIds: [variantId, variantId, missingId],
@@ -1439,7 +1459,7 @@ test("shipping rates use authoritative cart data and normalize Biteship response
     storefrontUrl: config.storefrontUrl,
   };
   const product = await request(app).get("/api/products/ferrari-team-jersey").expect(200);
-  const variantId = product.body.variants[0].id as string;
+  const variantId = product.body.variants.find(({ sku }: { sku: string }) => sku === "FER-JER-RED-M").id as string;
   config.biteshipApiKey = "biteship_test.test-key";
   config.biteshipOriginPostalCode = "12440";
   config.biteshipCouriers = ["jne", "sicepat"];
@@ -1662,7 +1682,7 @@ test("Biteship status webhooks update provider data without changing order lifec
 
 test("promo codes are normalized, validated, previewed, and managed by admins", async () => {
   const product = await request(app).get("/api/products/ferrari-team-jersey").expect(200);
-  const variantId = product.body.variants[0].id as string;
+  const variantId = product.body.variants.find(({ sku }: { sku: string }) => sku === "FER-JER-RED-M").id as string;
   await request(app).get("/api/admin/promo-codes").expect(401);
   const created = await request(app).post("/api/admin/promo-codes")
     .set("authorization", `Bearer ${token}`)
@@ -1740,7 +1760,7 @@ test("checkout verifies payment notifications, reserves stock, and waits for man
     telegramChatId: config.telegramChatId,
   };
   const product = await request(app).get("/api/products/ferrari-team-jersey").expect(200);
-  const variantId = product.body.variants[0].id as string;
+  const variantId = product.body.variants.find(({ sku }: { sku: string }) => sku === "FER-JER-RED-M").id as string;
   config.biteshipApiKey = "biteship_test.checkout";
   config.biteshipOriginPostalCode = "12440";
   config.biteshipOriginContactName = "Warehouse";
@@ -2416,6 +2436,7 @@ test("checkout verifies payment notifications, reserves stock, and waits for man
     await waitForTelegram(refundedTelegramCheckout.body.orderId);
     assert.match(telegramBodies.at(-1)?.text ?? "", /pembayaran kemudian direfund/);
   } finally {
+    await prisma.product.deleteMany({ where: { slug: "telegram-test-product" } });
     globalThis.fetch = originalFetch;
     config.biteshipApiKey = originalConfig.apiKey;
     config.biteshipOriginPostalCode = originalConfig.originPostalCode;

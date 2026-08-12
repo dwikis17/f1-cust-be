@@ -8,7 +8,7 @@ import {
   variantSchema,
 } from "../../schemas.js";
 import { ProductService } from "../../services/admin/product-service.js";
-import { revalidateStorefront } from "../../storefront-revalidation.js";
+import { revalidateStorefrontNow } from "../../storefront-revalidation.js";
 
 export class ProductController {
   static async listProducts(_request: Request, response: Response, next: NextFunction) {
@@ -28,7 +28,7 @@ export class ProductController {
   static async createProduct(request: Request, response: Response, next: NextFunction) {
     try {
       const product = await ProductService.createProduct(parse(productSchema, request.body));
-      revalidateStorefront(["catalog:products", `catalog:product:${product.slug}`]);
+      await revalidateStorefrontNow(["catalog:products", `catalog:product:${product.slug}`]);
       response.status(201).json(product);
     } catch (error) {
       next(error);
@@ -39,7 +39,7 @@ export class ProductController {
       const id = parse(idSchema, request.params.id);
       const previous = await ProductService.findProduct(id);
       const product = await ProductService.updateProduct(id, parse(productPatchSchema, request.body));
-      revalidateStorefront(["catalog:products", `catalog:product:${previous.slug}`, `catalog:product:${product.slug}`]);
+      await revalidateStorefrontNow(["catalog:products", `catalog:product:${previous.slug}`, `catalog:product:${product.slug}`]);
       response.json(product);
     } catch (error) {
       next(error);
@@ -54,7 +54,7 @@ export class ProductController {
         parse(variantSchema, request.body),
       );
       const product = await ProductService.findProduct(productId);
-      revalidateStorefront(["catalog:products", `catalog:product:${product.slug}`]);
+      await revalidateStorefrontNow(["catalog:products", `catalog:product:${product.slug}`]);
       response.status(201).json(variant);
     } catch (error) {
       next(error);
@@ -69,7 +69,7 @@ export class ProductController {
         parse(variantPatchSchema, request.body),
       );
       const product = await ProductService.findProduct(productId);
-      revalidateStorefront(["catalog:products", `catalog:product:${product.slug}`]);
+      await revalidateStorefrontNow(["catalog:products", `catalog:product:${product.slug}`]);
       response.json(variant);
     } catch (error) {
       next(error);
@@ -80,7 +80,7 @@ export class ProductController {
       const productId = parse(idSchema, request.params.productId);
       const product = await ProductService.findProduct(productId);
       await ProductService.deleteVariant(productId, parse(idSchema, request.params.id));
-      revalidateStorefront(["catalog:products", `catalog:product:${product.slug}`]);
+      await revalidateStorefrontNow(["catalog:products", `catalog:product:${product.slug}`]);
       response.status(204).send();
     } catch (error) {
       next(error);

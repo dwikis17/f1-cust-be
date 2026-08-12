@@ -13,7 +13,7 @@ import {
   teamSchema,
 } from "../../schemas.js";
 import { CatalogService } from "../../services/admin/catalog-service.js";
-import { revalidateStorefront } from "../../storefront-revalidation.js";
+import { revalidateStorefrontNow } from "../../storefront-revalidation.js";
 
 export class CatalogController {
   static async listCategories(_request: Request, response: Response, next: NextFunction) {
@@ -25,14 +25,14 @@ export class CatalogController {
   }
   static async createCategory(request: Request, response: Response, next: NextFunction) {
     try {
-      const value = await CatalogService.createCategory(parse(catalogEntitySchema, request.body)); revalidateStorefront(["catalog:products"]); response.status(201).json(value);
+      const value = await CatalogService.createCategory(parse(catalogEntitySchema, request.body)); await revalidateStorefrontNow(["catalog:products"]); response.status(201).json(value);
     } catch (error) {
       next(error);
     }
   }
   static async updateCategory(request: Request, response: Response, next: NextFunction) {
     try {
-      const value = await CatalogService.updateCategory(parse(idSchema, request.params.id), parse(catalogEntityPatchSchema, request.body)); revalidateStorefront(["catalog:products"]); response.json(value);
+      const value = await CatalogService.updateCategory(parse(idSchema, request.params.id), parse(catalogEntityPatchSchema, request.body)); await revalidateStorefrontNow(["catalog:products"]); response.json(value);
     } catch (error) {
       next(error);
     }
@@ -40,7 +40,7 @@ export class CatalogController {
   static async deleteCategory(request: Request, response: Response, next: NextFunction) {
     try {
       await CatalogService.deleteCategory(parse(idSchema, request.params.id));
-      revalidateStorefront(["catalog:products"]);
+      await revalidateStorefrontNow(["catalog:products"]);
       response.status(204).send();
     } catch (error) {
       next(error);
@@ -56,14 +56,14 @@ export class CatalogController {
   }
   static async createTag(request: Request, response: Response, next: NextFunction) {
     try {
-      const value = await CatalogService.createTag(parse(catalogEntitySchema, request.body)); revalidateStorefront(["catalog:products"]); response.status(201).json(value);
+      const value = await CatalogService.createTag(parse(catalogEntitySchema, request.body)); await revalidateStorefrontNow(["catalog:products"]); response.status(201).json(value);
     } catch (error) {
       next(error);
     }
   }
   static async updateTag(request: Request, response: Response, next: NextFunction) {
     try {
-      const value = await CatalogService.updateTag(parse(idSchema, request.params.id), parse(catalogEntityPatchSchema, request.body)); revalidateStorefront(["catalog:products"]); response.json(value);
+      const value = await CatalogService.updateTag(parse(idSchema, request.params.id), parse(catalogEntityPatchSchema, request.body)); await revalidateStorefrontNow(["catalog:products"]); response.json(value);
     } catch (error) {
       next(error);
     }
@@ -71,7 +71,7 @@ export class CatalogController {
   static async deleteTag(request: Request, response: Response, next: NextFunction) {
     try {
       await CatalogService.deleteTag(parse(idSchema, request.params.id));
-      revalidateStorefront(["catalog:products"]);
+      await revalidateStorefrontNow(["catalog:products"]);
       response.status(204).send();
     } catch (error) {
       next(error);
@@ -87,14 +87,14 @@ export class CatalogController {
   }
   static async createTeam(request: Request, response: Response, next: NextFunction) {
     try {
-      const value = await CatalogService.createTeam(parse(teamSchema, request.body)); revalidateStorefront(["catalog:teams", "catalog:products"]); response.status(201).json(value);
+      const value = await CatalogService.createTeam(parse(teamSchema, request.body)); await revalidateStorefrontNow(["catalog:teams", "catalog:products"]); response.status(201).json(value);
     } catch (error) {
       next(error);
     }
   }
   static async updateTeam(request: Request, response: Response, next: NextFunction) {
     try {
-      const value = await CatalogService.updateTeam(parse(idSchema, request.params.id), parse(teamPatchSchema, request.body)); revalidateStorefront(["catalog:teams", "catalog:products"]); response.json(value);
+      const value = await CatalogService.updateTeam(parse(idSchema, request.params.id), parse(teamPatchSchema, request.body)); await revalidateStorefrontNow(["catalog:teams", "catalog:products"]); response.json(value);
     } catch (error) {
       next(error);
     }
@@ -102,7 +102,7 @@ export class CatalogController {
   static async deleteTeam(request: Request, response: Response, next: NextFunction) {
     try {
       await CatalogService.deleteTeam(parse(idSchema, request.params.id));
-      revalidateStorefront(["catalog:teams", "catalog:products"]);
+      await revalidateStorefrontNow(["catalog:teams", "catalog:products"]);
       response.status(204).send();
     } catch (error) {
       next(error);
@@ -118,14 +118,14 @@ export class CatalogController {
   }
   static async createDriver(request: Request, response: Response, next: NextFunction) {
     try {
-      const value = await CatalogService.createDriver(parse(driverSchema, request.body)); revalidateStorefront(["catalog:products"]); response.status(201).json(value);
+      const value = await CatalogService.createDriver(parse(driverSchema, request.body)); await revalidateStorefrontNow(["catalog:products"]); response.status(201).json(value);
     } catch (error) {
       next(error);
     }
   }
   static async updateDriver(request: Request, response: Response, next: NextFunction) {
     try {
-      const value = await CatalogService.updateDriver(parse(idSchema, request.params.id), parse(driverPatchSchema, request.body)); revalidateStorefront(["catalog:products"]); response.json(value);
+      const value = await CatalogService.updateDriver(parse(idSchema, request.params.id), parse(driverPatchSchema, request.body)); await revalidateStorefrontNow(["catalog:products"]); response.json(value);
     } catch (error) {
       next(error);
     }
@@ -133,7 +133,7 @@ export class CatalogController {
   static async deleteDriver(request: Request, response: Response, next: NextFunction) {
     try {
       await CatalogService.deleteDriver(parse(idSchema, request.params.id));
-      revalidateStorefront(["catalog:products"]);
+      await revalidateStorefrontNow(["catalog:products"]);
       response.status(204).send();
     } catch (error) {
       next(error);
@@ -156,7 +156,7 @@ export class CatalogController {
   }
   static async createCollection(request: Request, response: Response, next: NextFunction) {
     try {
-      const value = await CatalogService.createCollection(parse(collectionSchema, request.body)); revalidateStorefront(["catalog:collections", "catalog:products", `catalog:collection:${value.slug}`]); response.status(201).json(value);
+      const value = await CatalogService.createCollection(parse(collectionSchema, request.body)); await revalidateStorefrontNow(["catalog:collections", "catalog:products", `catalog:collection:${value.slug}`]); response.status(201).json(value);
     } catch (error) {
       next(error);
     }
@@ -169,7 +169,7 @@ export class CatalogController {
         id,
         parse(collectionPatchSchema, request.body),
       );
-      revalidateStorefront(["catalog:collections", "catalog:products", `catalog:collection:${previous.slug}`, `catalog:collection:${value.slug}`]);
+      await revalidateStorefrontNow(["catalog:collections", "catalog:products", `catalog:collection:${previous.slug}`, `catalog:collection:${value.slug}`]);
       response.json(value);
     } catch (error) {
       next(error);
@@ -180,7 +180,7 @@ export class CatalogController {
       const id = parse(idSchema, request.params.id);
       const previous = await CatalogService.findCollection(id);
       await CatalogService.deleteCollection(id);
-      revalidateStorefront(["catalog:collections", "catalog:products", `catalog:collection:${previous.slug}`]);
+      await revalidateStorefrontNow(["catalog:collections", "catalog:products", `catalog:collection:${previous.slug}`]);
       response.status(204).send();
     } catch (error) {
       next(error);
@@ -194,7 +194,7 @@ export class CatalogController {
         parse(collectionMembershipSchema, request.body),
       );
       const collection = await CatalogService.findCollection(id);
-      revalidateStorefront(["catalog:collections", "catalog:products", `catalog:collection:${collection.slug}`]);
+      await revalidateStorefrontNow(["catalog:collections", "catalog:products", `catalog:collection:${collection.slug}`]);
       response.json(value);
     } catch (error) {
       next(error);

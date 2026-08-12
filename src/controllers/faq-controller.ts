@@ -3,7 +3,7 @@ import { z } from "zod";
 import { parse } from "../http.js";
 import { faqPatchSchema, faqSchema, idSchema, localeSchema } from "../schemas.js";
 import { FaqService } from "../services/faq-service.js";
-import { revalidateStorefront } from "../storefront-revalidation.js";
+import { revalidateStorefrontNow } from "../storefront-revalidation.js";
 
 const publicQuerySchema = z.object({ locale: localeSchema.default("en") }).strict();
 
@@ -28,7 +28,7 @@ export class FaqController {
   static async create(request: Request, response: Response, next: NextFunction) {
     try {
       const faq = await FaqService.create(parse(faqSchema, request.body));
-      revalidateStorefront(["content:faqs:en", "content:faqs:id"]);
+      await revalidateStorefrontNow(["content:faqs:en", "content:faqs:id"]);
       response.status(201).json(faq);
     } catch (error) {
       next(error);
@@ -41,7 +41,7 @@ export class FaqController {
         parse(idSchema, request.params.id),
         parse(faqPatchSchema, request.body),
       );
-      revalidateStorefront(["content:faqs:en", "content:faqs:id"]);
+      await revalidateStorefrontNow(["content:faqs:en", "content:faqs:id"]);
       response.json(faq);
     } catch (error) {
       next(error);
@@ -51,7 +51,7 @@ export class FaqController {
   static async remove(request: Request, response: Response, next: NextFunction) {
     try {
       await FaqService.remove(parse(idSchema, request.params.id));
-      revalidateStorefront(["content:faqs:en", "content:faqs:id"]);
+      await revalidateStorefrontNow(["content:faqs:en", "content:faqs:id"]);
       response.status(204).end();
     } catch (error) {
       next(error);

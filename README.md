@@ -114,6 +114,8 @@ curl -X POST http://localhost:3000/api/admin/auth/login \
 
 Prices use integer Indonesian rupiah. Public product responses expose `available` for each variant but do not expose exact stock quantities.
 
+Product and collection list endpoints return compact product cards: localized name, slug, pricing, condition, team/product-type labels, tags, and at most two photos. Use `GET /api/products/:slug` for full descriptions, variants, collections, and galleries; use the uncached cart-items endpoint for authoritative stock quantities.
+
 `POST /api/products/cart-items` accepts `{ variantIds, locale }` for at most 50 variants and returns only the product and variant fields required to render a cart. Missing or inactive variants are reported separately, and the response is never cached.
 
 ### Biteship shipping estimates

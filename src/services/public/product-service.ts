@@ -2,6 +2,7 @@ import { notFound } from "../../http.js";
 import { PublicCatalogRepository } from "../../repositories/public/catalog-repository.js";
 import {
   PublicProductRepository,
+  type PublicProductCardRecord,
   type ProductFilters,
   type ProductSort,
 } from "../../repositories/public/product-repository.js";
@@ -26,6 +27,25 @@ function namedFacet(map: Map<string, { value: NamedFacetValue; count: number }>)
 }
 
 export class PublicProductService {
+  static publicProductCard(product: PublicProductCardRecord, locale: Locale) {
+    return {
+      id: product.id,
+      name: locale === "id" ? product.nameId ?? product.name : product.name,
+      slug: product.slug,
+      priceIdr: effectivePriceIdr(product),
+      originalPriceIdr: product.salePriceIdr === null ? null : product.priceIdr,
+      salePercentage: product.salePercentage,
+      condition: product.condition,
+      team: product.team,
+      productType: product.category,
+      tags: product.tags.map(({ tag }) => tag).sort((a, b) => a.name.localeCompare(b.name)),
+      photos: product.photos.map((photo) => ({
+        url: PublicProductRepository.storedPhotoUrl(photo.path),
+        altText: photo.altText,
+      })),
+    };
+  }
+
   static publicProduct(product: ProductWithRelations, locale: Locale) {
     const {
       drivers,
@@ -132,7 +152,7 @@ export class PublicProductService {
     ]);
     const [total, products] = result;
     return {
-      data: products.map((product) => PublicProductService.publicProduct(product, locale)),
+      data: products.map((product) => PublicProductService.publicProductCard(product, locale)),
       page,
       limit,
       total,
@@ -159,7 +179,7 @@ export class PublicProductService {
     if (!collection) notFound("Collection not found");
     return {
       collection,
-      data: memberships.map(({ product }) => PublicProductService.publicProduct(product, locale)),
+      data: memberships.map(({ product }) => PublicProductService.publicProductCard(product, locale)),
       page,
       limit,
       total,
