@@ -1,4 +1,5 @@
 import { z } from "zod";
+import { salePriceFromPercentage } from "./product-price.js";
 
 export const idSchema = z.string().uuid();
 export const slugSchema = z.string().trim().min(2).max(100).regex(/^[a-z0-9]+(?:-[a-z0-9]+)*$/);
@@ -117,12 +118,17 @@ export const sizingGuideSchema = z.object({
 
 const sizingNoteSchema = z.string().trim().max(2_000).nullable();
 
+const salePercentageSchema = z.number().int().min(1).max(99);
+
 function validateSale(
-  value: { priceIdr: number; salePriceIdr?: number | null },
+  value: { priceIdr: number; salePercentage?: number | null },
   context: z.RefinementCtx,
 ) {
-  if (value.salePriceIdr != null && value.salePriceIdr >= value.priceIdr) {
-    context.addIssue({ code: "custom", path: ["salePriceIdr"], message: "Sale price must be lower than the regular price" });
+  if (value.salePercentage == null) return;
+  const salePriceIdr = salePriceFromPercentage(value.priceIdr, value.salePercentage);
+  if (salePriceIdr === null) return;
+  if (salePriceIdr < 1 || salePriceIdr >= value.priceIdr) {
+    context.addIssue({ code: "custom", path: ["salePercentage"], message: "Sale percentage must produce a price lower than the regular price" });
   }
 }
 
@@ -152,7 +158,7 @@ export const productSchema = z.object({
   descriptionId: z.string().trim().max(10_000).nullable().optional(),
   sizingNote: sizingNoteSchema.optional(),
   priceIdr: z.number().int().nonnegative(),
-  salePriceIdr: z.number().int().positive().nullable().optional(),
+  salePercentage: salePercentageSchema.nullable().default(null),
   status: z.enum(["DRAFT", "ACTIVE", "ARCHIVED"]).default("DRAFT"),
   condition: productConditionSchema,
   categoryId: idSchema,
@@ -182,7 +188,7 @@ export const productPatchSchema = z.object({
   descriptionId: z.string().trim().max(10_000).nullable().optional(),
   sizingNote: sizingNoteSchema.optional(),
   priceIdr: z.number().int().nonnegative().optional(),
-  salePriceIdr: z.number().int().positive().nullable().optional(),
+  salePercentage: salePercentageSchema.nullable().optional(),
   status: z.enum(["DRAFT", "ACTIVE", "ARCHIVED"]).optional(),
   condition: productConditionSchema.optional(),
   categoryId: idSchema.optional(),

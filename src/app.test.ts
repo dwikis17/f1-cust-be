@@ -1314,13 +1314,24 @@ test("product sales validate and price public catalog results until cleared", as
   let comparisonId: string | undefined;
   try {
     await request(app).patch(`/api/admin/products/${productId}`).set("authorization", `Bearer ${token}`)
-      .send({ salePriceIdr: 0 }).expect(400);
+      .send({ salePercentage: 0 }).expect(400);
     await request(app).patch(`/api/admin/products/${productId}`).set("authorization", `Bearer ${token}`)
-      .send({ salePriceIdr: 1_250_000 }).expect(400);
+      .send({ salePercentage: 100 }).expect(400);
+    await request(app).patch(`/api/admin/products/${productId}`).set("authorization", `Bearer ${token}`)
+      .send({ priceIdr: 1, salePercentage: 1 }).expect(400);
     const managed = await request(app).patch(`/api/admin/products/${productId}`)
       .set("authorization", `Bearer ${token}`)
-      .send({ salePriceIdr: 900_000 }).expect(200);
+      .send({ salePercentage: 28 }).expect(200);
     assert.equal(managed.body.salePriceIdr, 900_000);
+    assert.equal(managed.body.salePercentage, 28);
+    const repriced = await request(app).patch(`/api/admin/products/${productId}`)
+      .set("authorization", `Bearer ${token}`)
+      .send({ priceIdr: 1_000_000 }).expect(200);
+    assert.equal(repriced.body.salePriceIdr, 720_000);
+    assert.equal(repriced.body.salePercentage, 28);
+    await request(app).patch(`/api/admin/products/${productId}`)
+      .set("authorization", `Bearer ${token}`)
+      .send({ priceIdr: 1_250_000 }).expect(200);
 
     const comparison = await prisma.product.create({
       data: {
@@ -1328,6 +1339,7 @@ test("product sales validate and price public catalog results until cleared", as
         slug: "sale-comparison-product",
         priceIdr: 2_000_000,
         salePriceIdr: 800_000,
+        salePercentage: 60,
         status: "ACTIVE",
         condition: "BNWT",
         categoryId,
@@ -1350,6 +1362,7 @@ test("product sales validate and price public catalog results until cleared", as
     const publicProduct = await request(app).get("/api/products/ferrari-team-jersey").expect(200);
     assert.equal(publicProduct.body.priceIdr, 900_000);
     assert.equal(publicProduct.body.originalPriceIdr, 1_250_000);
+    assert.equal(publicProduct.body.salePercentage, 28);
 
     const variantId = publicProduct.body.variants[0].id as string;
     const cart = await request(app).post("/api/products/cart-items")
@@ -1368,15 +1381,16 @@ test("product sales validate and price public catalog results until cleared", as
     assert.deepEqual(sorted.body.facets.price, { min: 800_000, max: 900_000 });
 
     await request(app).patch(`/api/admin/products/${productId}`).set("authorization", `Bearer ${token}`)
-      .send({ salePriceIdr: null }).expect(200);
+      .send({ salePercentage: null }).expect(200);
     const cleared = await request(app).get("/api/products/ferrari-team-jersey").expect(200);
     assert.equal(cleared.body.priceIdr, 1_250_000);
     assert.equal(cleared.body.originalPriceIdr, null);
+    assert.equal(cleared.body.salePercentage, null);
   } finally {
     if (comparisonId) await prisma.product.delete({ where: { id: comparisonId } });
     await prisma.product.update({
       where: { id: productId },
-      data: { salePriceIdr: null },
+      data: { salePriceIdr: null, salePercentage: null },
     });
   }
 });
@@ -1417,7 +1431,7 @@ test("shipping rates use authoritative cart data and normalize Biteship response
   config.biteshipCouriers = ["jne", "sicepat"];
   config.turnstileSecretKey = "turnstile-test-secret";
   config.storefrontUrl = "https://valydejersey.com";
-  await prisma.product.update({ where: { id: productId }, data: { salePriceIdr: 900_000 } });
+  await prisma.product.update({ where: { id: productId }, data: { salePriceIdr: 900_000, salePercentage: 28 } });
 
   try {
     let upstreamBody: Record<string, unknown> | undefined;
@@ -1520,7 +1534,7 @@ test("shipping rates use authoritative cart data and normalize Biteship response
     await request(app).post("/api/shipping/rates")
       .send({ destinationPostalCode: "12240", items: [{ variantId, quantity: 1 }], turnstileToken: "turnstile-valid" }).expect(503);
   } finally {
-    await prisma.product.update({ where: { id: productId }, data: { salePriceIdr: null } });
+    await prisma.product.update({ where: { id: productId }, data: { salePriceIdr: null, salePercentage: null } });
     globalThis.fetch = originalFetch;
     config.biteshipApiKey = originalShippingConfig.apiKey;
     config.biteshipOriginPostalCode = originalShippingConfig.originPostalCode;
@@ -1653,12 +1667,12 @@ test("promo codes are normalized, validated, previewed, and managed by admins", 
 
   let preview;
   try {
-    await prisma.product.update({ where: { id: productId }, data: { salePriceIdr: 1_000_000 } });
+    await prisma.product.update({ where: { id: productId }, data: { salePriceIdr: 1_000_000, salePercentage: 20 } });
     preview = await request(app).post("/api/promo-codes/preview")
       .send({ code: "grid20", items: [{ variantId, quantity: 1 }] })
       .expect(200);
   } finally {
-    await prisma.product.update({ where: { id: productId }, data: { salePriceIdr: null } });
+    await prisma.product.update({ where: { id: productId }, data: { salePriceIdr: null, salePercentage: null } });
   }
   assert.deepEqual(preview.body, {
     code: "GRID20",
@@ -2213,6 +2227,7 @@ test("checkout verifies payment notifications, reserves stock, and waits for man
         slug: "checkout-cap",
         priceIdr: 500_000,
         salePriceIdr: 400_000,
+        salePercentage: 20,
         status: "ACTIVE",
         condition: "BNWT",
         categoryId,

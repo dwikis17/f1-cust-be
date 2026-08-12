@@ -36,6 +36,7 @@ export class PublicProductService {
       nameId,
       descriptionId,
       salePriceIdr,
+      salePercentage,
       priceIdr,
       ...value
     } = product;
@@ -43,6 +44,7 @@ export class PublicProductService {
       ...value,
       priceIdr: effectivePriceIdr(product),
       originalPriceIdr: salePriceIdr === null ? null : priceIdr,
+      salePercentage,
       name: locale === "id" ? nameId ?? product.name : product.name,
       description: locale === "id" ? descriptionId ?? product.description : product.description,
       category,

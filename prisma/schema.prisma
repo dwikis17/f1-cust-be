@@ -163,6 +163,7 @@ model Product {
   sizingNote    String?
   priceIdr      Int
   salePriceIdr  Int?
+  salePercentage Int?
   status        ProductStatus       @default(DRAFT)
   condition     ProductCondition
   categoryId    String              @db.Uuid

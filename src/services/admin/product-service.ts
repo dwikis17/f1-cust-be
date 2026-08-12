@@ -5,6 +5,7 @@ import {
   ProductRepository,
   type ProductWithRelations,
 } from "../../repositories/admin/product-repository.js";
+import { salePriceFromPercentage } from "../../product-price.js";
 import type {
   productPatchSchema,
   productSchema,
@@ -71,13 +72,15 @@ export class ProductService {
     }
   }
 
-  private static validateSale(
+  private static salePrice(
     priceIdr: number,
-    salePriceIdr: number | null,
+    salePercentage: number | null,
   ) {
-    if (salePriceIdr !== null && salePriceIdr >= priceIdr) {
-      throw new HttpError(400, "INVALID_SALE_PRICE", "Sale price must be lower than the regular price");
+    const salePriceIdr = salePriceFromPercentage(priceIdr, salePercentage);
+    if (salePriceIdr !== null && (salePriceIdr < 1 || salePriceIdr >= priceIdr)) {
+      throw new HttpError(400, "INVALID_SALE_PERCENTAGE", "Sale percentage must produce a price lower than the regular price");
     }
+    return salePriceIdr;
   }
 
   static async listProducts() {
@@ -94,9 +97,13 @@ export class ProductService {
     const tagIds = unique(input.tagIds) ?? [];
     await ProductService.validateReferences({ ...input, driverIds, collectionIds, tagIds });
     await ProductService.validateActivation(input.status, input.audience, collectionIds, input.variants.length);
-    const { driverIds: _driverIds, collectionIds: _collectionIds, tagIds: _tagIds, variants, ...product } = input;
+    const salePercentage = input.salePercentage ?? null;
+    const salePriceIdr = ProductService.salePrice(input.priceIdr, salePercentage);
+    const { driverIds: _driverIds, collectionIds: _collectionIds, tagIds: _tagIds, variants, salePercentage: _salePercentage, ...product } = input;
     const created = await ProductRepository.createProduct({
       ...product,
+      salePercentage,
+      salePriceIdr,
       tags: { create: tagIds.map((tagId) => ({ tag: { connect: { id: tagId } } })) },
       drivers: { create: driverIds.map((driverId) => ({ driver: { connect: { id: driverId } } })) },
       collections: {
@@ -124,16 +131,21 @@ export class ProductService {
     const effectiveStatus = input.status ?? current.status;
     await ProductService.validateActivation(effectiveStatus, effectiveAudience, effectiveCollectionIds, current.variants.length);
     const priceIdr = input.priceIdr ?? current.priceIdr;
-    const salePriceIdr = input.salePriceIdr === undefined ? current.salePriceIdr : input.salePriceIdr;
-    ProductService.validateSale(priceIdr, salePriceIdr);
+    const salePercentage = input.salePercentage === undefined ? current.salePercentage : input.salePercentage;
+    const salePriceIdr = ProductService.salePrice(priceIdr, salePercentage);
 
     const {
       tagIds: _tagIds,
       driverIds: _driverIds,
       collectionIds: _collectionIds,
+      salePercentage: _salePercentage,
       ...product
     } = input;
-    const updated = await ProductRepository.updateProduct(id, product, { tagIds, driverIds, collectionIds });
+    const updated = await ProductRepository.updateProduct(
+      id,
+      { ...product, salePercentage, salePriceIdr },
+      { tagIds, driverIds, collectionIds },
+    );
     return ProductService.response(updated);
   }
 
