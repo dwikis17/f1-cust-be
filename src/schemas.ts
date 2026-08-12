@@ -143,11 +143,7 @@ const variantBaseSchema = z.object({
   packageWeightG: z.number().int().positive(),
   sizingGuide: sizingGuideSchema.nullable().optional(),
 }).strict();
-export const variantSchema = variantBaseSchema.superRefine((value, context) => {
-  if (value.size && !value.sizingGuide) {
-    context.addIssue({ code: "custom", path: ["sizingGuide"], message: "A sized variant requires a sizing guide" });
-  }
-});
+export const variantSchema = variantBaseSchema;
 export const variantPatchSchema = variantBaseSchema.partial().refine((value) => Object.keys(value).length > 0);
 
 export const productSchema = z.object({

@@ -155,11 +155,6 @@ export class ProductService {
   static async updateVariant(productId: string, id: string, input: VariantPatch) {
     const current = await ProductRepository.findVariant(id, productId);
     if (!current) notFound("Variant not found");
-    const effectiveSize = input.size === undefined ? current.size : input.size;
-    const effectiveSizingGuide = input.sizingGuide === undefined ? current.sizingGuide : input.sizingGuide;
-    if (effectiveSize && !effectiveSizingGuide) {
-      throw new HttpError(400, "SIZING_GUIDE_REQUIRED", "A sized variant requires a sizing guide");
-    }
     const { sizingGuide, ...variant } = input;
     return ProductRepository.updateVariant(id, {
       ...variant,

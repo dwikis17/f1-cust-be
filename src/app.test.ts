@@ -1141,6 +1141,9 @@ test("active products are filterable with exact variant stock", async () => {
       ...invalidVariant,
       sizingGuide: { unit: "cm", measurements: { length: 74, chestWidth: 55, waistWidth: 0 } },
     }).expect(400);
+  const noGuideVariant = await request(app).post(`/api/admin/products/${productId}/variants`)
+    .set("authorization", `Bearer ${token}`).send({ ...invalidVariant, sku: "NO-GUIDE" }).expect(201);
+  assert.equal(noGuideVariant.body.sizingGuide, null);
 });
 
 test("home collection blocks support ordered CRUD, ranked products, limits, localization, and image cleanup", async () => {
