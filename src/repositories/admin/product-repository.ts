@@ -1,4 +1,4 @@
-import type { Prisma } from "../../generated/prisma/client.js";
+import { Prisma } from "../../generated/prisma/client.js";
 import { prisma } from "../../db.js";
 
 export const productInclude = {
@@ -22,6 +22,15 @@ type RelationUpdates = {
   collectionIds?: string[];
 };
 
+type ProductCreateData = Omit<Prisma.ProductCreateArgs["data"], "variants"> & {
+  variants: {
+    create: Array<Omit<Prisma.ProductVariantCreateWithoutProductInput, "sizingGuide"> & { sizingGuide?: unknown | null }>;
+  };
+};
+
+type VariantCreateData = Omit<Prisma.ProductVariantUncheckedCreateInput, "sizingGuide"> & { sizingGuide?: unknown | null };
+type VariantUpdateData = Omit<Prisma.ProductVariantUpdateInput, "sizingGuide"> & { sizingGuide?: unknown | null };
+
 export class ProductRepository {
   static listProducts() {
     return prisma.product.findMany({ include: productInclude, orderBy: { createdAt: "desc" } });
@@ -29,8 +38,20 @@ export class ProductRepository {
   static findProduct(id: string) {
     return prisma.product.findUnique({ where: { id }, include: productInclude });
   }
-  static createProduct(data: Prisma.ProductCreateArgs["data"]) {
-    return prisma.product.create({ data, include: productInclude });
+  static createProduct(data: ProductCreateData) {
+    return prisma.product.create({
+      data: {
+        ...data,
+        variants: {
+          ...data.variants,
+          create: data.variants.create.map((variant) => ({
+            ...variant,
+            sizingGuide: variant.sizingGuide ?? Prisma.JsonNull,
+          })),
+        },
+      } as Prisma.ProductCreateArgs["data"],
+      include: productInclude,
+    });
   }
   static updateProduct(id: string, data: Prisma.ProductUpdateArgs["data"], relations: RelationUpdates) {
     return prisma.$transaction(async (tx) => {
@@ -60,14 +81,24 @@ export class ProductRepository {
     });
   }
 
-  static createVariant(data: Prisma.ProductVariantUncheckedCreateInput) {
-    return prisma.productVariant.create({ data });
+  static createVariant(data: VariantCreateData) {
+    return prisma.productVariant.create({
+      data: { ...data, sizingGuide: data.sizingGuide ?? Prisma.JsonNull } as Prisma.ProductVariantUncheckedCreateInput,
+    });
   }
   static findVariant(id: string, productId: string) {
     return prisma.productVariant.findFirst({ where: { id, productId } });
   }
-  static updateVariant(id: string, data: Prisma.ProductVariantUpdateInput) {
-    return prisma.productVariant.update({ where: { id }, data });
+  static updateVariant(id: string, data: VariantUpdateData) {
+    return prisma.productVariant.update({
+      where: { id },
+      data: {
+        ...data,
+        ...(data.sizingGuide !== undefined
+          ? { sizingGuide: data.sizingGuide === null ? Prisma.JsonNull : data.sizingGuide }
+          : {}),
+      } as Prisma.ProductVariantUpdateInput,
+    });
   }
   static deleteVariant(id: string, productId: string) {
     return prisma.productVariant.deleteMany({ where: { id, productId } });

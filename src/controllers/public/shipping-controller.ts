@@ -1,4 +1,4 @@
-import type { Request, Response } from "express";
+import type { NextFunction, Request, Response } from "express";
 import { z } from "zod";
 import { parse } from "../../http.js";
 import { idSchema } from "../../schemas.js";
@@ -15,10 +15,14 @@ const shippingRatesSchema = z.object({
 }).strict();
 
 export class PublicShippingController {
-  static async rates(request: Request, response: Response) {
-    const { turnstileToken, ...input } = parse(shippingRatesSchema, request.body);
-    response.set("cache-control", "no-store");
-    await verifyHuman(turnstileToken, "shipping-rates", request.get("cf-connecting-ip"));
-    response.json(await PublicShippingService.rates(input));
+  static async rates(request: Request, response: Response, next: NextFunction) {
+    try {
+      const { turnstileToken, ...input } = parse(shippingRatesSchema, request.body);
+      response.set("cache-control", "no-store");
+      await verifyHuman(turnstileToken, "shipping-rates", request.get("cf-connecting-ip"));
+      response.json(await PublicShippingService.rates(input));
+    } catch (error) {
+      next(error);
+    }
   }
 }

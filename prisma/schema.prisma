@@ -28,10 +28,9 @@ enum ProductAudience {
 }
 
 enum ProductCondition {
-  BNIB
   BNWT
   BNWOT
-  PRE_OWNED
+  USED
 }
 
 enum CollectionKind {
@@ -164,6 +163,7 @@ model Product {
   sizingNote    String?
   priceIdr      Int
   salePriceIdr  Int?
+  salePercentage Int?
   status        ProductStatus       @default(DRAFT)
   condition     ProductCondition
   categoryId    String              @db.Uuid

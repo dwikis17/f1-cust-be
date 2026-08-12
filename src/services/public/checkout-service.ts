@@ -2,35 +2,21 @@ import { Buffer } from "node:buffer";
 import { createHash, randomUUID, timingSafeEqual } from "node:crypto";
 import { z } from "zod";
 import { config } from "../../config.js";
-import { prisma } from "../../db.js";
 import { sendPaymentConfirmationEmail } from "../../email-service.js";
 import { scheduleBackground } from "../../background.js";
-import type { Prisma } from "../../generated/prisma/client.js";
 import { HttpError, notFound } from "../../http.js";
-import { effectivePriceIdr } from "../../product-price.js";
 import {
-  toDbCollectionMethod,
-  type ShipmentCollectionMethod,
-} from "../../shipment-collection.js";
+  OrderRepository,
+  type CheckoutInput,
+  type CheckoutOrder,
+  type OrderWithItems,
+} from "../../repositories/order-repository.js";
+import type { ShipmentCollectionMethod } from "../../shipment-collection.js";
 import { calculatePromoDiscount } from "../promo-code-service.js";
 import { PublicShippingService, requestBiteshipRates } from "./shipping-service.js";
 import { sendTelegramPaymentNotification } from "../../telegram-service.js";
 
-export type CheckoutInput = {
-  idempotencyKey: string;
-  email: string;
-  firstName: string;
-  lastName: string;
-  phone: string;
-  address: string;
-  city: string;
-  province: string;
-  postalCode: string;
-  items: Array<{ variantId: string; quantity: number }>;
-  courierCode: string;
-  serviceCode: string;
-  promoCode?: string;
-};
+export type { CheckoutInput, CheckoutOrder, OrderWithItems } from "../../repositories/order-repository.js";
 
 export type MidtransNotification = {
   order_id: string;
@@ -79,12 +65,11 @@ const midtransStatusSchema = z.object({
   payment_type: z.string().max(80).optional(),
 }).passthrough();
 
-export type OrderWithItems = Prisma.OrderGetPayload<{ include: { items: true } }>;
 type VariantSnapshot = Pick<OrderWithItems["items"][number], "productName" | "sku" | "color" | "size">;
 const RECONCILIATION_STALE_MS = 15 * 60 * 1_000;
 const RECONCILIATION_BATCH_SIZE = 50;
 
-function prismaCode(error: unknown) {
+function errorCode(error: unknown) {
   return error && typeof error === "object" && "code" in error && typeof error.code === "string" ? error.code : undefined;
 }
 
@@ -196,23 +181,7 @@ function telegramPaidFields(order: { paymentStatus: string; telegramNotification
 }
 
 async function releaseStock(orderId: string, paymentStatus: "FAILED" | "EXPIRED" | "CANCELLED", midtransStatus: string) {
-  await prisma.$transaction(async (tx) => {
-    await tx.$queryRaw`SELECT "id" FROM "Order" WHERE "id" = ${orderId}::uuid FOR UPDATE`;
-    const order = await tx.order.findUnique({ where: { id: orderId }, include: { items: true } });
-    if (!order || order.paymentStatus !== "PENDING" || order.stockReleasedAt) return;
-    for (const item of order.items) {
-      if (item.variantId) {
-        await tx.productVariant.updateMany({
-          where: { id: item.variantId },
-          data: { stockQuantity: { increment: item.quantity } },
-        });
-      }
-    }
-    await tx.order.update({
-      where: { id: order.id },
-      data: { paymentStatus, midtransStatus, stockReleasedAt: new Date() },
-    });
-  });
+  await OrderRepository.releaseStock(orderId, paymentStatus, midtransStatus);
 }
 
 function variantName(item: VariantSnapshot) {
@@ -226,10 +195,7 @@ function variantDescription(item: VariantSnapshot) {
   return options.length ? options.join(" / ") : undefined;
 }
 
-async function createSnapToken(order: Awaited<ReturnType<typeof prisma.order.findUniqueOrThrow>> & {
-  items: Array<VariantSnapshot & { unitPriceIdr: number; quantity: number }>;
-  promoCode: { code: string } | null;
-}) {
+async function createSnapToken(order: CheckoutOrder) {
   const payment = requirePaymentConfig();
   const response = await fetch(payment.snapUrl, {
     method: "POST",
@@ -309,7 +275,7 @@ function biteshipItems(order: OrderWithItems) {
   });
 }
 
-export async function getShipmentCollectionOptions(order: OrderWithItems) {
+async function getShipmentCollectionOptionsInternal(order: OrderWithItems) {
   const rates = await requestBiteshipRates({
     destinationPostalCode: order.postalCode,
     items: biteshipItems(order),
@@ -319,7 +285,7 @@ export async function getShipmentCollectionOptions(order: OrderWithItems) {
   return { rate, availableCollectionMethods: rate.availableCollectionMethods };
 }
 
-export async function requestShipmentBooking(
+async function requestShipmentBookingInternal(
   order: OrderWithItems,
   requestedCollectionMethod: ShipmentCollectionMethod = "drop_off",
 ): Promise<ShipmentBookingResult> {
@@ -330,7 +296,7 @@ export async function requestShipmentBooking(
 
   let availableCollectionMethods: ShipmentCollectionMethod[];
   try {
-    ({ availableCollectionMethods } = await getShipmentCollectionOptions(order));
+    ({ availableCollectionMethods } = await getShipmentCollectionOptionsInternal(order));
   } catch (error) {
     if (error instanceof HttpError) {
       return {
@@ -436,12 +402,20 @@ function verifyMidtrans(input: MidtransNotification) {
 }
 
 export class PublicCheckoutService {
+  static getShipmentCollectionOptions(order: OrderWithItems) {
+    return getShipmentCollectionOptionsInternal(order);
+  }
+
+  static requestShipmentBooking(
+    order: OrderWithItems,
+    requestedCollectionMethod: ShipmentCollectionMethod = "drop_off",
+  ) {
+    return requestShipmentBookingInternal(order, requestedCollectionMethod);
+  }
+
   static async create(input: CheckoutInput) {
     requirePaymentConfig();
-    const previous = await prisma.order.findUnique({
-      where: { idempotencyKey: input.idempotencyKey },
-      include: { promoCode: true },
-    });
+    const previous = await OrderRepository.findByIdempotencyKey(input.idempotencyKey);
     if (previous) return checkoutResponse(previous);
 
     const quote = await PublicShippingService.rates({
@@ -451,95 +425,31 @@ export class PublicCheckoutService {
     const rate = quote.rates.find((item) => item.courierCode === input.courierCode && item.serviceCode === input.serviceCode);
     if (!rate) throw new HttpError(409, "SHIPPING_RATE_CHANGED", "The selected shipping service is no longer available");
 
-    const quantities = new Map<string, number>();
-    for (const item of input.items) quantities.set(item.variantId, (quantities.get(item.variantId) ?? 0) + item.quantity);
-
     const orderId = randomUUID();
-    let order;
+    let order: CheckoutOrder;
     try {
-      order = await prisma.$transaction(async (tx) => {
-        const variants = await tx.productVariant.findMany({
-          where: { id: { in: [...quantities.keys()] } },
-          select: {
-            id: true, sku: true, color: true, size: true, stockQuantity: true, packageLengthMm: true, packageWidthMm: true,
-            packageHeightMm: true, packageWeightG: true,
-            product: {
-              select: { name: true, priceIdr: true, salePriceIdr: true, status: true },
-            },
-          },
-        });
-        if (variants.length !== quantities.size || variants.some((variant) =>
-          variant.product.status !== "ACTIVE" || variant.stockQuantity < (quantities.get(variant.id) ?? 0))) {
-          throw new HttpError(409, "CART_CHANGED", "One or more cart items are unavailable");
-        }
-        const promoCode = input.promoCode
-          ? await tx.promoCode.findUnique({ where: { code: input.promoCode } })
-          : null;
-        if (input.promoCode && !promoCode?.active) {
-          throw new HttpError(409, "PROMO_CODE_UNAVAILABLE", "Promo code is invalid or inactive");
-        }
-        for (const variant of variants) {
-          const quantity = quantities.get(variant.id) ?? 0;
-          const updated = await tx.productVariant.updateMany({
-            where: { id: variant.id, stockQuantity: { gte: quantity } },
-            data: { stockQuantity: { decrement: quantity } },
-          });
-          if (updated.count !== 1) throw new HttpError(409, "CART_CHANGED", "One or more cart items are unavailable");
-        }
-        const subtotalIdr = variants.reduce(
-          (sum, variant) => sum + effectivePriceIdr(variant.product) * (quantities.get(variant.id) ?? 0),
-          0,
-        );
-        const discountIdr = promoCode ? calculatePromoDiscount(subtotalIdr, promoCode) : 0;
-        return tx.order.create({
-          data: {
-            id: orderId,
-            orderNumber: createOrderNumber(orderId),
-            idempotencyKey: input.idempotencyKey,
-            email: input.email,
-            firstName: input.firstName,
-            lastName: input.lastName,
-            phone: input.phone,
-            address: input.address,
-            city: input.city,
-            province: input.province,
-            postalCode: input.postalCode,
-            subtotalIdr,
-            discountIdr,
-            shippingIdr: rate.price,
-            totalIdr: subtotalIdr - discountIdr + rate.price,
-            promoCodeId: promoCode?.id,
-            courierCode: rate.courierCode,
-            courierName: rate.courierName,
-            courierServiceCode: rate.serviceCode,
-            courierServiceName: rate.serviceName,
-            courierDuration: rate.duration,
-            shipmentAvailableCollectionMethods: rate.availableCollectionMethods.map(toDbCollectionMethod),
-            items: {
-              create: variants.map((variant) => ({
-                variantId: variant.id,
-                productName: variant.product.name,
-                sku: variant.sku,
-                color: variant.color,
-                size: variant.size,
-                unitPriceIdr: effectivePriceIdr(variant.product),
-                quantity: quantities.get(variant.id) ?? 0,
-                packageLengthMm: variant.packageLengthMm,
-                packageWidthMm: variant.packageWidthMm,
-                packageHeightMm: variant.packageHeightMm,
-                packageWeightG: variant.packageWeightG,
-              })),
-            },
-          },
-          include: { items: true, promoCode: true },
-        });
+      const created = await OrderRepository.createCheckoutOrder({
+        ...input,
+        orderId,
+        orderNumber: createOrderNumber(orderId),
+        shippingPrice: rate.price,
+        shippingName: rate.courierName,
+        shippingServiceName: rate.serviceName,
+        shippingDuration: rate.duration,
+        availableCollectionMethods: rate.availableCollectionMethods,
+        calculateDiscount: calculatePromoDiscount,
       });
+      if (created.status !== "CREATED") {
+        throw new HttpError(
+          409,
+          created.status,
+          created.status === "CART_CHANGED" ? "One or more cart items are unavailable" : "Promo code is invalid or inactive",
+        );
+      }
+      order = created.order;
     } catch (error) {
-      if (prismaCode(error) === "P2002") {
-        const existing = await prisma.order.findUnique({
-          where: { idempotencyKey: input.idempotencyKey },
-          include: { promoCode: true },
-        });
+      if (errorCode(error) === "P2002") {
+        const existing = await OrderRepository.findByIdempotencyKey(input.idempotencyKey);
         if (existing) return checkoutResponse(existing);
       }
       throw error;
@@ -547,11 +457,7 @@ export class PublicCheckoutService {
 
     try {
       const snapToken = await createSnapToken(order);
-      const ready = await prisma.order.update({
-        where: { id: order.id },
-        data: { midtransSnapToken: snapToken },
-        include: { promoCode: true },
-      });
+      const ready = await OrderRepository.setSnapToken(order.id, snapToken);
       return checkoutResponse(ready);
     } catch (error) {
       await releaseStock(order.id, "FAILED", "token_failure");
@@ -560,20 +466,14 @@ export class PublicCheckoutService {
   }
 
   static async find(id: string) {
-    const order = await prisma.order.findUnique({ where: { id }, include: { promoCode: true } });
+    const order = await OrderRepository.findForPublic(id);
     if (!order) notFound("Order not found");
     return publicOrder(order);
   }
 
   static async track(input: { orderNumber: string; email: string }) {
     const legacyId = z.string().uuid().safeParse(input.orderNumber);
-    const order = await prisma.order.findFirst({
-      where: {
-        ...(legacyId.success ? { id: legacyId.data } : { orderNumber: input.orderNumber }),
-        email: { equals: input.email, mode: "insensitive" },
-      },
-      include: { items: true },
-    });
+    const order = await OrderRepository.findForTracking(input.orderNumber, input.email, legacyId.success ? legacyId.data : undefined);
     if (!order) throw new HttpError(404, "TRACKING_NOT_FOUND", "No order matches those details");
 
     const result = {
@@ -649,28 +549,23 @@ export class PublicCheckoutService {
   static async notification(input: MidtransNotification) {
     verifyMidtrans(input);
 
-    const order = await prisma.order.findUnique({ where: { id: input.order_id }, select: { totalIdr: true } });
+    const order = await OrderRepository.findOrderTotal(input.order_id);
     if (!order) notFound("Order not found");
     const { signature_key: _signatureKey, ...redactedPayload } = input;
-    const event = await prisma.midtransPaymentEvent.create({
-      data: {
-        orderId: input.order_id,
-        statusCode: input.status_code,
-        grossAmount: input.gross_amount,
-        transactionStatus: input.transaction_status,
-        transactionId: input.transaction_id,
-        fraudStatus: input.fraud_status,
-        paymentType: input.payment_type,
-        payload: redactedPayload as Prisma.InputJsonObject,
-      },
+    const event = await OrderRepository.createPaymentEvent({
+      orderId: input.order_id,
+      statusCode: input.status_code,
+      grossAmount: input.gross_amount,
+      transactionStatus: input.transaction_status,
+      transactionId: input.transaction_id,
+      fraudStatus: input.fraud_status,
+      paymentType: input.payment_type,
+      payload: redactedPayload,
     });
 
     const amount = Number(input.gross_amount);
     if (!Number.isInteger(amount) || amount !== order.totalIdr) {
-      await prisma.midtransPaymentEvent.update({
-        where: { id: event.id },
-        data: { processingResult: "REJECTED", processingError: "PAYMENT_AMOUNT_MISMATCH", processedAt: new Date() },
-      });
+      await OrderRepository.rejectPaymentEvent(event.id);
       throw new HttpError(400, "PAYMENT_AMOUNT_MISMATCH", "Payment amount does not match the order");
     }
 
@@ -687,137 +582,16 @@ export class PublicCheckoutService {
       : input.transaction_status === "cancel" ? "CANCELLED"
       : undefined;
 
-    const result = await prisma.$transaction(async (tx) => {
-      const locked = await tx.$queryRaw<Array<{ id: string }>>`
-        SELECT "id" FROM "Order" WHERE "id" = ${input.order_id}::uuid FOR UPDATE
-      `;
-      if (!locked.length) notFound("Order not found");
-      let order = await tx.order.findUniqueOrThrow({ where: { id: input.order_id }, include: { items: true } });
-
-      if (paid && order.lifecycleStatus === "CANCELLED" && order.paymentStatus !== "REFUNDED") {
-        await tx.order.update({
-          where: { id: order.id },
-          data: { ...transaction, ...telegramPaidFields(order), paymentStatus: "PAID" },
-        });
-        await tx.orderAuditEvent.create({
-          data: {
-            orderId: order.id,
-            action: "LATE_PAYMENT_AFTER_CANCELLATION",
-            outcome: "SUCCEEDED",
-            details: { transactionStatus: input.transaction_status },
-          },
-        });
-        await tx.midtransPaymentEvent.update({
-          where: { id: event.id },
-          data: { processingResult: "PROCESSED", processedAt: new Date() },
-        });
-        return { stockUnavailable: false, cancelled: true };
-      }
-
-      if (paid && order.paymentStatus !== "REFUNDED") {
-        const redemption = order.promoCodeId && !order.promoRedeemedAt ? { promoRedeemedAt: new Date() } : {};
-        if (order.stockReleasedAt) {
-          const quantities = new Map<string, number>();
-          for (const item of order.items) {
-            if (!item.variantId) {
-              await tx.order.update({
-                where: { id: order.id },
-                data: {
-                  ...transaction,
-                  ...redemption,
-                  ...telegramPaidFields(order),
-                  paymentStatus: "PAID",
-                  lifecycleStatus: "CANCELLED",
-                  shipmentBookingStatus: "UNFULFILLED",
-                  cancelledAt: order.cancelledAt ?? new Date(),
-                },
-              });
-              await tx.midtransPaymentEvent.update({
-                where: { id: event.id },
-                data: { processingResult: "PROCESSED", processedAt: new Date() },
-              });
-              return { stockUnavailable: true, cancelled: true };
-            }
-            quantities.set(item.variantId, (quantities.get(item.variantId) ?? 0) + item.quantity);
-          }
-
-          let stockAvailable = true;
-          for (const [variantId, quantity] of [...quantities.entries()].sort(([left], [right]) => left.localeCompare(right))) {
-            const variants = await tx.$queryRaw<Array<{ stockQuantity: number }>>`
-              SELECT "stockQuantity" FROM "ProductVariant" WHERE "id" = ${variantId}::uuid FOR UPDATE
-            `;
-            if (!variants[0] || variants[0].stockQuantity < quantity) stockAvailable = false;
-          }
-          if (!stockAvailable) {
-            await tx.order.update({
-              where: { id: order.id },
-              data: {
-                ...transaction,
-                ...redemption,
-                ...telegramPaidFields(order),
-                paymentStatus: "PAID",
-                lifecycleStatus: "CANCELLED",
-                shipmentBookingStatus: "UNFULFILLED",
-                cancelledAt: order.cancelledAt ?? new Date(),
-              },
-            });
-            await tx.midtransPaymentEvent.update({
-              where: { id: event.id },
-              data: { processingResult: "PROCESSED", processedAt: new Date() },
-            });
-            return { stockUnavailable: true, cancelled: true };
-          }
-          for (const [variantId, quantity] of quantities) {
-            await tx.productVariant.update({
-              where: { id: variantId },
-              data: { stockQuantity: { decrement: quantity } },
-            });
-          }
-          await tx.order.update({
-            where: { id: order.id },
-            data: {
-              ...transaction,
-              ...redemption,
-              ...telegramPaidFields(order),
-              paymentStatus: "PAID",
-              shipmentBookingStatus: order.shipmentBookingStatus === "BOOKED" ? "BOOKED" : "UNFULFILLED",
-              stockReleasedAt: null,
-            },
-          });
-        } else {
-          await tx.order.update({
-            where: { id: order.id },
-            data: { ...transaction, ...redemption, ...telegramPaidFields(order), paymentStatus: "PAID" },
-          });
-        }
-      } else if (terminal && order.paymentStatus === "PENDING") {
-        if (!order.stockReleasedAt) {
-          for (const item of order.items) {
-            if (item.variantId) {
-              await tx.productVariant.updateMany({
-                where: { id: item.variantId },
-                data: { stockQuantity: { increment: item.quantity } },
-              });
-            }
-          }
-        }
-        await tx.order.update({
-          where: { id: order.id },
-          data: { ...transaction, paymentStatus: terminal, stockReleasedAt: order.stockReleasedAt ?? new Date() },
-        });
-      } else if ((input.transaction_status === "refund" || input.transaction_status === "chargeback")
-        && order.paymentStatus === "PAID") {
-        await tx.order.update({ where: { id: order.id }, data: { ...transaction, paymentStatus: "REFUNDED" } });
-      } else if (input.transaction_status === "pending" && order.paymentStatus === "PENDING") {
-        await tx.order.update({ where: { id: order.id }, data: transaction });
-      }
-
-      await tx.midtransPaymentEvent.update({
-        where: { id: event.id },
-        data: { processingResult: "PROCESSED", processedAt: new Date() },
-      });
-      return { stockUnavailable: false, cancelled: false };
-    }, { timeout: 10_000 });
+    const result = await OrderRepository.processPaymentEvent({
+      orderId: input.order_id,
+      eventId: event.id,
+      transaction,
+      paid,
+      terminal,
+      transactionStatus: input.transaction_status,
+      telegramPaidFields,
+    });
+    if (result.status === "NOT_FOUND") notFound("Order not found");
 
     scheduleBackground(sendTelegramPaymentNotification(input.order_id).catch((error) => {
       console.error(`Telegram payment notification crashed for order ${input.order_id}`, error);
@@ -834,23 +608,19 @@ export class PublicCheckoutService {
     }
 
     if (result.stockUnavailable) {
-      await prisma.orderAuditEvent.create({
-        data: {
-          orderId: input.order_id,
-          action: "PAID_STOCK_UNAVAILABLE",
-          outcome: "FAILED",
-          details: { transactionStatus: input.transaction_status },
-        },
+      await OrderRepository.createAudit({
+        orderId: input.order_id,
+        action: "PAID_STOCK_UNAVAILABLE",
+        outcome: "FAILED",
+        details: { transactionStatus: input.transaction_status },
       });
     }
     if (emailDeliveryFailed) {
-      await prisma.orderAuditEvent.create({
-        data: {
-          orderId: input.order_id,
-          action: "PAYMENT_CONFIRMATION_EMAIL_FAILED",
-          outcome: "FAILED",
-          details: { message: "Payment was persisted; an admin can resend the confirmation" },
-        },
+      await OrderRepository.createAudit({
+        orderId: input.order_id,
+        action: "PAYMENT_CONFIRMATION_EMAIL_FAILED",
+        outcome: "FAILED",
+        details: { message: "Payment was persisted; an admin can resend the confirmation" },
       });
     }
     return { received: true };
@@ -859,17 +629,7 @@ export class PublicCheckoutService {
   static async reconcilePendingPayments(now = new Date()) {
     const payment = requirePaymentConfig();
     const staleBefore = new Date(now.getTime() - RECONCILIATION_STALE_MS);
-    const orders = await prisma.order.findMany({
-      where: {
-        paymentStatus: "PENDING",
-        midtransSnapToken: { not: null },
-        createdAt: { lte: staleBefore },
-        updatedAt: { lte: staleBefore },
-      },
-      select: { id: true, totalIdr: true },
-      orderBy: [{ updatedAt: "asc" }, { id: "asc" }],
-      take: RECONCILIATION_BATCH_SIZE,
-    });
+    const orders = await OrderRepository.listPendingPaymentReconciliations(staleBefore, RECONCILIATION_BATCH_SIZE);
     const baseUrl = config.midtransEnv === "production" ? "https://api.midtrans.com" : "https://api.sandbox.midtrans.com";
     let reconciled = 0;
     let failed = 0;
@@ -905,25 +665,20 @@ export class PublicCheckoutService {
           await PublicCheckoutService.notification(input);
           catalogChanged = true;
         } else {
-          await prisma.order.updateMany({
-            where: { id: order.id, paymentStatus: "PENDING" },
-            data: {
-              midtransStatus: input.transaction_status,
-              midtransTransactionId: input.transaction_id,
-              midtransPaymentType: input.payment_type,
-            },
+          await OrderRepository.updatePendingPayment(order.id, {
+            midtransStatus: input.transaction_status,
+            midtransTransactionId: input.transaction_id,
+            midtransPaymentType: input.payment_type,
           });
         }
         reconciled += 1;
       } catch (error) {
         failed += 1;
-        await prisma.orderAuditEvent.create({
-          data: {
-            orderId: order.id,
-            action: "PAYMENT_RECONCILIATION_FAILED",
-            outcome: "FAILED",
-            details: { message: error instanceof Error ? error.message : "Unknown reconciliation error" },
-          },
+        await OrderRepository.createAudit({
+          orderId: order.id,
+          action: "PAYMENT_RECONCILIATION_FAILED",
+          outcome: "FAILED",
+          details: { message: error instanceof Error ? error.message : "Unknown reconciliation error" },
         });
       }
     }
@@ -931,3 +686,6 @@ export class PublicCheckoutService {
     return { checked: orders.length, reconciled, failed, catalogChanged };
   }
 }
+
+export const getShipmentCollectionOptions = PublicCheckoutService.getShipmentCollectionOptions;
+export const requestShipmentBooking = PublicCheckoutService.requestShipmentBooking;

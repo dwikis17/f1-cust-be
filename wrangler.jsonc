@@ -3,9 +3,10 @@
   "name": "f1-store-api",
   "main": "src/worker.ts",
   "compatibility_date": "2026-07-15",
-  "compatibility_flags": [
-    "nodejs_compat"
-  ],
+	"compatibility_flags": [
+		"nodejs_compat"
+	],
+	"placement": { "mode": "smart" },
   "triggers": {
     "crons": [
       "45 16 * * *",

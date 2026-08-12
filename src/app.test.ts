@@ -87,7 +87,7 @@ test("admin dashboard aggregates real commerce data and handles empty periods", 
       slug: "dashboard-jersey",
       priceIdr: 100_000,
       status: "ACTIVE",
-      condition: "BNIB",
+      condition: "BNWT",
       categoryId: category.id,
       variants: {
         create: [
@@ -125,7 +125,7 @@ test("admin dashboard aggregates real commerce data and handles empty periods", 
       slug: "dashboard-draft",
       priceIdr: 100_000,
       status: "DRAFT",
-      condition: "BNIB",
+      condition: "BNWT",
       categoryId: category.id,
       variants: {
         create: {
@@ -291,7 +291,7 @@ test("admins search, operate, audit, export, and invoice orders safely", async (
       slug: "operations-jersey",
       priceIdr: 250_000,
       status: "ACTIVE",
-      condition: "BNIB",
+      condition: "BNWT",
       categoryId: category.id,
       variants: {
         create: {
@@ -810,7 +810,7 @@ test("admin creates catalog data and public API hides drafts", async () => {
       name: "Historic Driver Product",
       slug: "historic-driver-product",
       priceIdr: 1,
-      condition: "PRE_OWNED",
+      condition: "USED",
       categoryId,
       teamId: secondTeamId,
       driverIds: [driverId, historicalDriverId],
@@ -825,7 +825,7 @@ test("admin creates catalog data and public API hides drafts", async () => {
       descriptionId: "Jersey tim merah resmi",
       sizingNote: "Measured flat across the garment.",
       priceIdr: 1_250_000,
-      condition: "BNIB",
+      condition: "BNWT",
       categoryId,
       teamId,
       driverIds: [driverId, historicalDriverId],
@@ -848,7 +848,7 @@ test("admin creates catalog data and public API hides drafts", async () => {
   assert.equal(product.body.nameId, "Jersey Tim Ferrari");
   assert.equal(product.body.descriptionId, "Jersey tim merah resmi");
   assert.equal(product.body.sizingNote, "Measured flat across the garment.");
-  assert.equal(product.body.condition, "BNIB");
+  assert.equal(product.body.condition, "BNWT");
   assert.equal(product.body.team.slug, "ferrari");
   assert.deepEqual(product.body.drivers.map((driver: { slug: string }) => driver.slug), ["charles-leclerc", "niki-lauda"]);
   assert.equal(product.body.collections.length, 3);
@@ -1073,7 +1073,7 @@ test("active products are filterable with exact variant stock", async () => {
   assert.equal(response.body.total, 1);
   assert.equal(response.body.data[0].priceIdr, 1_250_000);
   assert.equal(response.body.data[0].sizingNote, "Allow a 1 cm tolerance.");
-  assert.equal(response.body.data[0].condition, "BNIB");
+  assert.equal(response.body.data[0].condition, "BNWT");
   assert.equal(response.body.data[0].team.slug, "ferrari");
   assert.deepEqual(
     response.body.data[0].drivers.map((driver: { slug: string }) => driver.slug),
@@ -1141,6 +1141,9 @@ test("active products are filterable with exact variant stock", async () => {
       ...invalidVariant,
       sizingGuide: { unit: "cm", measurements: { length: 74, chestWidth: 55, waistWidth: 0 } },
     }).expect(400);
+  const noGuideVariant = await request(app).post(`/api/admin/products/${productId}/variants`)
+    .set("authorization", `Bearer ${token}`).send({ ...invalidVariant, sku: "NO-GUIDE" }).expect(201);
+  assert.equal(noGuideVariant.body.sizingGuide, null);
 });
 
 test("home collection blocks support ordered CRUD, ranked products, limits, localization, and image cleanup", async () => {
@@ -1167,7 +1170,7 @@ test("home collection blocks support ordered CRUD, ranked products, limits, loca
       description: `Home block product ${index + 1}.`,
       priceIdr: 100_000 + index,
       status: "ACTIVE",
-      condition: "BNIB",
+      condition: "BNWT",
       categoryId,
       audience: "UNISEX",
     },
@@ -1265,8 +1268,8 @@ test("product conditions update, filter with OR semantics, and expose stable fac
       .send({ condition: "OPEN_BOX" }).expect(400);
     const updated = await request(app).patch(`/api/admin/products/${productId}`)
       .set("authorization", `Bearer ${token}`)
-      .send({ condition: "PRE_OWNED" }).expect(200);
-    assert.equal(updated.body.condition, "PRE_OWNED");
+      .send({ condition: "USED" }).expect(200);
+    assert.equal(updated.body.condition, "USED");
 
     const comparison = await prisma.product.create({
       data: {
@@ -1292,21 +1295,21 @@ test("product conditions update, filter with OR semantics, and expose stable fac
     });
     comparisonId = comparison.id;
 
-    const single = await request(app).get("/api/products?condition=PRE_OWNED").expect(200);
+    const single = await request(app).get("/api/products?condition=USED").expect(200);
     assert.deepEqual(single.body.data.map(({ id }: { id: string }) => id), [productId]);
 
     const multiple = await request(app)
-      .get("/api/collections/ferrari/products?condition=BNWOT&condition=PRE_OWNED")
+      .get("/api/collections/ferrari/products?condition=BNWOT&condition=USED")
       .expect(200);
     assert.equal(multiple.body.total, 2);
     assert.deepEqual(
       multiple.body.facets.conditions,
-      [{ value: "BNWOT", count: 1 }, { value: "PRE_OWNED", count: 1 }],
+      [{ value: "BNWOT", count: 1 }, { value: "USED", count: 1 }],
     );
     await request(app).get("/api/products?condition=BNIB,UNKNOWN").expect(400);
   } finally {
     if (comparisonId) await prisma.product.delete({ where: { id: comparisonId } });
-    await prisma.product.update({ where: { id: productId }, data: { condition: "BNIB" } });
+    await prisma.product.update({ where: { id: productId }, data: { condition: "BNWT" } });
   }
 });
 
@@ -1314,13 +1317,24 @@ test("product sales validate and price public catalog results until cleared", as
   let comparisonId: string | undefined;
   try {
     await request(app).patch(`/api/admin/products/${productId}`).set("authorization", `Bearer ${token}`)
-      .send({ salePriceIdr: 0 }).expect(400);
+      .send({ salePercentage: 0 }).expect(400);
     await request(app).patch(`/api/admin/products/${productId}`).set("authorization", `Bearer ${token}`)
-      .send({ salePriceIdr: 1_250_000 }).expect(400);
+      .send({ salePercentage: 100 }).expect(400);
+    await request(app).patch(`/api/admin/products/${productId}`).set("authorization", `Bearer ${token}`)
+      .send({ priceIdr: 1, salePercentage: 1 }).expect(400);
     const managed = await request(app).patch(`/api/admin/products/${productId}`)
       .set("authorization", `Bearer ${token}`)
-      .send({ salePriceIdr: 900_000 }).expect(200);
+      .send({ salePercentage: 28 }).expect(200);
     assert.equal(managed.body.salePriceIdr, 900_000);
+    assert.equal(managed.body.salePercentage, 28);
+    const repriced = await request(app).patch(`/api/admin/products/${productId}`)
+      .set("authorization", `Bearer ${token}`)
+      .send({ priceIdr: 1_000_000 }).expect(200);
+    assert.equal(repriced.body.salePriceIdr, 720_000);
+    assert.equal(repriced.body.salePercentage, 28);
+    await request(app).patch(`/api/admin/products/${productId}`)
+      .set("authorization", `Bearer ${token}`)
+      .send({ priceIdr: 1_250_000 }).expect(200);
 
     const comparison = await prisma.product.create({
       data: {
@@ -1328,8 +1342,9 @@ test("product sales validate and price public catalog results until cleared", as
         slug: "sale-comparison-product",
         priceIdr: 2_000_000,
         salePriceIdr: 800_000,
+        salePercentage: 60,
         status: "ACTIVE",
-        condition: "BNIB",
+        condition: "BNWT",
         categoryId,
         audience: "UNISEX",
         collections: { create: { collectionId: ferrariCollectionId } },
@@ -1347,9 +1362,20 @@ test("product sales validate and price public catalog results until cleared", as
     });
     comparisonId = comparison.id;
 
+    const saleCatalog = await request(app)
+      .get("/api/products?sale=true&includeFacets=true&limit=100")
+      .expect(200);
+    assert.equal(saleCatalog.body.total, 2);
+    assert.ok(saleCatalog.body.data.every((item: { salePercentage: number | null }) => item.salePercentage !== null));
+    assert.deepEqual(saleCatalog.body.facets.price, { min: 800_000, max: 900_000 });
+    const defaultCatalog = await request(app).get("/api/products?limit=100").expect(200);
+    assert.equal(defaultCatalog.body.facets, undefined);
+    await request(app).get("/api/products?sale=invalid").expect(400);
+
     const publicProduct = await request(app).get("/api/products/ferrari-team-jersey").expect(200);
     assert.equal(publicProduct.body.priceIdr, 900_000);
     assert.equal(publicProduct.body.originalPriceIdr, 1_250_000);
+    assert.equal(publicProduct.body.salePercentage, 28);
 
     const variantId = publicProduct.body.variants[0].id as string;
     const cart = await request(app).post("/api/products/cart-items")
@@ -1368,15 +1394,16 @@ test("product sales validate and price public catalog results until cleared", as
     assert.deepEqual(sorted.body.facets.price, { min: 800_000, max: 900_000 });
 
     await request(app).patch(`/api/admin/products/${productId}`).set("authorization", `Bearer ${token}`)
-      .send({ salePriceIdr: null }).expect(200);
+      .send({ salePercentage: null }).expect(200);
     const cleared = await request(app).get("/api/products/ferrari-team-jersey").expect(200);
     assert.equal(cleared.body.priceIdr, 1_250_000);
     assert.equal(cleared.body.originalPriceIdr, null);
+    assert.equal(cleared.body.salePercentage, null);
   } finally {
     if (comparisonId) await prisma.product.delete({ where: { id: comparisonId } });
     await prisma.product.update({
       where: { id: productId },
-      data: { salePriceIdr: null },
+      data: { salePriceIdr: null, salePercentage: null },
     });
   }
 });
@@ -1417,7 +1444,7 @@ test("shipping rates use authoritative cart data and normalize Biteship response
   config.biteshipCouriers = ["jne", "sicepat"];
   config.turnstileSecretKey = "turnstile-test-secret";
   config.storefrontUrl = "https://valydejersey.com";
-  await prisma.product.update({ where: { id: productId }, data: { salePriceIdr: 900_000 } });
+  await prisma.product.update({ where: { id: productId }, data: { salePriceIdr: 900_000, salePercentage: 28 } });
 
   try {
     let upstreamBody: Record<string, unknown> | undefined;
@@ -1520,7 +1547,7 @@ test("shipping rates use authoritative cart data and normalize Biteship response
     await request(app).post("/api/shipping/rates")
       .send({ destinationPostalCode: "12240", items: [{ variantId, quantity: 1 }], turnstileToken: "turnstile-valid" }).expect(503);
   } finally {
-    await prisma.product.update({ where: { id: productId }, data: { salePriceIdr: null } });
+    await prisma.product.update({ where: { id: productId }, data: { salePriceIdr: null, salePercentage: null } });
     globalThis.fetch = originalFetch;
     config.biteshipApiKey = originalShippingConfig.apiKey;
     config.biteshipOriginPostalCode = originalShippingConfig.originPostalCode;
@@ -1653,12 +1680,12 @@ test("promo codes are normalized, validated, previewed, and managed by admins", 
 
   let preview;
   try {
-    await prisma.product.update({ where: { id: productId }, data: { salePriceIdr: 1_000_000 } });
+    await prisma.product.update({ where: { id: productId }, data: { salePriceIdr: 1_000_000, salePercentage: 20 } });
     preview = await request(app).post("/api/promo-codes/preview")
       .send({ code: "grid20", items: [{ variantId, quantity: 1 }] })
       .expect(200);
   } finally {
-    await prisma.product.update({ where: { id: productId }, data: { salePriceIdr: null } });
+    await prisma.product.update({ where: { id: productId }, data: { salePriceIdr: null, salePercentage: null } });
   }
   assert.deepEqual(preview.body, {
     code: "GRID20",
@@ -2213,8 +2240,9 @@ test("checkout verifies payment notifications, reserves stock, and waits for man
         slug: "checkout-cap",
         priceIdr: 500_000,
         salePriceIdr: 400_000,
+        salePercentage: 20,
         status: "ACTIVE",
-        condition: "BNIB",
+        condition: "BNWT",
         categoryId,
         variants: { create: [{
           sku: "CHECKOUT-CAP-DEFAULT",
@@ -2323,7 +2351,7 @@ test("checkout verifies payment notifications, reserves stock, and waits for man
         slug: "telegram-test-product",
         priceIdr: 100_000,
         status: "ACTIVE",
-        condition: "BNIB",
+        condition: "BNWT",
         categoryId,
         variants: {
           create: [{
@@ -2487,7 +2515,7 @@ test("optionless products use a default SKU without fake size or color", async (
       slug: "ferrari-team-cap",
       priceIdr: 500_000,
       status: "ACTIVE",
-      condition: "BNIB",
+      condition: "BNWT",
       categoryId,
       teamId,
       audience: "UNISEX",

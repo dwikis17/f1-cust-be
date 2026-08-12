@@ -1,11 +1,11 @@
 import type { z } from "zod";
-import { Prisma } from "../../generated/prisma/client.js";
 import { HttpError, notFound } from "../../http.js";
 import { CatalogRepository } from "../../repositories/admin/catalog-repository.js";
 import {
   ProductRepository,
   type ProductWithRelations,
 } from "../../repositories/admin/product-repository.js";
+import { salePriceFromPercentage } from "../../product-price.js";
 import type {
   productPatchSchema,
   productSchema,
@@ -72,13 +72,15 @@ export class ProductService {
     }
   }
 
-  private static validateSale(
+  private static salePrice(
     priceIdr: number,
-    salePriceIdr: number | null,
+    salePercentage: number | null,
   ) {
-    if (salePriceIdr !== null && salePriceIdr >= priceIdr) {
-      throw new HttpError(400, "INVALID_SALE_PRICE", "Sale price must be lower than the regular price");
+    const salePriceIdr = salePriceFromPercentage(priceIdr, salePercentage);
+    if (salePriceIdr !== null && (salePriceIdr < 1 || salePriceIdr >= priceIdr)) {
+      throw new HttpError(400, "INVALID_SALE_PERCENTAGE", "Sale percentage must produce a price lower than the regular price");
     }
+    return salePriceIdr;
   }
 
   static async listProducts() {
@@ -95,9 +97,13 @@ export class ProductService {
     const tagIds = unique(input.tagIds) ?? [];
     await ProductService.validateReferences({ ...input, driverIds, collectionIds, tagIds });
     await ProductService.validateActivation(input.status, input.audience, collectionIds, input.variants.length);
-    const { driverIds: _driverIds, collectionIds: _collectionIds, tagIds: _tagIds, variants, ...product } = input;
+    const salePercentage = input.salePercentage ?? null;
+    const salePriceIdr = ProductService.salePrice(input.priceIdr, salePercentage);
+    const { driverIds: _driverIds, collectionIds: _collectionIds, tagIds: _tagIds, variants, salePercentage: _salePercentage, ...product } = input;
     const created = await ProductRepository.createProduct({
       ...product,
+      salePercentage,
+      salePriceIdr,
       tags: { create: tagIds.map((tagId) => ({ tag: { connect: { id: tagId } } })) },
       drivers: { create: driverIds.map((driverId) => ({ driver: { connect: { id: driverId } } })) },
       collections: {
@@ -106,7 +112,7 @@ export class ProductService {
       variants: {
         create: variants.map((variant) => ({
           ...variant,
-          sizingGuide: variant.sizingGuide ?? Prisma.JsonNull,
+          sizingGuide: variant.sizingGuide,
         })),
       },
     });
@@ -125,34 +131,34 @@ export class ProductService {
     const effectiveStatus = input.status ?? current.status;
     await ProductService.validateActivation(effectiveStatus, effectiveAudience, effectiveCollectionIds, current.variants.length);
     const priceIdr = input.priceIdr ?? current.priceIdr;
-    const salePriceIdr = input.salePriceIdr === undefined ? current.salePriceIdr : input.salePriceIdr;
-    ProductService.validateSale(priceIdr, salePriceIdr);
+    const salePercentage = input.salePercentage === undefined ? current.salePercentage : input.salePercentage;
+    const salePriceIdr = ProductService.salePrice(priceIdr, salePercentage);
 
     const {
       tagIds: _tagIds,
       driverIds: _driverIds,
       collectionIds: _collectionIds,
+      salePercentage: _salePercentage,
       ...product
     } = input;
-    const updated = await ProductRepository.updateProduct(id, product, { tagIds, driverIds, collectionIds });
+    const updated = await ProductRepository.updateProduct(
+      id,
+      { ...product, salePercentage, salePriceIdr },
+      { tagIds, driverIds, collectionIds },
+    );
     return ProductService.response(updated);
   }
 
   static createVariant(productId: string, input: VariantInput) {
-    return ProductRepository.createVariant({ ...input, productId, sizingGuide: input.sizingGuide ?? Prisma.JsonNull });
+    return ProductRepository.createVariant({ ...input, productId });
   }
   static async updateVariant(productId: string, id: string, input: VariantPatch) {
     const current = await ProductRepository.findVariant(id, productId);
     if (!current) notFound("Variant not found");
-    const effectiveSize = input.size === undefined ? current.size : input.size;
-    const effectiveSizingGuide = input.sizingGuide === undefined ? current.sizingGuide : input.sizingGuide;
-    if (effectiveSize && !effectiveSizingGuide) {
-      throw new HttpError(400, "SIZING_GUIDE_REQUIRED", "A sized variant requires a sizing guide");
-    }
     const { sizingGuide, ...variant } = input;
     return ProductRepository.updateVariant(id, {
       ...variant,
-      ...(sizingGuide !== undefined ? { sizingGuide: sizingGuide === null ? Prisma.JsonNull : sizingGuide } : {}),
+      ...(sizingGuide !== undefined ? { sizingGuide } : {}),
     });
   }
   static async deleteVariant(productId: string, id: string) {

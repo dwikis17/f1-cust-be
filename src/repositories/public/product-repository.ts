@@ -32,6 +32,7 @@ export type ProductFilters = {
   availability?: "in_stock";
   minPrice?: number;
   maxPrice?: number;
+  onSale?: boolean;
 };
 
 type FacetName = "team" | "driver" | "productType" | "audience" | "condition" | "availability" | "price";
@@ -72,6 +73,7 @@ function productWhere(filters: ProductFilters, omit?: FacetName): Prisma.Product
     }),
     ...(omit !== "audience" && filters.audiences?.length && { audience: { in: filters.audiences } }),
     ...(omit !== "condition" && filters.conditions?.length && { condition: { in: filters.conditions } }),
+    ...(filters.onSale && { salePercentage: { not: null } }),
     ...(hasVariantFilter && { variants: { some: variantFilter } }),
   };
 }
@@ -199,10 +201,10 @@ export class PublicProductRepository {
     ]);
   }
 
-  static async facetSources(collectionSlug: string, filters: ProductFilters) {
+  static async facetSources(collectionSlug: string | null, filters: ProductFilters) {
     const scoped = (omit: FacetName) =>
       PublicProductRepository.effectivePriceWhere(
-        inCollection(collectionSlug, productWhere(filters, omit)),
+        collectionSlug ? inCollection(collectionSlug, productWhere(filters, omit)) : productWhere(filters, omit),
         filters,
         omit,
       );

@@ -1,22 +1,24 @@
-import type { z } from "zod";
-import { prisma } from "../db.js";
 import { HttpError, notFound } from "../http.js";
 import { effectivePriceIdr } from "../product-price.js";
-import type { promoCodePatchSchema, promoCodeSchema } from "../schemas.js";
+import {
+  PromoCodeRepository,
+  type PromoCodeInput,
+  type PromoCodePatch,
+} from "../repositories/promo-code-repository.js";
 
-type PromoCodeInput = z.infer<typeof promoCodeSchema>;
-type PromoCodePatch = z.infer<typeof promoCodePatchSchema>;
 type CartItem = { variantId: string; quantity: number };
 type DiscountRule = { discountPercentage: number; maxDiscountIdr: number | null };
 
-export function calculatePromoDiscount(subtotalIdr: number, promoCode: DiscountRule) {
-  const percentageDiscount = Math.floor((subtotalIdr * promoCode.discountPercentage) / 100);
-  return Math.min(subtotalIdr, promoCode.maxDiscountIdr ?? percentageDiscount, percentageDiscount);
-}
+export type { PromoCodeInput, PromoCodePatch } from "../repositories/promo-code-repository.js";
 
 export class PromoCodeService {
+  static calculatePromoDiscount(subtotalIdr: number, promoCode: DiscountRule) {
+    const percentageDiscount = Math.floor((subtotalIdr * promoCode.discountPercentage) / 100);
+    return Math.min(subtotalIdr, promoCode.maxDiscountIdr ?? percentageDiscount, percentageDiscount);
+  }
+
   static async preview(code: string, items: CartItem[]) {
-    const promoCode = await prisma.promoCode.findUnique({ where: { code } });
+    const promoCode = await PromoCodeRepository.findByCode(code);
     if (!promoCode?.active) {
       throw new HttpError(409, "PROMO_CODE_UNAVAILABLE", "Promo code is invalid or inactive");
     }
@@ -25,14 +27,7 @@ export class PromoCodeService {
     for (const item of items) {
       quantities.set(item.variantId, (quantities.get(item.variantId) ?? 0) + item.quantity);
     }
-    const variants = await prisma.productVariant.findMany({
-      where: { id: { in: [...quantities.keys()] } },
-      select: {
-        id: true,
-        stockQuantity: true,
-        product: { select: { priceIdr: true, salePriceIdr: true, status: true } },
-      },
-    });
+    const variants = await PromoCodeRepository.findPreviewVariants([...quantities.keys()]);
     if (variants.length !== quantities.size || variants.some((variant) =>
       variant.product.status !== "ACTIVE" || variant.stockQuantity < (quantities.get(variant.id) ?? 0))) {
       throw new HttpError(409, "CART_CHANGED", "One or more cart items are unavailable");
@@ -42,7 +37,7 @@ export class PromoCodeService {
       (sum, variant) => sum + effectivePriceIdr(variant.product) * (quantities.get(variant.id) ?? 0),
       0,
     );
-    const discountIdr = calculatePromoDiscount(subtotalIdr, promoCode);
+    const discountIdr = PromoCodeService.calculatePromoDiscount(subtotalIdr, promoCode);
     return {
       code: promoCode.code,
       discountPercentage: promoCode.discountPercentage,
@@ -54,15 +49,7 @@ export class PromoCodeService {
   }
 
   static async list() {
-    const [promoCodes, redemptions] = await Promise.all([
-      prisma.promoCode.findMany({ orderBy: { createdAt: "desc" } }),
-      prisma.order.groupBy({
-        by: ["promoCodeId"],
-        where: { promoCodeId: { not: null }, promoRedeemedAt: { not: null } },
-        _count: { _all: true },
-        _sum: { discountIdr: true },
-      }),
-    ]);
+    const { promoCodes, redemptions } = await PromoCodeRepository.listWithRedemptions();
     const totals = new Map(redemptions.map((item) => [item.promoCodeId, item]));
     return promoCodes.map((promoCode) => ({
       ...promoCode,
@@ -72,33 +59,18 @@ export class PromoCodeService {
   }
 
   static create(input: PromoCodeInput) {
-    return prisma.promoCode.create({ data: { ...input, maxDiscountIdr: input.maxDiscountIdr ?? null } });
+    return PromoCodeRepository.create(input);
   }
 
   static update(id: string, input: PromoCodePatch) {
-    return prisma.promoCode.update({ where: { id }, data: input });
+    return PromoCodeRepository.update(id, input);
   }
 
   static async usages(id: string, page: number, limit: number) {
-    if (!await prisma.promoCode.findUnique({ where: { id }, select: { id: true } })) notFound("Promo code not found");
-    const where = { promoCodeId: id };
-    const [orders, total] = await prisma.$transaction([
-      prisma.order.findMany({
-        where,
-        select: {
-          id: true,
-          email: true,
-          createdAt: true,
-          paymentStatus: true,
-          discountIdr: true,
-          promoRedeemedAt: true,
-        },
-        orderBy: { createdAt: "desc" },
-        skip: (page - 1) * limit,
-        take: limit,
-      }),
-      prisma.order.count({ where }),
-    ]);
+    if (!await PromoCodeRepository.findById(id)) notFound("Promo code not found");
+    const { orders, total } = await PromoCodeRepository.listUsages(id, page, limit);
     return { data: orders, page, limit, total };
   }
 }
+
+export const calculatePromoDiscount = PromoCodeService.calculatePromoDiscount;

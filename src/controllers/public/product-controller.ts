@@ -1,4 +1,4 @@
-import type { Request, Response } from "express";
+import type { NextFunction, Request, Response } from "express";
 import { z } from "zod";
 import { parse } from "../../http.js";
 import type { ProductFilters, ProductSort } from "../../repositories/public/product-repository.js";
@@ -19,6 +19,7 @@ function listValue(value: unknown) {
 const slugListSchema = z.preprocess(listValue, z.array(slugSchema).max(50));
 const audienceListSchema = z.preprocess(listValue, z.array(productAudienceSchema).max(10));
 const conditionListSchema = z.preprocess(listValue, z.array(productConditionSchema).max(10));
+const trueQuerySchema = z.enum(["true"]).optional();
 const sortSchema = z.enum([
   "featured",
   "relevance",
@@ -48,6 +49,8 @@ const listQuerySchema = z.object({
   minPrice: z.coerce.number().int().nonnegative().optional(),
   maxPrice: z.coerce.number().int().nonnegative().optional(),
   sort: sortSchema.optional(),
+  sale: trueQuerySchema,
+  includeFacets: trueQuerySchema,
 }).strict().superRefine((value, context) => {
   if (value.minPrice !== undefined && value.maxPrice !== undefined && value.minPrice > value.maxPrice) {
     context.addIssue({ code: "custom", path: ["minPrice"], message: "Minimum price cannot exceed maximum price" });
@@ -68,37 +71,55 @@ function filters(query: z.infer<typeof listQuerySchema>): ProductFilters {
     availability: query.availability,
     minPrice: query.minPrice,
     maxPrice: query.maxPrice,
+    onSale: query.sale === "true",
   };
 }
 
 export class PublicProductController {
-  static async cartItems(request: Request, response: Response) {
-    const body = parse(cartItemsSchema, request.body);
-    response.set("cache-control", "no-store").json(await PublicProductService.cartItems(body.variantIds, body.locale));
+  static async cartItems(request: Request, response: Response, next: NextFunction) {
+    try {
+      const body = parse(cartItemsSchema, request.body);
+      response.set("cache-control", "no-store").json(await PublicProductService.cartItems(body.variantIds, body.locale));
+    } catch (error) {
+      next(error);
+    }
   }
-  static async listProducts(request: Request, response: Response) {
-    const query = parse(listQuerySchema, request.query);
-    response.json(await PublicProductService.listProducts(
-      filters(query),
-      (query.sort ?? "newest") as ProductSort,
-      query.page,
-      query.limit,
-      query.locale,
-    ));
+  static async listProducts(request: Request, response: Response, next: NextFunction) {
+    try {
+      const query = parse(listQuerySchema, request.query);
+      response.json(await PublicProductService.listProducts(
+        filters(query),
+        (query.sort ?? "newest") as ProductSort,
+        query.page,
+        query.limit,
+        query.locale,
+        query.includeFacets === "true",
+      ));
+    } catch (error) {
+      next(error);
+    }
   }
-  static async listCollectionProducts(request: Request, response: Response) {
-    const query = parse(listQuerySchema, request.query);
-    response.json(await PublicProductService.listCollectionProducts(
-      String(request.params.slug),
-      filters(query),
-      (query.sort ?? "featured") as ProductSort,
-      query.page,
-      query.limit,
-      query.locale,
-    ));
+  static async listCollectionProducts(request: Request, response: Response, next: NextFunction) {
+    try {
+      const query = parse(listQuerySchema, request.query);
+      response.json(await PublicProductService.listCollectionProducts(
+        String(request.params.slug),
+        filters(query),
+        (query.sort ?? "featured") as ProductSort,
+        query.page,
+        query.limit,
+        query.locale,
+      ));
+    } catch (error) {
+      next(error);
+    }
   }
-  static async findProduct(request: Request, response: Response) {
-    const query = parse(z.object({ locale: localeSchema.default("en") }).strict(), request.query);
-    response.json(await PublicProductService.findProduct(String(request.params.slug), query.locale));
+  static async findProduct(request: Request, response: Response, next: NextFunction) {
+    try {
+      const query = parse(z.object({ locale: localeSchema.default("en") }).strict(), request.query);
+      response.json(await PublicProductService.findProduct(String(request.params.slug), query.locale));
+    } catch (error) {
+      next(error);
+    }
   }
 }

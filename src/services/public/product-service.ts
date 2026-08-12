@@ -11,7 +11,7 @@ import { publicCollection, PublicCatalogService } from "./catalog-service.js";
 
 type NamedFacetValue = { id: string; name: string; slug: string };
 type Locale = "en" | "id";
-const conditions = ["BNIB", "BNWT", "BNWOT", "PRE_OWNED"] as const;
+const conditions = ["BNWT", "BNWOT", "USED"] as const;
 
 function increment(map: Map<string, { value: NamedFacetValue; count: number }>, value: NamedFacetValue) {
   const current = map.get(value.id);
@@ -36,6 +36,7 @@ export class PublicProductService {
       nameId,
       descriptionId,
       salePriceIdr,
+      salePercentage,
       priceIdr,
       ...value
     } = product;
@@ -43,6 +44,7 @@ export class PublicProductService {
       ...value,
       priceIdr: effectivePriceIdr(product),
       originalPriceIdr: salePriceIdr === null ? null : priceIdr,
+      salePercentage,
       name: locale === "id" ? nameId ?? product.name : product.name,
       description: locale === "id" ? descriptionId ?? product.description : product.description,
       category,
@@ -54,7 +56,7 @@ export class PublicProductService {
     };
   }
 
-  private static async facets(collectionSlug: string, filters: ProductFilters) {
+  private static async facets(collectionSlug: string | null, filters: ProductFilters) {
     const [
       teamProducts,
       driverProducts,
@@ -108,13 +110,25 @@ export class PublicProductService {
     };
   }
 
-  static async listProducts(filters: ProductFilters, sort: ProductSort, page: number, limit: number, locale: Locale) {
-    const [total, products] = await PublicProductRepository.listProducts(filters, sort, page, limit);
+  static async listProducts(
+    filters: ProductFilters,
+    sort: ProductSort,
+    page: number,
+    limit: number,
+    locale: Locale,
+    includeFacets = false,
+  ) {
+    const [result, facets] = await Promise.all([
+      PublicProductRepository.listProducts(filters, sort, page, limit),
+      includeFacets ? PublicProductService.facets(null, filters) : Promise.resolve(undefined),
+    ]);
+    const [total, products] = result;
     return {
       data: products.map((product) => PublicProductService.publicProduct(product, locale)),
       page,
       limit,
       total,
+      ...(facets ? { facets } : {}),
     };
   }
 

@@ -1,4 +1,4 @@
-import type { Request, Response } from "express";
+import type { NextFunction, Request, Response } from "express";
 import { z } from "zod";
 import { parse } from "../../http.js";
 import { dashboardPeriodSchema } from "../../schemas.js";
@@ -9,9 +9,13 @@ const dashboardQuerySchema = z.object({
 }).strict();
 
 export class DashboardController {
-  static async summary(request: Request, response: Response) {
-    const { period } = parse(dashboardQuerySchema, request.query);
-    response.set("cache-control", "no-store");
-    response.json(await DashboardService.summary(period));
+  static async summary(request: Request, response: Response, next: NextFunction) {
+    try {
+      const { period } = parse(dashboardQuerySchema, request.query);
+      response.set("cache-control", "no-store");
+      response.json(await DashboardService.summary(period));
+    } catch (error) {
+      next(error);
+    }
   }
 }

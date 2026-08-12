@@ -1,4 +1,4 @@
-import type { Request, Response } from "express";
+import type { NextFunction, Request, Response } from "express";
 import { z } from "zod";
 import { parse } from "../http.js";
 import {
@@ -20,29 +20,49 @@ const usageQuerySchema = z.object({
 }).strict();
 
 export class PromoCodeController {
-  static async preview(request: Request, response: Response) {
-    response.set("cache-control", "no-store");
-    const input = parse(previewSchema, request.body);
-    response.json(await PromoCodeService.preview(input.code, input.items));
+  static async preview(request: Request, response: Response, next: NextFunction) {
+    try {
+      response.set("cache-control", "no-store");
+      const input = parse(previewSchema, request.body);
+      response.json(await PromoCodeService.preview(input.code, input.items));
+    } catch (error) {
+      next(error);
+    }
   }
 
-  static async list(_request: Request, response: Response) {
-    response.json(await PromoCodeService.list());
+  static async list(_request: Request, response: Response, next: NextFunction) {
+    try {
+      response.json(await PromoCodeService.list());
+    } catch (error) {
+      next(error);
+    }
   }
 
-  static async create(request: Request, response: Response) {
-    response.status(201).json(await PromoCodeService.create(parse(promoCodeSchema, request.body)));
+  static async create(request: Request, response: Response, next: NextFunction) {
+    try {
+      response.status(201).json(await PromoCodeService.create(parse(promoCodeSchema, request.body)));
+    } catch (error) {
+      next(error);
+    }
   }
 
-  static async update(request: Request, response: Response) {
-    response.json(await PromoCodeService.update(
-      parse(idSchema, request.params.id),
-      parse(promoCodePatchSchema, request.body),
-    ));
+  static async update(request: Request, response: Response, next: NextFunction) {
+    try {
+      response.json(await PromoCodeService.update(
+        parse(idSchema, request.params.id),
+        parse(promoCodePatchSchema, request.body),
+      ));
+    } catch (error) {
+      next(error);
+    }
   }
 
-  static async usages(request: Request, response: Response) {
-    const query = parse(usageQuerySchema, request.query);
-    response.json(await PromoCodeService.usages(parse(idSchema, request.params.id), query.page, query.limit));
+  static async usages(request: Request, response: Response, next: NextFunction) {
+    try {
+      const query = parse(usageQuerySchema, request.query);
+      response.json(await PromoCodeService.usages(parse(idSchema, request.params.id), query.page, query.limit));
+    } catch (error) {
+      next(error);
+    }
   }
 }
