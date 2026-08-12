@@ -35,7 +35,7 @@ export type ProductFilters = {
   onSale?: boolean;
 };
 
-type FacetName = "team" | "driver" | "productType" | "audience" | "condition" | "availability" | "price";
+type FacetName = "tag" | "team" | "driver" | "productType" | "audience" | "condition" | "availability" | "price";
 type PriceRow = { id: string; priceIdr: number; salePriceIdr: number | null };
 
 const hasPriceFilter = (filters: ProductFilters) => filters.minPrice !== undefined || filters.maxPrice !== undefined;
@@ -209,6 +209,7 @@ export class PublicProductRepository {
         omit,
       );
     const [
+      tagWhere,
       teamWhere,
       driverWhere,
       productTypeWhere,
@@ -217,6 +218,7 @@ export class PublicProductRepository {
       availabilityWhere,
       priceWhere,
     ] = await Promise.all([
+      scoped("tag"),
       scoped("team"),
       scoped("driver"),
       scoped("productType"),
@@ -226,6 +228,10 @@ export class PublicProductRepository {
       scoped("price"),
     ]);
     return Promise.all([
+      prisma.product.findMany({
+        where: tagWhere,
+        select: { tags: { select: { tag: true } } },
+      }),
       prisma.product.findMany({ where: teamWhere, select: { team: true } }),
       prisma.product.findMany({
         where: driverWhere,

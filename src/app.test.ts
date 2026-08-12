@@ -852,6 +852,7 @@ test("admin creates catalog data and public API hides drafts", async () => {
   assert.equal(product.body.team.slug, "ferrari");
   assert.deepEqual(product.body.drivers.map((driver: { slug: string }) => driver.slug), ["charles-leclerc", "niki-lauda"]);
   assert.equal(product.body.collections.length, 3);
+  assert.deepEqual(product.body.tags.map((tag: { slug: string }) => tag.slug), ["limited-edition"]);
   const unassigned = await request(app).post("/api/admin/products").set("authorization", `Bearer ${token}`)
     .send({ name: "General F1 Cap", slug: "general-f1-cap", priceIdr: 300_000, condition: "BNWT", categoryId })
     .expect(201);
@@ -2487,6 +2488,10 @@ test("collection hierarchy, memberships, and counted facets are public", async (
     [["charles-leclerc", 1], ["niki-lauda", 1]],
   );
   assert.equal(response.body.facets.productTypes[0].slug, "jerseys");
+  assert.deepEqual(
+    response.body.facets.tags.map((tag: { slug: string; count: number }) => [tag.slug, tag.count]),
+    [["limited-edition", 1]],
+  );
   assert.equal(response.body.facets.audiences[0].value, "UNISEX");
   assert.equal(response.body.facets.availability.inStock, 1);
   assert.deepEqual(response.body.facets.price, { min: 1_250_000, max: 1_250_000 });

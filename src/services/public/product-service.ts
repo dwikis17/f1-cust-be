@@ -30,6 +30,7 @@ export class PublicProductService {
     const {
       drivers,
       collections,
+      tags,
       variants,
       photos,
       category,
@@ -51,6 +52,7 @@ export class PublicProductService {
       productType: category,
       drivers: drivers.map(({ driver }) => driver),
       collections: collections.map(({ collection }) => publicCollection(collection, locale)),
+      tags: tags.map(({ tag }) => tag).sort((a, b) => a.name.localeCompare(b.name)),
       variants: variants.map((variant) => ({ ...variant, available: variant.stockQuantity > 0 })),
       photos: photos.map((photo) => ({ ...photo, url: PublicProductRepository.storedPhotoUrl(photo.path) })),
     };
@@ -58,6 +60,7 @@ export class PublicProductService {
 
   private static async facets(collectionSlug: string | null, filters: ProductFilters) {
     const [
+      tagProducts,
       teamProducts,
       driverProducts,
       productTypeProducts,
@@ -67,11 +70,15 @@ export class PublicProductService {
       priceProducts,
     ] = await PublicProductRepository.facetSources(collectionSlug, filters);
     const teams = new Map<string, { value: NamedFacetValue; count: number }>();
+    const tags = new Map<string, { value: NamedFacetValue; count: number }>();
     const drivers = new Map<string, { value: NamedFacetValue; count: number }>();
     const productTypes = new Map<string, { value: NamedFacetValue; count: number }>();
     const audiences = new Map<string, number>();
     const conditionCounts = new Map<string, number>();
 
+    for (const product of tagProducts) {
+      for (const { tag } of product.tags) increment(tags, tag);
+    }
     for (const { team } of teamProducts) if (team) increment(teams, team);
     for (const product of driverProducts) {
       for (const { driver } of product.drivers) increment(drivers, driver);
@@ -97,6 +104,7 @@ export class PublicProductService {
     }
 
     return {
+      tags: namedFacet(tags),
       teams: namedFacet(teams),
       drivers: namedFacet(drivers),
       productTypes: namedFacet(productTypes),
