@@ -11,7 +11,7 @@ import { publicCollection, PublicCatalogService } from "./catalog-service.js";
 
 type NamedFacetValue = { id: string; name: string; slug: string };
 type Locale = "en" | "id";
-const conditions = ["BNIB", "BNWT", "BNWOT", "PRE_OWNED"] as const;
+const conditions = ["BNWT", "BNWOT", "USED"] as const;
 
 function increment(map: Map<string, { value: NamedFacetValue; count: number }>, value: NamedFacetValue) {
   const current = map.get(value.id);

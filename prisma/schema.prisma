@@ -28,10 +28,9 @@ enum ProductAudience {
 }
 
 enum ProductCondition {
-  BNIB
   BNWT
   BNWOT
-  PRE_OWNED
+  USED
 }
 
 enum CollectionKind {
