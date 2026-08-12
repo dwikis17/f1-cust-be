@@ -1359,6 +1359,16 @@ test("product sales validate and price public catalog results until cleared", as
     });
     comparisonId = comparison.id;
 
+    const saleCatalog = await request(app)
+      .get("/api/products?sale=true&includeFacets=true&limit=100")
+      .expect(200);
+    assert.equal(saleCatalog.body.total, 2);
+    assert.ok(saleCatalog.body.data.every((item: { salePercentage: number | null }) => item.salePercentage !== null));
+    assert.deepEqual(saleCatalog.body.facets.price, { min: 800_000, max: 900_000 });
+    const defaultCatalog = await request(app).get("/api/products?limit=100").expect(200);
+    assert.equal(defaultCatalog.body.facets, undefined);
+    await request(app).get("/api/products?sale=invalid").expect(400);
+
     const publicProduct = await request(app).get("/api/products/ferrari-team-jersey").expect(200);
     assert.equal(publicProduct.body.priceIdr, 900_000);
     assert.equal(publicProduct.body.originalPriceIdr, 1_250_000);

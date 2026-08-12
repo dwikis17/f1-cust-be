@@ -56,7 +56,7 @@ export class PublicProductService {
     };
   }
 
-  private static async facets(collectionSlug: string, filters: ProductFilters) {
+  private static async facets(collectionSlug: string | null, filters: ProductFilters) {
     const [
       teamProducts,
       driverProducts,
@@ -110,13 +110,25 @@ export class PublicProductService {
     };
   }
 
-  static async listProducts(filters: ProductFilters, sort: ProductSort, page: number, limit: number, locale: Locale) {
-    const [total, products] = await PublicProductRepository.listProducts(filters, sort, page, limit);
+  static async listProducts(
+    filters: ProductFilters,
+    sort: ProductSort,
+    page: number,
+    limit: number,
+    locale: Locale,
+    includeFacets = false,
+  ) {
+    const [result, facets] = await Promise.all([
+      PublicProductRepository.listProducts(filters, sort, page, limit),
+      includeFacets ? PublicProductService.facets(null, filters) : Promise.resolve(undefined),
+    ]);
+    const [total, products] = result;
     return {
       data: products.map((product) => PublicProductService.publicProduct(product, locale)),
       page,
       limit,
       total,
+      ...(facets ? { facets } : {}),
     };
   }
 
