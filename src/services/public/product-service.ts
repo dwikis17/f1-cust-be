@@ -73,7 +73,10 @@ export class PublicProductService {
       drivers: drivers.map(({ driver }) => driver),
       collections: collections.map(({ collection }) => publicCollection(collection, locale)),
       tags: tags.map(({ tag }) => tag).sort((a, b) => a.name.localeCompare(b.name)),
-      variants: variants.map((variant) => ({ ...variant, available: variant.stockQuantity > 0 })),
+      variants: variants.map(({ position: _position, ...variant }) => ({
+        ...variant,
+        available: variant.stockQuantity > 0,
+      })),
       photos: photos.map((photo) => ({ ...photo, url: PublicProductRepository.storedPhotoUrl(photo.path) })),
     };
   }

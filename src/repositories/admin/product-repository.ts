@@ -10,7 +10,7 @@ export const productInclude = {
     orderBy: [{ collection: { position: "asc" as const } }, { collection: { name: "asc" as const } }],
   },
   tags: { include: { tag: true } },
-  variants: { orderBy: [{ color: "asc" as const }, { size: "asc" as const }, { sku: "asc" as const }] },
+  variants: { orderBy: [{ position: "asc" as const }, { createdAt: "asc" as const }, { id: "asc" as const }] },
   photos: { orderBy: [{ position: "asc" as const }, { createdAt: "asc" as const }] },
 };
 
@@ -85,6 +85,9 @@ export class ProductRepository {
     return prisma.productVariant.create({
       data: { ...data, sizingGuide: data.sizingGuide ?? Prisma.JsonNull } as Prisma.ProductVariantUncheckedCreateInput,
     });
+  }
+  static maxVariantPosition(productId: string) {
+    return prisma.productVariant.aggregate({ where: { productId }, _max: { position: true } });
   }
   static findVariant(id: string, productId: string) {
     return prisma.productVariant.findFirst({ where: { id, productId } });

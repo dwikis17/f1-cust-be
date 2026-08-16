@@ -23,6 +23,7 @@
     "db:migrate": "prisma migrate dev",
     "db:deploy": "prisma migrate deploy",
     "db:generate": "prisma generate",
+    "db:backfill-variant-positions": "tsx src/backfill-variant-positions.ts",
     "db:seed": "tsx src/seed-f1.ts",
     "db:studio": "prisma studio",
     "photos:rewrite-urls": "tsx src/rewrite-photo-urls.ts",

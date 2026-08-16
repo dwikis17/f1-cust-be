@@ -144,7 +144,10 @@ const variantBaseSchema = z.object({
   sizingGuide: sizingGuideSchema.nullable().optional(),
 }).strict();
 export const variantSchema = variantBaseSchema;
-export const variantPatchSchema = variantBaseSchema.partial().refine((value) => Object.keys(value).length > 0);
+export const variantPatchSchema = variantBaseSchema
+  .extend({ position: z.number().int().nonnegative().optional() })
+  .partial()
+  .refine((value) => Object.keys(value).length > 0);
 
 export const productSchema = z.object({
   name: nameSchema,

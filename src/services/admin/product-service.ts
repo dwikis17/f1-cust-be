@@ -110,8 +110,9 @@ export class ProductService {
         create: collectionIds.map((collectionId) => ({ collection: { connect: { id: collectionId } } })),
       },
       variants: {
-        create: variants.map((variant) => ({
+        create: variants.map((variant, position) => ({
           ...variant,
+          position,
           sizingGuide: variant.sizingGuide,
         })),
       },
@@ -149,8 +150,11 @@ export class ProductService {
     return ProductService.response(updated);
   }
 
-  static createVariant(productId: string, input: VariantInput) {
-    return ProductRepository.createVariant({ ...input, productId });
+  static async createVariant(productId: string, input: VariantInput) {
+    if (!await ProductRepository.findProductStatus(productId)) notFound("Product not found");
+    // ponytail: max+1 can tie under concurrent creates; createdAt/id tie-breakers keep reads deterministic.
+    const { _max: { position } } = await ProductRepository.maxVariantPosition(productId);
+    return ProductRepository.createVariant({ ...input, productId, position: (position ?? -1) + 1 });
   }
   static async updateVariant(productId: string, id: string, input: VariantPatch) {
     const current = await ProductRepository.findVariant(id, productId);

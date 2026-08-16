@@ -1149,6 +1149,93 @@ test("active products are filterable with exact variant stock", async () => {
   assert.equal(noGuideVariant.body.sizingGuide, null);
 });
 
+test("variant order persists across admin and public product responses", async () => {
+  const product = await request(app).post("/api/admin/products").set("authorization", `Bearer ${token}`)
+    .send({
+      name: "Variant Ordering Product",
+      slug: "variant-ordering-product",
+      priceIdr: 800_000,
+      status: "ACTIVE",
+      condition: "BNWT",
+      categoryId,
+      collectionIds: [ferrariCollectionId],
+      audience: "UNISEX",
+      variants: [
+        {
+          sku: "ORDER-L-RED",
+          size: "L",
+          color: "Red",
+          stockQuantity: 1,
+          packageLengthMm: 300,
+          packageWidthMm: 220,
+          packageHeightMm: 40,
+          packageWeightG: 450,
+        },
+        {
+          sku: "ORDER-S-BLUE",
+          size: "S",
+          color: "Blue",
+          stockQuantity: 1,
+          packageLengthMm: 300,
+          packageWidthMm: 220,
+          packageHeightMm: 40,
+          packageWeightG: 450,
+        },
+        {
+          sku: "ORDER-M-RED",
+          size: "M",
+          color: "Red",
+          stockQuantity: 1,
+          packageLengthMm: 300,
+          packageWidthMm: 220,
+          packageHeightMm: 40,
+          packageWeightG: 450,
+        },
+      ],
+    }).expect(201);
+  assert.deepEqual(product.body.variants.map((variant: { sku: string; position: number }) => [variant.sku, variant.position]), [
+    ["ORDER-L-RED", 0],
+    ["ORDER-S-BLUE", 1],
+    ["ORDER-M-RED", 2],
+  ]);
+
+  const ids = Object.fromEntries(product.body.variants.map((variant: { id: string; sku: string }) => [variant.sku, variant.id]));
+  for (const [position, sku] of ["ORDER-M-RED", "ORDER-L-RED", "ORDER-S-BLUE"].entries()) {
+    await request(app).patch(`/api/admin/products/${product.body.id}/variants/${ids[sku]}`)
+      .set("authorization", `Bearer ${token}`).send({ position }).expect(200);
+  }
+
+  const admin = await request(app).get(`/api/admin/products/${product.body.id}`)
+    .set("authorization", `Bearer ${token}`).expect(200);
+  assert.deepEqual(admin.body.variants.map((variant: { sku: string }) => variant.sku), [
+    "ORDER-M-RED",
+    "ORDER-L-RED",
+    "ORDER-S-BLUE",
+  ]);
+
+  const publicProduct = await request(app).get("/api/products/variant-ordering-product").expect(200);
+  assert.deepEqual(publicProduct.body.variants.map((variant: { sku: string }) => variant.sku), [
+    "ORDER-M-RED",
+    "ORDER-L-RED",
+    "ORDER-S-BLUE",
+  ]);
+  assert.equal(publicProduct.body.variants[0].position, undefined);
+
+  const appended = await request(app).post(`/api/admin/products/${product.body.id}/variants`)
+    .set("authorization", `Bearer ${token}`)
+    .send({
+      sku: "ORDER-XL-GREEN",
+      size: "XL",
+      color: "Green",
+      stockQuantity: 1,
+      packageLengthMm: 300,
+      packageWidthMm: 220,
+      packageHeightMm: 40,
+      packageWeightG: 450,
+    }).expect(201);
+  assert.equal(appended.body.position, 3);
+});
+
 test("home collection blocks support ordered CRUD, ranked products, limits, localization, and image cleanup", async () => {
   const endpoint = "/api/admin/home/collection-blocks";
   const pngHeader = Buffer.from([0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a]);
