@@ -160,6 +160,7 @@ model Product {
   slug          String              @unique
   description   String              @default("")
   descriptionId String?
+  bulletPoints  Json                @default("[]")
   sizingNote    String?
   priceIdr      Int
   salePriceIdr  Int?

@@ -823,6 +823,10 @@ test("admin creates catalog data and public API hides drafts", async () => {
       slug: "ferrari-team-jersey",
       description: "Official red team jersey",
       descriptionId: "Jersey tim merah resmi",
+      bulletPoints: [
+        { text: "Official team styling.", textId: "Gaya tim resmi." },
+        { text: "Lightweight performance fabric.", textId: null },
+      ],
       sizingNote: "Measured flat across the garment.",
       priceIdr: 1_250_000,
       condition: "BNWT",
@@ -847,6 +851,10 @@ test("admin creates catalog data and public API hides drafts", async () => {
   productId = product.body.id;
   assert.equal(product.body.nameId, "Jersey Tim Ferrari");
   assert.equal(product.body.descriptionId, "Jersey tim merah resmi");
+  assert.deepEqual(product.body.bulletPoints, [
+    { text: "Official team styling.", textId: "Gaya tim resmi." },
+    { text: "Lightweight performance fabric.", textId: null },
+  ]);
   assert.equal(product.body.sizingNote, "Measured flat across the garment.");
   assert.equal(product.body.condition, "BNWT");
   assert.equal(product.body.team.slug, "ferrari");
@@ -1076,10 +1084,15 @@ test("active products are filterable with exact variant stock", async () => {
   assert.equal(response.body.data[0].condition, "BNWT");
   assert.equal(response.body.data[0].team.name, "Ferrari");
   assert.equal(response.body.data[0].name, "Ferrari Team Jersey");
+  assert.equal(response.body.data[0].bulletPoints, undefined);
   assert.equal(response.body.data[0].variants, undefined);
   assert.equal(response.body.data[0].collections, undefined);
   const english = await request(app).get("/api/products/ferrari-team-jersey").expect(200);
   assert.equal(english.body.sizingNote, "Allow a 1 cm tolerance.");
+  assert.deepEqual(english.body.bulletPoints, [
+    "Official team styling.",
+    "Lightweight performance fabric.",
+  ]);
   assert.equal(english.body.team.slug, "ferrari");
   assert.deepEqual(
     english.body.drivers.map((driver: { slug: string }) => driver.slug),
@@ -1095,6 +1108,7 @@ test("active products are filterable with exact variant stock", async () => {
   const indonesian = await request(app).get("/api/products/ferrari-team-jersey?locale=id").expect(200);
   assert.equal(indonesian.body.name, "Jersey Tim Ferrari");
   assert.equal(indonesian.body.description, "Jersey tim merah resmi");
+  assert.deepEqual(indonesian.body.bulletPoints, ["Gaya tim resmi.", "Lightweight performance fabric."]);
   assert.equal(indonesian.body.nameId, undefined);
   assert.equal(indonesian.body.descriptionId, undefined);
   const indonesianFerrariCollection = indonesian.body.collections
@@ -1147,6 +1161,38 @@ test("active products are filterable with exact variant stock", async () => {
   const noGuideVariant = await request(app).post(`/api/admin/products/${productId}/variants`)
     .set("authorization", `Bearer ${token}`).send({ ...invalidVariant, sku: "NO-GUIDE" }).expect(201);
   assert.equal(noGuideVariant.body.sizingGuide, null);
+});
+
+test("product bullet points validate, persist order, and localize detail responses", async () => {
+  await request(app).patch(`/api/admin/products/${productId}`).set("authorization", `Bearer ${token}`)
+    .send({ bulletPoints: [{ text: "" }] }).expect(400);
+  await request(app).patch(`/api/admin/products/${productId}`).set("authorization", `Bearer ${token}`)
+    .send({ bulletPoints: [{ text: "x".repeat(241) }] }).expect(400);
+  await request(app).patch(`/api/admin/products/${productId}`).set("authorization", `Bearer ${token}`)
+    .send({ bulletPoints: Array.from({ length: 11 }, (_, index) => ({ text: `Point ${index + 1}` })) }).expect(400);
+
+  const empty = await request(app).patch(`/api/admin/products/${productId}`).set("authorization", `Bearer ${token}`)
+    .send({ bulletPoints: [] }).expect(200);
+  assert.deepEqual(empty.body.bulletPoints, []);
+  const emptyPublic = await request(app).get("/api/products/ferrari-team-jersey").expect(200);
+  assert.deepEqual(emptyPublic.body.bulletPoints, []);
+
+  const updated = await request(app).patch(`/api/admin/products/${productId}`).set("authorization", `Bearer ${token}`)
+    .send({
+      bulletPoints: [
+        { text: "Second highlight", textId: "Sorotan kedua" },
+        { text: "First highlight", textId: "" },
+      ],
+    }).expect(200);
+  assert.deepEqual(updated.body.bulletPoints, [
+    { text: "Second highlight", textId: "Sorotan kedua" },
+    { text: "First highlight", textId: null },
+  ]);
+  const english = await request(app).get("/api/products/ferrari-team-jersey").expect(200);
+  const indonesian = await request(app).get("/api/products/ferrari-team-jersey?locale=id").expect(200);
+  assert.deepEqual(english.body.bulletPoints, ["Second highlight", "First highlight"]);
+  assert.deepEqual(indonesian.body.bulletPoints, ["Sorotan kedua", "First highlight"]);
+  assert.equal(indonesian.body.bulletPoints.some((point: unknown) => typeof point !== "string"), false);
 });
 
 test("variant order persists across admin and public product responses", async () => {

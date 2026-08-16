@@ -14,6 +14,19 @@ type NamedFacetValue = { id: string; name: string; slug: string };
 type Locale = "en" | "id";
 const conditions = ["BNWT", "BNWOT", "USED"] as const;
 
+function localizedBulletPoints(value: unknown, locale: Locale) {
+  if (!Array.isArray(value)) return [];
+  return value.flatMap((item) => {
+    if (!item || typeof item !== "object") return [];
+    const point = item as { text?: unknown; textId?: unknown };
+    if (typeof point.text !== "string" || !point.text.trim()) return [];
+    const translated = locale === "id" && typeof point.textId === "string" && point.textId.trim()
+      ? point.textId
+      : point.text;
+    return [translated];
+  });
+}
+
 function increment(map: Map<string, { value: NamedFacetValue; count: number }>, value: NamedFacetValue) {
   const current = map.get(value.id);
   if (current) current.count += 1;
@@ -53,6 +66,7 @@ export class PublicProductService {
       tags,
       variants,
       photos,
+      bulletPoints,
       category,
       nameId,
       descriptionId,
@@ -68,6 +82,7 @@ export class PublicProductService {
       salePercentage,
       name: locale === "id" ? nameId ?? product.name : product.name,
       description: locale === "id" ? descriptionId ?? product.description : product.description,
+      bulletPoints: localizedBulletPoints(bulletPoints, locale),
       category,
       productType: category,
       drivers: drivers.map(({ driver }) => driver),

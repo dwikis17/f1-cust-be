@@ -118,6 +118,12 @@ export const sizingGuideSchema = z.object({
 
 const sizingNoteSchema = z.string().trim().max(2_000).nullable();
 
+const productBulletPointSchema = z.object({
+  text: z.string().trim().min(1).max(240),
+  textId: z.preprocess((value) => value === "" ? null : value, z.string().trim().max(240).nullable().default(null)),
+}).strict();
+const productBulletPointsSchema = z.array(productBulletPointSchema).max(10);
+
 const salePercentageSchema = z.number().int().min(1).max(99);
 
 function validateSale(
@@ -155,6 +161,7 @@ export const productSchema = z.object({
   slug: slugSchema,
   description: z.string().trim().max(10_000).default(""),
   descriptionId: z.string().trim().max(10_000).nullable().optional(),
+  bulletPoints: productBulletPointsSchema.default([]),
   sizingNote: sizingNoteSchema.optional(),
   priceIdr: z.number().int().nonnegative(),
   salePercentage: salePercentageSchema.nullable().default(null),
@@ -185,6 +192,7 @@ export const productPatchSchema = z.object({
   slug: slugSchema.optional(),
   description: z.string().trim().max(10_000).optional(),
   descriptionId: z.string().trim().max(10_000).nullable().optional(),
+  bulletPoints: productBulletPointsSchema.optional(),
   sizingNote: sizingNoteSchema.optional(),
   priceIdr: z.number().int().nonnegative().optional(),
   salePercentage: salePercentageSchema.nullable().optional(),
