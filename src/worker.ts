@@ -51,7 +51,7 @@ export default {
       await runWithExecutionContext(ctx, async () => {
         try {
           await runWithEmailSender(env.EMAIL, () => runWithPrisma(prisma, async () => {
-            if (controller.cron === "*/5 * * * *") {
+            if (controller.cron === "0 * * * *") {
               await reconcilePendingTelegramNotifications();
               return;
             }
