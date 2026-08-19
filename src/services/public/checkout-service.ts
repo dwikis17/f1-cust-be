@@ -279,6 +279,7 @@ async function getShipmentCollectionOptionsInternal(order: OrderWithItems) {
   const rates = await requestBiteshipRates({
     destinationPostalCode: order.postalCode,
     items: biteshipItems(order),
+    courierCodes: [order.courierCode],
   });
   const rate = rates.find((item) => item.courierCode === order.courierCode && item.serviceCode === order.courierServiceCode);
   if (!rate) throw new HttpError(409, "SHIPMENT_RATE_UNAVAILABLE", "The selected shipping service is no longer available");

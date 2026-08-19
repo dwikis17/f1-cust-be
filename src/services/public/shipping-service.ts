@@ -3,6 +3,7 @@ import { config } from "../../config.js";
 import { HttpError } from "../../http.js";
 import { effectivePriceIdr } from "../../product-price.js";
 import { PublicShippingRepository } from "../../repositories/public/shipping-repository.js";
+import { ShippingCourierRepository } from "../../repositories/shipping-courier-repository.js";
 import { normalizeCollectionMethods, type ShipmentCollectionMethod } from "../../shipment-collection.js";
 
 type ShippingInput = {
@@ -56,8 +57,8 @@ function upstreamCode(value: unknown) {
   return typeof value.code === "number" ? value.code : undefined;
 }
 
-function assertShippingConfig() {
-  if (!config.biteshipApiKey || !config.biteshipOriginPostalCode || config.biteshipCouriers.length === 0) {
+function assertShippingConfig(courierCodes: string[]) {
+  if (!config.biteshipApiKey || !config.biteshipOriginPostalCode || courierCodes.length === 0) {
     throw new HttpError(503, "SHIPPING_NOT_CONFIGURED", "Shipping estimates are not configured");
   }
 }
@@ -66,8 +67,9 @@ export class PublicShippingService {
   static async requestBiteshipRates(input: {
     destinationPostalCode: string;
     items: BiteshipRateItem[];
+    courierCodes: string[];
   }) {
-    assertShippingConfig();
+    assertShippingConfig(input.courierCodes);
     const apiKey = config.biteshipApiKey;
     if (!apiKey) throw new HttpError(503, "SHIPPING_NOT_CONFIGURED", "Shipping estimates are not configured");
 
@@ -79,7 +81,7 @@ export class PublicShippingService {
         body: JSON.stringify({
           origin_postal_code: Number(config.biteshipOriginPostalCode),
           destination_postal_code: Number(input.destinationPostalCode),
-          couriers: config.biteshipCouriers.join(","),
+          couriers: input.courierCodes.join(","),
           items: input.items,
         }),
         signal: AbortSignal.timeout(8_000),
@@ -118,7 +120,8 @@ export class PublicShippingService {
   }
 
   static async rates(input: ShippingInput) {
-    assertShippingConfig();
+    const courierCodes = await ShippingCourierRepository.listActiveCodes();
+    assertShippingConfig(courierCodes);
     const quantities = new Map<string, number>();
     for (const item of input.items) {
       quantities.set(item.variantId, (quantities.get(item.variantId) ?? 0) + item.quantity);
@@ -144,6 +147,7 @@ export class PublicShippingService {
           length: variant.packageLengthMm / 10,
           width: variant.packageWidthMm / 10,
         })),
+        courierCodes,
       }),
     };
   }

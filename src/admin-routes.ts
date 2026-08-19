@@ -3,6 +3,7 @@ import multer from "multer";
 import { config } from "./config.js";
 import { AuthController } from "./controllers/admin/auth-controller.js";
 import { CatalogController } from "./controllers/admin/catalog-controller.js";
+import { CourierController } from "./controllers/admin/courier-controller.js";
 import { DashboardController } from "./controllers/admin/dashboard-controller.js";
 import { MediaController } from "./controllers/admin/media-controller.js";
 import { OrderController } from "./controllers/admin/order-controller.js";
@@ -25,6 +26,8 @@ router.post("/auth/logout", AuthController.logout);
 router.get("/auth/me", AuthController.me);
 
 router.get("/dashboard", DashboardController.summary);
+router.get("/couriers", CourierController.list);
+router.patch("/couriers/:code", CourierController.update);
 router.get("/orders", OrderController.list);
 router.get("/orders/export.csv", OrderController.exportCsv);
 router.get("/orders/:id", OrderController.find);

@@ -28,6 +28,26 @@ let driverCollectionId = "";
 let historicalDriverCollectionId = "";
 let promoCodeId = "";
 
+async function activeCourierCodes() {
+  const couriers = await prisma.shippingCourier.findMany({
+    where: { active: true },
+    select: { code: true },
+    orderBy: { code: "asc" },
+  });
+  return couriers.map(({ code }) => code);
+}
+
+async function setActiveCourierCodes(codes: string[]) {
+  await prisma.$transaction([
+    prisma.shippingCourier.updateMany({ data: { active: false } }),
+    ...codes.map((code) => prisma.shippingCourier.upsert({
+      where: { code },
+      create: { code, active: true },
+      update: { active: true },
+    })),
+  ]);
+}
+
 before(async () => {
   assert.match(config.databaseUrl, /f1_store_test/, "Tests must use the test database");
   await prisma.order.deleteMany();
@@ -58,6 +78,7 @@ before(async () => {
       passwordHash: password.hash,
     },
   });
+  await setActiveCourierCodes(["jne", "jnt", "sicepat", "anteraja"]);
 });
 
 after(async () => prisma.$disconnect());
@@ -71,6 +92,72 @@ test("health and admin authentication", async () => {
   token = login.body.token;
   assert.ok(token);
   await request(app).get("/api/admin/auth/me").set("authorization", `Bearer ${token}`).expect(200);
+});
+
+test("admins manage the live Biteship courier allowlist", async () => {
+  await request(app).get("/api/admin/couriers").expect(401);
+
+  const previousFetch = globalThis.fetch;
+  const previousApiKey = config.biteshipApiKey;
+  config.biteshipApiKey = "biteship_test.couriers";
+  await setActiveCourierCodes(["jne", "jnt", "sicepat", "anteraja"]);
+
+  const catalogResponse = {
+    success: true,
+    couriers: [
+      { courier_code: "jne", courier_name: "JNE", courier_service_code: "reg" },
+      { courier_code: "jne", courier_name: "JNE", courier_service_code: "yes" },
+      { courier_code: "jnt", courier_name: "J&T Express", courier_service_code: "reg" },
+      { courier_code: "sicepat", courier_name: "SiCepat", courier_service_code: "reg" },
+      { courier_code: "anteraja", courier_name: "AnterAja", courier_service_code: "reg" },
+      { courier_code: "lalamove", courier_name: "Lalamove", courier_service_code: "instant" },
+    ],
+  };
+
+  try {
+    globalThis.fetch = async (input, init) => {
+      assert.equal(String(input), "https://api.biteship.com/v1/couriers");
+      assert.equal(new Headers(init?.headers).get("authorization"), "biteship_test.couriers");
+      return Response.json(catalogResponse);
+    };
+
+    const catalog = await request(app).get("/api/admin/couriers")
+      .set("authorization", `Bearer ${token}`).expect(200);
+    assert.equal(catalog.body.catalogAvailable, true);
+    assert.deepEqual(catalog.body.couriers.slice(0, 4).map((courier: { code: string }) => courier.code), [
+      "anteraja", "jnt", "jne", "sicepat",
+    ]);
+    assert.equal(catalog.body.couriers.find((courier: { code: string }) => courier.code === "jne").serviceCount, 2);
+    assert.equal(catalog.body.couriers.find((courier: { code: string }) => courier.code === "lalamove").active, false);
+
+    await request(app).patch("/api/admin/couriers/lalamove")
+      .set("authorization", `Bearer ${token}`).send({ active: true }).expect(200);
+    await request(app).patch("/api/admin/couriers/unknown")
+      .set("authorization", `Bearer ${token}`).send({ active: true }).expect(400, {
+        error: {
+          code: "UNKNOWN_BITESHIP_COURIER",
+          message: "Courier is not available in Biteship's catalog",
+        },
+      });
+
+    await setActiveCourierCodes(["lalamove"]);
+    await request(app).patch("/api/admin/couriers/lalamove")
+      .set("authorization", `Bearer ${token}`).send({ active: false }).expect(409, {
+        error: { code: "LAST_ACTIVE_COURIER", message: "At least one courier must remain active" },
+      });
+
+    globalThis.fetch = async () => { throw new Error("Biteship unavailable"); };
+    const fallback = await request(app).get("/api/admin/couriers")
+      .set("authorization", `Bearer ${token}`).expect(200);
+    assert.equal(fallback.body.catalogAvailable, false);
+    assert.deepEqual(fallback.body.couriers, [
+      { code: "lalamove", name: "lalamove", serviceCount: 0, active: true },
+    ]);
+  } finally {
+    globalThis.fetch = previousFetch;
+    config.biteshipApiKey = previousApiKey;
+    await setActiveCourierCodes(["jne", "jnt", "sicepat", "anteraja"]);
+  }
 });
 
 test("admin dashboard aggregates real commerce data and handles empty periods", async () => {
@@ -515,6 +602,7 @@ test("admins search, operate, audit, export, and invoice orders safely", async (
     assert.equal((await prisma.order.findUniqueOrThrow({ where: { id: searchable.id } })).paymentStatus, "PAID");
     setDefaultEmailSender(operationsSender);
 
+    await setActiveCourierCodes(["sicepat"]);
     const legacyOptions = await request(app).get(`/api/admin/orders/${lifecycle.id}/shipment/options`)
       .set("authorization", `Bearer ${token}`).expect(200);
     assert.deepEqual(legacyOptions.body, {
@@ -675,6 +763,7 @@ test("admins search, operate, audit, export, and invoice orders safely", async (
   } finally {
     globalThis.fetch = previousFetch;
     setDefaultEmailSender(undefined);
+    await setActiveCourierCodes(["jne", "jnt", "sicepat", "anteraja"]);
     await prisma.order.deleteMany({ where: { orderNumber: { startsWith: "OPS-" } } });
     await prisma.product.delete({ where: { id: product.id } });
     await prisma.category.delete({ where: { id: category.id } });
@@ -1640,7 +1729,7 @@ test("shipping rates use authoritative cart data and normalize Biteship response
   const originalShippingConfig = {
     apiKey: config.biteshipApiKey,
     originPostalCode: config.biteshipOriginPostalCode,
-    couriers: config.biteshipCouriers,
+    couriers: await activeCourierCodes(),
     turnstileSecretKey: config.turnstileSecretKey,
     storefrontUrl: config.storefrontUrl,
   };
@@ -1648,7 +1737,7 @@ test("shipping rates use authoritative cart data and normalize Biteship response
   const variantId = product.body.variants.find(({ sku }: { sku: string }) => sku === "FER-JER-RED-M").id as string;
   config.biteshipApiKey = "biteship_test.test-key";
   config.biteshipOriginPostalCode = "12440";
-  config.biteshipCouriers = ["jne", "sicepat"];
+  await setActiveCourierCodes(["jne", "sicepat"]);
   config.turnstileSecretKey = "turnstile-test-secret";
   config.storefrontUrl = "https://valydejersey.com";
   await prisma.product.update({ where: { id: productId }, data: { salePriceIdr: 900_000, salePercentage: 28 } });
@@ -1758,7 +1847,7 @@ test("shipping rates use authoritative cart data and normalize Biteship response
     globalThis.fetch = originalFetch;
     config.biteshipApiKey = originalShippingConfig.apiKey;
     config.biteshipOriginPostalCode = originalShippingConfig.originPostalCode;
-    config.biteshipCouriers = originalShippingConfig.couriers;
+    await setActiveCourierCodes(originalShippingConfig.couriers);
     config.turnstileSecretKey = originalShippingConfig.turnstileSecretKey;
     config.storefrontUrl = originalShippingConfig.storefrontUrl;
   }
@@ -1930,7 +2019,7 @@ test("checkout verifies payment notifications, reserves stock, and waits for man
     originName: config.biteshipOriginContactName,
     originPhone: config.biteshipOriginContactPhone,
     originAddress: config.biteshipOriginAddress,
-    couriers: config.biteshipCouriers,
+    couriers: await activeCourierCodes(),
     midtransEnv: config.midtransEnv,
     merchantId: config.midtransMerchantId,
     serverKey: config.midtransServerKey,
@@ -1952,7 +2041,7 @@ test("checkout verifies payment notifications, reserves stock, and waits for man
   config.biteshipOriginContactName = "Warehouse";
   config.biteshipOriginContactPhone = "081234567890";
   config.biteshipOriginAddress = "Jl. Warehouse 1, Jakarta";
-  config.biteshipCouriers = ["jne"];
+  await setActiveCourierCodes(["jne"]);
   config.midtransEnv = "sandbox";
   config.midtransMerchantId = "merchant-test";
   config.midtransServerKey = "server-test";
@@ -2629,7 +2718,7 @@ test("checkout verifies payment notifications, reserves stock, and waits for man
     config.biteshipOriginContactName = originalConfig.originName;
     config.biteshipOriginContactPhone = originalConfig.originPhone;
     config.biteshipOriginAddress = originalConfig.originAddress;
-    config.biteshipCouriers = originalConfig.couriers;
+    await setActiveCourierCodes(originalConfig.couriers);
     config.midtransEnv = originalConfig.midtransEnv;
     config.midtransMerchantId = originalConfig.merchantId;
     config.midtransServerKey = originalConfig.serverKey;

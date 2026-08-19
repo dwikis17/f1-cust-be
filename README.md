@@ -122,7 +122,7 @@ Product and collection list endpoints return compact product cards: localized na
 
 `POST /api/shipping/rates` accepts a five-digit destination postal code and cart lines shaped as `{ variantId, quantity }`. The API resolves price, stock, weight, and package dimensions from the database before requesting live Biteship courier rates, so clients cannot supply shipping measurements.
 
-For local development, set `BITESHIP_API_KEY`, `BITESHIP_WEBHOOK_SECRET`, `BITESHIP_ORIGIN_POSTAL_CODE`, and optionally `BITESHIP_COURIERS` in `.env`. The courier list defaults to `jne,jnt,sicepat,anteraja`. For the deployed Worker, keep the API key and webhook secret private and set them independently for each environment:
+For local development, set `BITESHIP_API_KEY`, `BITESHIP_WEBHOOK_SECRET`, and `BITESHIP_ORIGIN_POSTAL_CODE` in `.env`. Available courier companies are managed from **Operations → Couriers** in `f1-admin`; the initial database migration enables `jne`, `jnt`, `sicepat`, and `anteraja`. For the deployed Worker, keep the API key and webhook secret private and set them independently for each environment:
 
 ```sh
 npx wrangler secret put BITESHIP_API_KEY
