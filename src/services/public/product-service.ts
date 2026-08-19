@@ -236,6 +236,7 @@ export class PublicProductService {
           color: value.color,
           stockQuantity: value.stockQuantity,
           available: value.stockQuantity > 0,
+          unitsSold: value.unitsSold,
         },
       }];
     });

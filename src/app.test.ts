@@ -1566,6 +1566,57 @@ test("cart items return only requested active variants and report missing ids", 
   const product = await request(app).get("/api/products/ferrari-team-jersey").expect(200);
   const variantId = product.body.variants.find(({ sku }: { sku: string }) => sku === "FER-JER-RED-M").id as string;
   const missingId = randomUUID();
+  const empty = await request(app).post("/api/products/cart-items").send({
+    variantIds: [variantId],
+    locale: "en",
+  }).expect(200);
+  assert.equal(empty.body.data[0].variant.unitsSold, 0);
+
+  const salesCases = [
+    { suffix: "PAID-1", paymentStatus: "PAID", lifecycleStatus: "UNFULFILLED", quantity: 2 },
+    { suffix: "PAID-2", paymentStatus: "PAID", lifecycleStatus: "FULFILLED", quantity: 3 },
+    { suffix: "PENDING", paymentStatus: "PENDING", lifecycleStatus: "UNFULFILLED", quantity: 5 },
+    { suffix: "FAILED", paymentStatus: "FAILED", lifecycleStatus: "UNFULFILLED", quantity: 7 },
+    { suffix: "REFUNDED", paymentStatus: "REFUNDED", lifecycleStatus: "UNFULFILLED", quantity: 11 },
+    { suffix: "CANCELLED", paymentStatus: "PAID", lifecycleStatus: "CANCELLED", quantity: 13 },
+  ] as const;
+  await Promise.all(salesCases.map((sale) => prisma.order.create({
+    data: {
+      orderNumber: `SOLD-COUNT-${sale.suffix}`,
+      idempotencyKey: randomUUID(),
+      email: `${sale.suffix.toLowerCase()}@example.com`,
+      firstName: "Sales",
+      lastName: "Count",
+      phone: "+628123456789",
+      address: "Sales Count Street 1",
+      city: "Jakarta",
+      province: "DKI Jakarta",
+      postalCode: "12345",
+      subtotalIdr: sale.quantity * 1_000,
+      shippingIdr: 0,
+      totalIdr: sale.quantity * 1_000,
+      courierCode: "jne",
+      courierName: "JNE",
+      courierServiceCode: "reg",
+      courierServiceName: "Regular",
+      courierDuration: "1 - 2 days",
+      paymentStatus: sale.paymentStatus,
+      lifecycleStatus: sale.lifecycleStatus,
+      items: {
+        create: {
+          variantId,
+          productName: product.body.name,
+          sku: "FER-JER-RED-M",
+          unitPriceIdr: 1_000,
+          quantity: sale.quantity,
+          packageLengthMm: 300,
+          packageWidthMm: 220,
+          packageHeightMm: 40,
+          packageWeightG: 450,
+        },
+      },
+    },
+  })));
   const response = await request(app).post("/api/products/cart-items").send({
     variantIds: [variantId, variantId, missingId],
     locale: "id",
@@ -1576,10 +1627,12 @@ test("cart items return only requested active variants and report missing ids", 
   assert.equal(response.body.data[0].variant.id, variantId);
   assert.equal(response.body.data[0].variant.available, true);
   assert.equal(response.body.data[0].variant.stockQuantity, 8);
+  assert.equal(response.body.data[0].variant.unitsSold, 5);
   assert.deepEqual(response.body.missingVariantIds, [missingId]);
   assert.equal(response.body.data[0].product.description, undefined);
   await request(app).post("/api/products/cart-items").send({ variantIds: [], locale: "en" }).expect(400);
   await request(app).post("/api/products/cart-items").send({ variantIds: [variantId], locale: "fr" }).expect(400);
+  await prisma.order.deleteMany({ where: { orderNumber: { startsWith: "SOLD-COUNT-" } } });
 });
 
 test("shipping rates use authoritative cart data and normalize Biteship responses", async () => {

@@ -285,8 +285,8 @@ export class PublicProductRepository {
     return prisma.product.findFirst({ where: { slug, status: "ACTIVE" }, include: productInclude });
   }
 
-  static findCartItems(variantIds: string[]) {
-    return prisma.productVariant.findMany({
+  static async findCartItems(variantIds: string[]) {
+    const variants = prisma.productVariant.findMany({
       where: { id: { in: variantIds }, product: { status: "ACTIVE" } },
       select: {
         id: true,
@@ -313,6 +313,17 @@ export class PublicProductRepository {
         },
       },
     });
+    const sales = prisma.orderItem.groupBy({
+      by: ["variantId"],
+      where: {
+        variantId: { in: variantIds },
+        order: { paymentStatus: "PAID", lifecycleStatus: { not: "CANCELLED" } },
+      },
+      _sum: { quantity: true },
+    });
+    const [cartItems, saleCounts] = await Promise.all([variants, sales]);
+    const unitsSold = new Map(saleCounts.map((sale) => [sale.variantId, sale._sum.quantity ?? 0]));
+    return cartItems.map((variant) => ({ ...variant, unitsSold: unitsSold.get(variant.id) ?? 0 }));
   }
 }
 
