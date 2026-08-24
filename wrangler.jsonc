@@ -9,7 +9,7 @@
 	"placement": { "mode": "smart" },
   "triggers": {
     "crons": [
-      "45 16 * * *",
+      "0 * * * *",
       "0 */3 * * *"
     ]
   },
@@ -26,6 +26,7 @@
     "BITESHIP_ORIGIN_ADDRESS": "Jalan Kemiri No 2 Sukajadi Pekanbaru Riau",
     "MIDTRANS_ENV": "production",
     "MIDTRANS_MERCHANT_ID": "M309500554",
+    "MIDTRANS_NOTIFICATION_URL": "https://api.valydejersey.com/api/payments/midtrans/notification",
     "STOREFRONT_URL": "https://valydejersey.com",
     "ADMIN_DASHBOARD_URL": "https://admin-dash.valydejersey.com",
     "EMAIL_FROM_ADDRESS": "orders@valydejersey.com",

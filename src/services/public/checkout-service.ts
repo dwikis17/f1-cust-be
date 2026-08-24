@@ -64,9 +64,16 @@ const midtransStatusSchema = z.object({
   transaction_id: z.string().max(100).optional(),
   payment_type: z.string().max(80).optional(),
 }).passthrough();
+const midtransExpireSchema = z.object({
+  order_id: z.string().uuid(),
+  status_code: z.string().min(1).max(10),
+  gross_amount: z.string().regex(/^\d+(?:\.\d{1,2})?$/),
+  transaction_status: z.literal("expire"),
+}).passthrough();
 
 type VariantSnapshot = Pick<OrderWithItems["items"][number], "productName" | "sku" | "color" | "size">;
-const RECONCILIATION_STALE_MS = 15 * 60 * 1_000;
+const PAYMENT_EXPIRY_HOURS = 6;
+const HOUR_MS = 60 * 60 * 1_000;
 const RECONCILIATION_BATCH_SIZE = 50;
 
 function errorCode(error: unknown) {
@@ -181,7 +188,12 @@ function telegramPaidFields(order: { paymentStatus: string; telegramNotification
 }
 
 async function releaseStock(orderId: string, paymentStatus: "FAILED" | "EXPIRED" | "CANCELLED", midtransStatus: string) {
-  await OrderRepository.releaseStock(orderId, paymentStatus, midtransStatus);
+  return OrderRepository.releaseStock(orderId, paymentStatus, midtransStatus);
+}
+
+function midtransStartTime(date: Date) {
+  const jakarta = new Date(date.getTime() + 7 * HOUR_MS).toISOString();
+  return `${jakarta.slice(0, 10)} ${jakarta.slice(11, 19)} +0700`;
 }
 
 function variantName(item: VariantSnapshot) {
@@ -228,7 +240,12 @@ async function createSnapToken(order: CheckoutOrder) {
         email: order.email,
         phone: order.phone,
       },
-      expiry: { unit: "hours", duration: 24 },
+      expiry: {
+        start_time: midtransStartTime(order.createdAt),
+        unit: "hours",
+        duration: PAYMENT_EXPIRY_HOURS,
+      },
+      page_expiry: { unit: "hours", duration: PAYMENT_EXPIRY_HOURS },
       callbacks: { finish: `${config.storefrontUrl}/orders/${order.id}` },
     }),
     signal: AbortSignal.timeout(8_000),
@@ -427,12 +444,15 @@ export class PublicCheckoutService {
     if (!rate) throw new HttpError(409, "SHIPPING_RATE_CHANGED", "The selected shipping service is no longer available");
 
     const orderId = randomUUID();
+    const createdAt = new Date();
     let order: CheckoutOrder;
     try {
       const created = await OrderRepository.createCheckoutOrder({
         ...input,
         orderId,
         orderNumber: createOrderNumber(orderId),
+        createdAt,
+        paymentExpiresAt: new Date(createdAt.getTime() + PAYMENT_EXPIRY_HOURS * HOUR_MS),
         shippingPrice: rate.price,
         shippingName: rate.courierName,
         shippingServiceName: rate.serviceName,
@@ -629,10 +649,11 @@ export class PublicCheckoutService {
 
   static async reconcilePendingPayments(now = new Date()) {
     const payment = requirePaymentConfig();
-    const staleBefore = new Date(now.getTime() - RECONCILIATION_STALE_MS);
-    const orders = await OrderRepository.listPendingPaymentReconciliations(staleBefore, RECONCILIATION_BATCH_SIZE);
+    const orders = await OrderRepository.listPendingPaymentReconciliations(now, RECONCILIATION_BATCH_SIZE);
     const baseUrl = config.midtransEnv === "production" ? "https://api.midtrans.com" : "https://api.sandbox.midtrans.com";
     let reconciled = 0;
+    let expired = 0;
+    let released = 0;
     let failed = 0;
     let catalogChanged = false;
 
@@ -646,6 +667,13 @@ export class PublicCheckoutService {
           signal: AbortSignal.timeout(8_000),
         });
         const body: unknown = await response.json().catch(() => undefined);
+        if (response.status === 404) {
+          const didRelease = await releaseStock(order.id, "EXPIRED", "expire");
+          expired += Number(didRelease);
+          released += Number(didRelease);
+          catalogChanged ||= didRelease;
+          continue;
+        }
         const parsed = midtransStatusSchema.safeParse(body);
         if (!response.ok || !parsed.success) throw new Error("Midtrans status lookup failed");
 
@@ -665,6 +693,26 @@ export class PublicCheckoutService {
         if (isPaid || isTerminal) {
           await PublicCheckoutService.notification(input);
           catalogChanged = true;
+        } else if (input.transaction_status === "pending") {
+          const expireResponse = await fetch(`${baseUrl}/v2/${encodeURIComponent(order.id)}/expire`, {
+            method: "POST",
+            headers: {
+              accept: "application/json",
+              authorization: `Basic ${Buffer.from(`${payment.serverKey}:`).toString("base64")}`,
+            },
+            signal: AbortSignal.timeout(8_000),
+          });
+          const expireBody: unknown = await expireResponse.json().catch(() => undefined);
+          const expireResult = midtransExpireSchema.safeParse(expireBody);
+          if (!expireResponse.ok || !expireResult.success
+            || expireResult.data.order_id !== order.id
+            || Number(expireResult.data.gross_amount) !== order.totalIdr) {
+            throw new Error("Midtrans transaction expiry failed");
+          }
+          const didRelease = await releaseStock(order.id, "EXPIRED", "expire");
+          expired += Number(didRelease);
+          released += Number(didRelease);
+          catalogChanged ||= didRelease;
         } else {
           await OrderRepository.updatePendingPayment(order.id, {
             midtransStatus: input.transaction_status,
@@ -684,7 +732,7 @@ export class PublicCheckoutService {
       }
     }
 
-    return { checked: orders.length, reconciled, failed, catalogChanged };
+    return { checked: orders.length, expired, released, reconciled, failed, catalogChanged };
   }
 }
 

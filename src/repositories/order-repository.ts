@@ -503,6 +503,8 @@ export class OrderRepository {
   static async createCheckoutOrder(input: CheckoutInput & {
     orderId: string;
     orderNumber: string;
+    createdAt: Date;
+    paymentExpiresAt: Date;
     shippingPrice: number;
     shippingName: string;
     shippingServiceName: string;
@@ -560,6 +562,8 @@ export class OrderRepository {
           data: {
             id: input.orderId,
             orderNumber: input.orderNumber,
+            createdAt: input.createdAt,
+            paymentExpiresAt: input.paymentExpiresAt,
             idempotencyKey: input.idempotencyKey,
             email: input.email,
             firstName: input.firstName,
@@ -814,16 +818,15 @@ export class OrderRepository {
     }, { timeout: 10_000 });
   }
 
-  static listPendingPaymentReconciliations(staleBefore: Date, batchSize: number) {
+  static listPendingPaymentReconciliations(now: Date, batchSize: number) {
     return prisma.order.findMany({
       where: {
         paymentStatus: "PENDING",
         midtransSnapToken: { not: null },
-        createdAt: { lte: staleBefore },
-        updatedAt: { lte: staleBefore },
+        paymentExpiresAt: { lte: now },
       },
       select: { id: true, totalIdr: true },
-      orderBy: [{ updatedAt: "asc" }, { id: "asc" }],
+      orderBy: [{ paymentExpiresAt: "asc" }, { id: "asc" }],
       take: batchSize,
     });
   }
@@ -836,10 +839,10 @@ export class OrderRepository {
   }
 
   static async releaseStock(orderId: string, paymentStatus: "FAILED" | "EXPIRED" | "CANCELLED", midtransStatus: string) {
-    await prisma.$transaction(async (tx) => {
+    return prisma.$transaction(async (tx) => {
       await tx.$queryRaw`SELECT "id" FROM "Order" WHERE "id" = ${orderId}::uuid FOR UPDATE`;
       const order = await tx.order.findUnique({ where: { id: orderId }, include: { items: true } });
-      if (!order || order.paymentStatus !== "PENDING" || order.stockReleasedAt) return;
+      if (!order || order.paymentStatus !== "PENDING" || order.stockReleasedAt) return false;
       for (const item of order.items) {
         if (item.variantId) {
           await tx.productVariant.updateMany({
@@ -852,6 +855,7 @@ export class OrderRepository {
         where: { id: order.id },
         data: { paymentStatus, midtransStatus, stockReleasedAt: new Date() },
       });
+      return true;
     });
   }
 }

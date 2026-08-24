@@ -385,6 +385,7 @@ model Order {
   midtransTransactionId              String?
   midtransPaymentType                String?
   midtransSnapToken                  String?
+  paymentExpiresAt                   DateTime                   @default(dbgenerated("(CURRENT_TIMESTAMP + INTERVAL '24 hours')"))
   paymentConfirmationEmailSendingAt  DateTime?
   paymentConfirmationEmailSentAt     DateTime?
   telegramNotificationQueuedAt       DateTime?
@@ -417,6 +418,7 @@ model Order {
   updatedAt                          DateTime                   @updatedAt
 
   @@index([paymentStatus, createdAt])
+  @@index([paymentStatus, paymentExpiresAt])
   @@index([telegramNotificationQueuedAt, telegramNotificationSentAt])
   @@index([shipmentBookingStatus, createdAt])
   @@index([shipmentBookingStartedAt])

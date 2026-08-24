@@ -51,12 +51,20 @@ export default {
       await runWithExecutionContext(ctx, async () => {
         try {
           await runWithEmailSender(env.EMAIL, () => runWithPrisma(prisma, async () => {
-            if (controller.cron === "0 */3 * * *") {
-              await reconcilePendingTelegramNotifications();
-              return;
+            switch (controller.cron) {
+              case "0 */3 * * *":
+                await reconcilePendingTelegramNotifications();
+                return;
+              case "0 * * * *": {
+                const result = await PublicCheckoutService.reconcilePendingPayments();
+                console.log(JSON.stringify({ message: "payment expiry reconciliation completed", cron: controller.cron, ...result }));
+                if (result.catalogChanged) revalidateStorefront(["catalog:products"]);
+                return;
+              }
+              default:
+                console.warn(JSON.stringify({ message: "unknown cron trigger ignored", cron: controller.cron }));
+                return;
             }
-            const result = await PublicCheckoutService.reconcilePendingPayments();
-            if (result.catalogChanged) revalidateStorefront(["catalog:products"]);
           }));
         } finally {
           backgroundTasks = waitForBackgroundTasks();

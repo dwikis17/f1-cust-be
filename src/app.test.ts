@@ -1457,6 +1457,7 @@ test("variant order persists across admin and public product responses", async (
       packageWeightG: 450,
     }).expect(201);
   assert.equal(appended.body.position, 3);
+  await prisma.product.delete({ where: { id: product.body.id } });
 });
 
 test("home collection blocks support ordered CRUD, ranked products, limits, localization, and image cleanup", async () => {
@@ -2154,6 +2155,7 @@ test("checkout verifies payment notifications, reserves stock, and waits for man
   let failNextBooking = false;
   let rateCollectionMethods = ["pickup", "drop_off"];
   const statusResponses = new Map<string, Record<string, unknown> | "upstream-error">();
+  const expireFailures = new Set<string>();
   const sentEmails: EmailMessageBuilder[] = [];
   const telegramBodies: Array<{ chat_id: string; text: string; disable_web_page_preview: boolean }> = [];
   setDefaultEmailSender({
@@ -2165,6 +2167,8 @@ test("checkout verifies payment notifications, reserves stock, and waits for man
   const snapBodies: Array<{
     transaction_details: { gross_amount: number };
     item_details: Array<{ id: string; name: string; price: number; quantity: number }>;
+    expiry: { start_time: string; unit: string; duration: number };
+    page_expiry: { unit: string; duration: number };
   }> = [];
   const bookingBodies: Array<{
     reference_id: string;
@@ -2212,6 +2216,19 @@ test("checkout verifies payment notifications, reserves stock, and waits for man
       if (status === "upstream-error") return Response.json({ status_message: "Unavailable" }, { status: 503 });
       if (status) return Response.json(status);
       return Response.json({ status_message: "Transaction does not exist" }, { status: 404 });
+    }
+    const expireOrderId = url.match(/midtrans\.com\/v2\/([^/]+)\/expire$/)?.[1];
+    if (expireOrderId) {
+      const orderId = decodeURIComponent(expireOrderId);
+      if (expireFailures.has(orderId)) return Response.json({ status_code: "412" }, { status: 503 });
+      const status = statusResponses.get(orderId);
+      const grossAmount = status && status !== "upstream-error" ? String(status.gross_amount) : "0.00";
+      return Response.json({
+        status_code: "407",
+        order_id: orderId,
+        gross_amount: grossAmount,
+        transaction_status: "expire",
+      });
     }
     if (url.endsWith("/v1/orders")) {
       bookingCalls += 1;
@@ -2372,14 +2389,17 @@ test("checkout verifies payment notifications, reserves stock, and waits for man
       price: -100_000,
       quantity: 1,
     });
+    assert.deepEqual(snapBodies[0].page_expiry, { unit: "hours", duration: 6 });
+    assert.equal(snapBodies[0].expiry.unit, "hours");
+    assert.equal(snapBodies[0].expiry.duration, 6);
+    assert.match(snapBodies[0].expiry.start_time, /^\d{4}-\d{2}-\d{2} \d{2}:\d{2}:\d{2} \+0700$/);
     const itemSnapshot = await prisma.orderItem.findFirstOrThrow({ where: { orderId: checkout.body.orderId } });
     assert.equal(itemSnapshot.sku, "FER-JER-RED-M");
     assert.equal(itemSnapshot.color, "Red");
     assert.equal(itemSnapshot.size, "M");
-    assert.deepEqual(
-      (await prisma.order.findUniqueOrThrow({ where: { id: checkout.body.orderId } })).shipmentAvailableCollectionMethods,
-      ["PICKUP", "DROP_OFF"],
-    );
+    const createdOrder = await prisma.order.findUniqueOrThrow({ where: { id: checkout.body.orderId } });
+    assert.deepEqual(createdOrder.shipmentAvailableCollectionMethods, ["PICKUP", "DROP_OFF"]);
+    assert.equal(createdOrder.paymentExpiresAt.getTime() - createdOrder.createdAt.getTime(), 6 * 60 * 60 * 1_000);
 
     await request(app).patch(`/api/admin/promo-codes/${promoCodeId}`)
       .set("authorization", `Bearer ${token}`).send({ active: false }).expect(200);
@@ -2696,7 +2716,8 @@ test("checkout verifies payment notifications, reserves stock, and waits for man
     assert.equal(refunded.paymentStatus, "REFUNDED");
     assert.ok(refunded.promoRedeemedAt);
 
-    const stockBeforeReconciliation = (await prisma.productVariant.findUniqueOrThrow({ where: { id: variantId } })).stockQuantity;
+    await prisma.productVariant.update({ where: { id: variantId }, data: { stockQuantity: 20 } });
+    const stockBeforeReconciliation = 20;
     const confirmationCount = sentEmails.length;
     const reconciliationPaid = await request(app).post("/api/checkout")
       .send({ ...payload, idempotencyKey: randomUUID() }).expect(201);
@@ -2704,10 +2725,23 @@ test("checkout verifies payment notifications, reserves stock, and waits for man
       .send({ ...payload, idempotencyKey: randomUUID() }).expect(201);
     const reconciliationInvalid = await request(app).post("/api/checkout")
       .send({ ...payload, idempotencyKey: randomUUID() }).expect(201);
-    const staleAt = new Date(Date.now() - 20 * 60 * 1_000);
+    const reconciliationPending = await request(app).post("/api/checkout")
+      .send({ ...payload, idempotencyKey: randomUUID() }).expect(201);
+    const reconciliationMissing = await request(app).post("/api/checkout")
+      .send({ ...payload, idempotencyKey: randomUUID() }).expect(201);
+    const reconciliationExpireFailed = await request(app).post("/api/checkout")
+      .send({ ...payload, idempotencyKey: randomUUID() }).expect(201);
+    const staleAt = new Date(Date.now() - 60 * 1_000);
     await prisma.order.updateMany({
-      where: { id: { in: [reconciliationPaid.body.orderId, reconciliationExpired.body.orderId, reconciliationInvalid.body.orderId] } },
-      data: { createdAt: staleAt, updatedAt: staleAt },
+      where: { id: { in: [
+        reconciliationPaid.body.orderId,
+        reconciliationExpired.body.orderId,
+        reconciliationInvalid.body.orderId,
+        reconciliationPending.body.orderId,
+        reconciliationMissing.body.orderId,
+        reconciliationExpireFailed.body.orderId,
+      ] } },
+      data: { paymentExpiresAt: staleAt },
     });
     statusResponses.set(reconciliationPaid.body.orderId, notification(reconciliationPaid.body.orderId, "settlement"));
     statusResponses.set(reconciliationExpired.body.orderId, notification(reconciliationExpired.body.orderId, "expire"));
@@ -2715,19 +2749,71 @@ test("checkout verifies payment notifications, reserves stock, and waits for man
       ...notification(reconciliationInvalid.body.orderId, "pending"),
       signature_key: "invalid",
     });
+    statusResponses.set(reconciliationPending.body.orderId, notification(reconciliationPending.body.orderId, "pending"));
+    statusResponses.set(reconciliationExpireFailed.body.orderId, notification(reconciliationExpireFailed.body.orderId, "pending"));
+    expireFailures.add(reconciliationExpireFailed.body.orderId);
 
     const reconciliation = await PublicCheckoutService.reconcilePendingPayments();
-    assert.deepEqual(reconciliation, { checked: 3, reconciled: 2, failed: 1, catalogChanged: true });
+    assert.deepEqual(reconciliation, {
+      checked: 6,
+      expired: 2,
+      released: 2,
+      reconciled: 3,
+      failed: 2,
+      catalogChanged: true,
+    });
     assert.equal((await prisma.order.findUniqueOrThrow({ where: { id: reconciliationPaid.body.orderId } })).paymentStatus, "PAID");
     assert.equal((await prisma.order.findUniqueOrThrow({ where: { id: reconciliationExpired.body.orderId } })).paymentStatus, "EXPIRED");
     assert.equal((await prisma.order.findUniqueOrThrow({ where: { id: reconciliationInvalid.body.orderId } })).paymentStatus, "PENDING");
-    assert.equal((await prisma.productVariant.findUniqueOrThrow({ where: { id: variantId } })).stockQuantity, stockBeforeReconciliation - 2);
+    assert.equal((await prisma.order.findUniqueOrThrow({ where: { id: reconciliationPending.body.orderId } })).paymentStatus, "EXPIRED");
+    assert.equal((await prisma.order.findUniqueOrThrow({ where: { id: reconciliationMissing.body.orderId } })).paymentStatus, "EXPIRED");
+    assert.equal((await prisma.order.findUniqueOrThrow({ where: { id: reconciliationExpireFailed.body.orderId } })).paymentStatus, "PENDING");
+    assert.equal((await prisma.productVariant.findUniqueOrThrow({ where: { id: variantId } })).stockQuantity, stockBeforeReconciliation - 3);
     assert.equal(sentEmails.length, confirmationCount + 1);
     assert.equal(await prisma.orderAuditEvent.count({
       where: { orderId: reconciliationInvalid.body.orderId, action: "PAYMENT_RECONCILIATION_FAILED" },
     }), 1);
     await request(app).post("/api/payments/midtrans/notification")
       .send(notification(reconciliationInvalid.body.orderId, "expire")).expect(200);
+    await request(app).post("/api/payments/midtrans/notification")
+      .send(notification(reconciliationExpireFailed.body.orderId, "expire")).expect(200);
+
+    const batchOrders = Array.from({ length: 51 }, (_, index) => ({
+      id: randomUUID(),
+      orderNumber: `BATCH-${index}-${randomUUID().slice(0, 8)}`,
+      idempotencyKey: randomUUID(),
+      email: `batch-${index}@example.com`,
+      firstName: "Batch",
+      lastName: "Expiry",
+      phone: "+628123456789",
+      address: "Batch Street 1",
+      city: "Jakarta",
+      province: "DKI Jakarta",
+      postalCode: "12345",
+      subtotalIdr: 10_000,
+      shippingIdr: 0,
+      totalIdr: 10_000,
+      courierCode: "jne",
+      courierName: "JNE",
+      courierServiceCode: "reg",
+      courierServiceName: "Regular",
+      courierDuration: "1 - 2 days",
+      midtransSnapToken: `batch-snap-${index}`,
+      paymentExpiresAt: staleAt,
+    }));
+    await prisma.order.createMany({ data: batchOrders });
+    assert.deepEqual(await PublicCheckoutService.reconcilePendingPayments(), {
+      checked: 50,
+      expired: 50,
+      released: 50,
+      reconciled: 0,
+      failed: 0,
+      catalogChanged: true,
+    });
+    assert.equal(await prisma.order.count({
+      where: { id: { in: batchOrders.map(({ id }) => id) }, paymentStatus: "PENDING" },
+    }), 1);
+    await prisma.order.deleteMany({ where: { id: { in: batchOrders.map(({ id }) => id) } } });
 
     const telegramProduct = await prisma.product.create({
       data: {

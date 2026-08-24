@@ -17,7 +17,7 @@ interface __BaseEnv_Env {
 	BITESHIP_ORIGIN_ADDRESS: "anggrek lok aaf 1" | "Jalan Kemiri No 2 Sukajadi Pekanbaru Riau";
 	MIDTRANS_ENV: "sandbox" | "production";
 	MIDTRANS_MERCHANT_ID: "M309500554";
-	MIDTRANS_NOTIFICATION_URL?: "https://dev-api.valydejersey.com/api/payments/midtrans/notification";
+	MIDTRANS_NOTIFICATION_URL: "https://dev-api.valydejersey.com/api/payments/midtrans/notification" | "https://api.valydejersey.com/api/payments/midtrans/notification";
 	STOREFRONT_URL: "https://dev.valydejersey.com" | "https://valydejersey.com";
 	ADMIN_DASHBOARD_URL: "https://dev-admin-dash.valydejersey.com" | "https://admin-dash.valydejersey.com";
 	EMAIL_FROM_ADDRESS: "orders@valydejersey.com";
