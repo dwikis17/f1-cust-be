@@ -11,6 +11,7 @@ import { ProductController } from "./controllers/admin/product-controller.js";
 import { PromoCodeController } from "./controllers/promo-code-controller.js";
 import { FaqController } from "./controllers/faq-controller.js";
 import { HomeController } from "./controllers/home-controller.js";
+import { StorefrontContentController } from "./controllers/storefront-content-controller.js";
 
 const router = Router();
 const upload = multer({ storage: multer.memoryStorage(), limits: { fileSize: config.maxUploadBytes, files: 3 } });
@@ -49,6 +50,9 @@ router.get("/faqs", FaqController.list);
 router.post("/faqs", FaqController.create);
 router.patch("/faqs/:id", FaqController.update);
 router.delete("/faqs/:id", FaqController.remove);
+
+router.get("/content/shipping-returns", StorefrontContentController.findAdmin);
+router.put("/content/shipping-returns", StorefrontContentController.replace);
 
 router.get("/home", HomeController.listAdmin);
 router.get("/home/collection-blocks", HomeController.listAdminCollectionBlocks);

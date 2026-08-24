@@ -7,6 +7,7 @@ import { BiteshipWebhookController } from "./controllers/public/biteship-webhook
 import { PromoCodeController } from "./controllers/promo-code-controller.js";
 import { FaqController } from "./controllers/faq-controller.js";
 import { HomeController } from "./controllers/home-controller.js";
+import { StorefrontContentController } from "./controllers/storefront-content-controller.js";
 
 const router = Router();
 
@@ -21,6 +22,8 @@ router.get("/products", PublicProductController.listProducts);
 router.post("/products/cart-items", PublicProductController.cartItems);
 router.get("/products/:slug", PublicProductController.findProduct);
 router.get("/faqs", FaqController.listPublic);
+router.get("/content/shipping-returns", StorefrontContentController.findShippingReturns);
+router.get("/content/support", StorefrontContentController.findSupport);
 router.get("/home", HomeController.listPublic);
 router.get("/home/collection-blocks", HomeController.listPublicCollectionBlocks);
 router.post("/shipping/rates", PublicShippingController.rates);

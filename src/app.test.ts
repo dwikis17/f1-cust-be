@@ -12,6 +12,7 @@ import { sendPaymentConfirmationEmail, setDefaultEmailSender } from "./email-ser
 import { storePhoto } from "./photo-storage.js";
 import { PublicCheckoutService } from "./services/public/checkout-service.js";
 import { reconcilePendingTelegramNotifications } from "./telegram-service.js";
+import { storefrontContentSeed } from "./storefront-content.js";
 
 const app = createApp();
 import { hashPassword, hashToken } from "./security.js";
@@ -53,6 +54,7 @@ before(async () => {
   await prisma.order.deleteMany();
   await prisma.promoCode.deleteMany();
   await prisma.faq.deleteMany();
+  await prisma.storefrontContent.deleteMany();
   await prisma.homeHero.deleteMany();
   await prisma.homeCollectionBlock.deleteMany();
   await prisma.productPhoto.deleteMany();
@@ -92,6 +94,92 @@ test("health and admin authentication", async () => {
   token = login.body.token;
   assert.ok(token);
   await request(app).get("/api/admin/auth/me").set("authorization", `Bearer ${token}`).expect(200);
+});
+
+test("admins replace bilingual storefront content and public APIs localize it", async () => {
+  const endpoint = "/api/admin/content/shipping-returns";
+  await request(app).get(endpoint).expect(401);
+  await request(app).get("/api/content/shipping-returns").expect(404);
+
+  const originalUrl = config.storefrontUrl;
+  const originalSecret = config.storefrontRevalidateSecret;
+  const originalFetch = globalThis.fetch;
+  const deliveries: string[][] = [];
+  config.storefrontUrl = "https://storefront.example";
+  config.storefrontRevalidateSecret = "test-secret";
+
+  try {
+    globalThis.fetch = async (_input, init) => {
+      deliveries.push(JSON.parse(String(init?.body)).tags);
+      return new Response(null, { status: 204 });
+    };
+
+    const saved = await request(app).put(endpoint).set("authorization", `Bearer ${token}`)
+      .send(storefrontContentSeed).expect(200);
+    assert.deepEqual(saved.body, storefrontContentSeed);
+    assert.deepEqual(deliveries, [[
+      "content:shipping-returns:en",
+      "content:shipping-returns:id",
+      "content:support",
+    ]]);
+
+    const managed = await request(app).get(endpoint).set("authorization", `Bearer ${token}`).expect(200);
+    assert.deepEqual(managed.body, storefrontContentSeed);
+
+    const localizedSeed = (locale: "en" | "id") => ({
+      title: storefrontContentSeed.shippingReturns.title[locale],
+      intro: storefrontContentSeed.shippingReturns.intro[locale],
+      facts: storefrontContentSeed.shippingReturns.facts.map((fact) => ({
+        id: fact.id,
+        label: fact.label[locale],
+        value: fact.value[locale],
+      })),
+      sections: storefrontContentSeed.shippingReturns.sections.map((section) => ({
+        id: section.id,
+        title: section.title[locale],
+        body: section.body[locale],
+        items: section.items.map((item) => ({ id: item.id, text: item.text[locale] })),
+      })),
+      support: {
+        ...storefrontContentSeed.support,
+        mailtoUrl: "mailto:support@valydejersey.com",
+        whatsappUrl: "https://wa.me/6285121565774",
+      },
+    });
+    const english = await request(app).get("/api/content/shipping-returns?locale=en").expect(200);
+    assert.deepEqual(english.body, localizedSeed("en"));
+
+    const indonesian = await request(app).get("/api/content/shipping-returns?locale=id").expect(200);
+    assert.deepEqual(indonesian.body, localizedSeed("id"));
+
+    const support = await request(app).get("/api/content/support").expect(200);
+    assert.deepEqual(support.body, {
+      ...storefrontContentSeed.support,
+      mailtoUrl: "mailto:support@valydejersey.com",
+      whatsappUrl: "https://wa.me/6285121565774",
+    });
+    await request(app).get("/api/content/shipping-returns?locale=fr").expect(400);
+
+    const badEmail = structuredClone(storefrontContentSeed);
+    badEmail.support.email = "not-an-email";
+    await request(app).put(endpoint).set("authorization", `Bearer ${token}`).send(badEmail).expect(400);
+
+    const missingTranslation = structuredClone(storefrontContentSeed);
+    missingTranslation.shippingReturns.title.id = "";
+    await request(app).put(endpoint).set("authorization", `Bearer ${token}`).send(missingTranslation).expect(400);
+
+    const duplicateIds = structuredClone(storefrontContentSeed);
+    duplicateIds.shippingReturns.sections[0].id = duplicateIds.shippingReturns.facts[0].id;
+    await request(app).put(endpoint).set("authorization", `Bearer ${token}`).send(duplicateIds).expect(400);
+
+    const badNumber = structuredClone(storefrontContentSeed);
+    badNumber.support.whatsappNumber = "+62 851";
+    await request(app).put(endpoint).set("authorization", `Bearer ${token}`).send(badNumber).expect(400);
+  } finally {
+    config.storefrontUrl = originalUrl;
+    config.storefrontRevalidateSecret = originalSecret;
+    globalThis.fetch = originalFetch;
+  }
 });
 
 test("admins manage the live Biteship courier allowlist", async () => {
