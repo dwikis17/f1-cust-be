@@ -1,5 +1,4 @@
 import { z } from "zod";
-import { salePriceFromPercentage } from "./product-price.js";
 
 export const idSchema = z.string().uuid();
 export const slugSchema = z.string().trim().min(2).max(100).regex(/^[a-z0-9]+(?:-[a-z0-9]+)*$/);
@@ -124,17 +123,15 @@ const productBulletPointSchema = z.object({
 }).strict();
 const productBulletPointsSchema = z.array(productBulletPointSchema).max(10);
 
-const salePercentageSchema = z.number().int().min(1).max(99);
+const salePriceIdrSchema = z.number().int().positive();
 
 function validateSale(
-  value: { priceIdr: number; salePercentage?: number | null },
+  value: { priceIdr: number; salePriceIdr?: number | null },
   context: z.RefinementCtx,
 ) {
-  if (value.salePercentage == null) return;
-  const salePriceIdr = salePriceFromPercentage(value.priceIdr, value.salePercentage);
-  if (salePriceIdr === null) return;
-  if (salePriceIdr < 1 || salePriceIdr >= value.priceIdr) {
-    context.addIssue({ code: "custom", path: ["salePercentage"], message: "Sale percentage must produce a price lower than the regular price" });
+  if (value.salePriceIdr == null) return;
+  if (value.salePriceIdr >= value.priceIdr) {
+    context.addIssue({ code: "custom", path: ["salePriceIdr"], message: "Sale price must be lower than the regular price" });
   }
 }
 
@@ -164,7 +161,7 @@ export const productSchema = z.object({
   bulletPoints: productBulletPointsSchema.default([]),
   sizingNote: sizingNoteSchema.optional(),
   priceIdr: z.number().int().nonnegative(),
-  salePercentage: salePercentageSchema.nullable().default(null),
+  salePriceIdr: salePriceIdrSchema.nullable().default(null),
   status: z.enum(["DRAFT", "ACTIVE", "ARCHIVED"]).default("DRAFT"),
   condition: productConditionSchema,
   categoryId: idSchema,
@@ -195,7 +192,7 @@ export const productPatchSchema = z.object({
   bulletPoints: productBulletPointsSchema.optional(),
   sizingNote: sizingNoteSchema.optional(),
   priceIdr: z.number().int().nonnegative().optional(),
-  salePercentage: salePercentageSchema.nullable().optional(),
+  salePriceIdr: salePriceIdrSchema.nullable().optional(),
   status: z.enum(["DRAFT", "ACTIVE", "ARCHIVED"]).optional(),
   condition: productConditionSchema.optional(),
   categoryId: idSchema.optional(),

@@ -1751,24 +1751,32 @@ test("product sales validate and price public catalog results until cleared", as
   let comparisonId: string | undefined;
   try {
     await request(app).patch(`/api/admin/products/${productId}`).set("authorization", `Bearer ${token}`)
-      .send({ salePercentage: 0 }).expect(400);
+      .send({ salePriceIdr: 0 }).expect(400);
     await request(app).patch(`/api/admin/products/${productId}`).set("authorization", `Bearer ${token}`)
-      .send({ salePercentage: 100 }).expect(400);
+      .send({ salePriceIdr: -1 }).expect(400);
     await request(app).patch(`/api/admin/products/${productId}`).set("authorization", `Bearer ${token}`)
-      .send({ priceIdr: 1, salePercentage: 1 }).expect(400);
+      .send({ salePriceIdr: 1.5 }).expect(400);
+    await request(app).patch(`/api/admin/products/${productId}`).set("authorization", `Bearer ${token}`)
+      .send({ salePriceIdr: 1_250_000 }).expect(400);
+    await request(app).patch(`/api/admin/products/${productId}`).set("authorization", `Bearer ${token}`)
+      .send({ salePriceIdr: 1_250_001 }).expect(400);
+    await request(app).patch(`/api/admin/products/${productId}`).set("authorization", `Bearer ${token}`)
+      .send({ salePercentage: 10 }).expect(400);
     const managed = await request(app).patch(`/api/admin/products/${productId}`)
       .set("authorization", `Bearer ${token}`)
-      .send({ salePercentage: 28 }).expect(200);
-    assert.equal(managed.body.salePriceIdr, 900_000);
-    assert.equal(managed.body.salePercentage, 28);
+      .send({ priceIdr: 200_000, salePriceIdr: 180_000 }).expect(200);
+    assert.equal(managed.body.salePriceIdr, 180_000);
+    assert.equal(managed.body.salePercentage, 10);
     const repriced = await request(app).patch(`/api/admin/products/${productId}`)
       .set("authorization", `Bearer ${token}`)
       .send({ priceIdr: 1_000_000 }).expect(200);
-    assert.equal(repriced.body.salePriceIdr, 720_000);
-    assert.equal(repriced.body.salePercentage, 28);
+    assert.equal(repriced.body.salePriceIdr, 180_000);
+    assert.equal(repriced.body.salePercentage, 82);
+    await request(app).patch(`/api/admin/products/${productId}`).set("authorization", `Bearer ${token}`)
+      .send({ priceIdr: 180_000 }).expect(400);
     await request(app).patch(`/api/admin/products/${productId}`)
       .set("authorization", `Bearer ${token}`)
-      .send({ priceIdr: 1_250_000 }).expect(200);
+      .send({ priceIdr: 1_250_000, salePriceIdr: 900_000 }).expect(200);
 
     const comparison = await prisma.product.create({
       data: {
@@ -1842,7 +1850,7 @@ test("product sales validate and price public catalog results until cleared", as
     assert.deepEqual(sorted.body.facets.price, { min: 800_000, max: 900_000 });
 
     await request(app).patch(`/api/admin/products/${productId}`).set("authorization", `Bearer ${token}`)
-      .send({ salePercentage: null }).expect(200);
+      .send({ salePriceIdr: null }).expect(200);
     const cleared = await request(app).get("/api/products/ferrari-team-jersey").expect(200);
     assert.equal(cleared.body.priceIdr, 1_250_000);
     assert.equal(cleared.body.originalPriceIdr, null);

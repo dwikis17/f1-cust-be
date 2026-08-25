@@ -5,7 +5,7 @@ import {
   ProductRepository,
   type ProductWithRelations,
 } from "../../repositories/admin/product-repository.js";
-import { salePriceFromPercentage } from "../../product-price.js";
+import { salePercentageFromSalePrice } from "../../product-price.js";
 import type {
   productPatchSchema,
   productSchema,
@@ -78,15 +78,14 @@ export class ProductService {
     }
   }
 
-  private static salePrice(
+  private static salePricing(
     priceIdr: number,
-    salePercentage: number | null,
+    salePriceIdr: number | null,
   ) {
-    const salePriceIdr = salePriceFromPercentage(priceIdr, salePercentage);
     if (salePriceIdr !== null && (salePriceIdr < 1 || salePriceIdr >= priceIdr)) {
-      throw new HttpError(400, "INVALID_SALE_PERCENTAGE", "Sale percentage must produce a price lower than the regular price");
+      throw new HttpError(400, "INVALID_SALE_PRICE", "Sale price must be lower than the regular price");
     }
-    return salePriceIdr;
+    return { salePriceIdr, salePercentage: salePercentageFromSalePrice(priceIdr, salePriceIdr) };
   }
 
   static async listProducts() {
@@ -104,13 +103,11 @@ export class ProductService {
     await ProductService.validateReferences({ ...input, driverIds, collectionIds, tagIds });
     if (input.status === "ACTIVE") ProductService.rejectIfSoldOut(input.variants);
     await ProductService.validateActivation(input.status, input.audience, collectionIds, input.variants.length);
-    const salePercentage = input.salePercentage ?? null;
-    const salePriceIdr = ProductService.salePrice(input.priceIdr, salePercentage);
-    const { driverIds: _driverIds, collectionIds: _collectionIds, tagIds: _tagIds, variants, salePercentage: _salePercentage, ...product } = input;
+    const salePricing = ProductService.salePricing(input.priceIdr, input.salePriceIdr);
+    const { driverIds: _driverIds, collectionIds: _collectionIds, tagIds: _tagIds, variants, salePriceIdr: _salePriceIdr, ...product } = input;
     const created = await ProductRepository.createProduct({
       ...product,
-      salePercentage,
-      salePriceIdr,
+      ...salePricing,
       tags: { create: tagIds.map((tagId) => ({ tag: { connect: { id: tagId } } })) },
       drivers: { create: driverIds.map((driverId) => ({ driver: { connect: { id: driverId } } })) },
       collections: {
@@ -140,19 +137,19 @@ export class ProductService {
     if (input.status === "ACTIVE" && current.status !== "ACTIVE") ProductService.rejectIfSoldOut(current.variants);
     await ProductService.validateActivation(effectiveStatus, effectiveAudience, effectiveCollectionIds, current.variants.length);
     const priceIdr = input.priceIdr ?? current.priceIdr;
-    const salePercentage = input.salePercentage === undefined ? current.salePercentage : input.salePercentage;
-    const salePriceIdr = ProductService.salePrice(priceIdr, salePercentage);
+    const salePriceIdr = input.salePriceIdr === undefined ? current.salePriceIdr : input.salePriceIdr;
+    const salePricing = ProductService.salePricing(priceIdr, salePriceIdr);
 
     const {
       tagIds: _tagIds,
       driverIds: _driverIds,
       collectionIds: _collectionIds,
-      salePercentage: _salePercentage,
+      salePriceIdr: _salePriceIdr,
       ...product
     } = input;
     const updated = await ProductRepository.updateProduct(
       id,
-      { ...product, salePercentage, salePriceIdr },
+      { ...product, ...salePricing },
       { tagIds, driverIds, collectionIds },
     );
     return ProductService.response(updated);
