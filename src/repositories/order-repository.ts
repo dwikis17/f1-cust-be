@@ -1,6 +1,7 @@
 import type { Prisma } from "../generated/prisma/client.js";
 import { prisma } from "../db.js";
 import { effectivePriceIdr } from "../product-price.js";
+import { ProductRepository } from "./admin/product-repository.js";
 import {
   defaultCollectionMethod,
   fromDbCollectionMethod,
@@ -681,9 +682,13 @@ export class OrderRepository {
         SELECT "id" FROM "Order" WHERE "id" = ${input.orderId}::uuid FOR UPDATE
       `;
       if (!locked.length) return { status: "NOT_FOUND" as const };
-      const order = await tx.order.findUnique({ where: { id: input.orderId }, include: { items: true } });
+      const order = await tx.order.findUnique({
+        where: { id: input.orderId },
+        include: { items: { include: { variant: { select: { productId: true } } } } },
+      });
       if (!order) return { status: "NOT_FOUND" as const };
       const updateData = (data: Record<string, unknown>) => data as Prisma.OrderUpdateInput;
+      const productIds = [...new Set(order.items.flatMap(({ variant }) => variant?.productId ? [variant.productId] : []))];
 
       if (input.paid && order.lifecycleStatus === "CANCELLED" && order.paymentStatus !== "REFUNDED") {
         await tx.order.update({
@@ -781,6 +786,7 @@ export class OrderRepository {
             data: updateData({ ...input.transaction, ...redemption, ...input.telegramPaidFields(order), paymentStatus: "PAID" }),
           });
         }
+        await ProductRepository.archiveSoldOutProducts(tx, productIds);
       } else if (input.terminal && order.paymentStatus === "PENDING") {
         if (!order.stockReleasedAt) {
           for (const item of order.items) {

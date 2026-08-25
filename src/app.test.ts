@@ -1460,6 +1460,92 @@ test("variant order persists across admin and public product responses", async (
   await prisma.product.delete({ where: { id: product.body.id } });
 });
 
+test("sold-out products archive after admin inventory changes and reject empty activation", async () => {
+  const createdIds: string[] = [];
+  const variant = (sku: string, stockQuantity: number) => ({
+    sku,
+    stockQuantity,
+    packageLengthMm: 300,
+    packageWidthMm: 220,
+    packageHeightMm: 40,
+    packageWeightG: 450,
+  });
+  const create = async (name: string, slug: string, variants: Array<ReturnType<typeof variant>>, status = "ACTIVE") => {
+    const response = await request(app).post("/api/admin/products").set("authorization", `Bearer ${token}`)
+      .send({
+        name,
+        slug,
+        priceIdr: 100_000,
+        status,
+        condition: "BNWT",
+        categoryId,
+        collectionIds: [ferrariCollectionId],
+        audience: "UNISEX",
+        variants,
+      }).expect(201);
+    createdIds.push(response.body.id);
+    return response;
+  };
+
+  try {
+    const multiVariant = await create("Stocked Variant Product", "stocked-variant-product", [
+      variant("STOCKED-VARIANT-EMPTY", 0),
+      variant("STOCKED-VARIANT-AVAILABLE", 1),
+    ]);
+    const availableVariantId = multiVariant.body.variants.find(({ sku }: { sku: string }) => sku === "STOCKED-VARIANT-AVAILABLE").id;
+    await request(app).patch(`/api/admin/products/${multiVariant.body.id}/variants/${availableVariantId}`)
+      .set("authorization", `Bearer ${token}`).send({ stockQuantity: 0 }).expect(200);
+    assert.equal((await prisma.product.findUniqueOrThrow({ where: { id: multiVariant.body.id } })).status, "ARCHIVED");
+    await request(app).patch(`/api/admin/products/${multiVariant.body.id}/variants/${availableVariantId}`)
+      .set("authorization", `Bearer ${token}`).send({ stockQuantity: 2 }).expect(200);
+    assert.equal((await prisma.product.findUniqueOrThrow({ where: { id: multiVariant.body.id } })).status, "ARCHIVED");
+
+    const deleteProduct = await create("Delete Sold Out Product", "delete-sold-out-product", [
+      variant("DELETE-SOLD-OUT-AVAILABLE", 1),
+      variant("DELETE-SOLD-OUT-EMPTY", 0),
+    ]);
+    const availableToDelete = deleteProduct.body.variants.find(({ sku }: { sku: string }) => sku === "DELETE-SOLD-OUT-AVAILABLE").id;
+    await request(app).delete(`/api/admin/products/${deleteProduct.body.id}/variants/${availableToDelete}`)
+      .set("authorization", `Bearer ${token}`).expect(204);
+    assert.equal((await prisma.product.findUniqueOrThrow({ where: { id: deleteProduct.body.id } })).status, "ARCHIVED");
+
+    const legacy = await prisma.product.create({
+      data: {
+        name: "Legacy Empty Product",
+        slug: "legacy-empty-product",
+        priceIdr: 100_000,
+        status: "ACTIVE",
+        condition: "BNWT",
+        categoryId,
+        variants: { create: variant("LEGACY-EMPTY", 0) },
+      },
+    });
+    createdIds.push(legacy.id);
+    await request(app).post(`/api/admin/products/${legacy.id}/variants`).set("authorization", `Bearer ${token}`)
+      .send(variant("LEGACY-EMPTY-SECOND", 0)).expect(201);
+    assert.equal((await prisma.product.findUniqueOrThrow({ where: { id: legacy.id } })).status, "ARCHIVED");
+
+    await request(app).post("/api/admin/products").set("authorization", `Bearer ${token}`)
+      .send({
+        name: "Cannot Activate Empty Product",
+        slug: "cannot-activate-empty-product",
+        priceIdr: 100_000,
+        status: "ACTIVE",
+        condition: "BNWT",
+        categoryId,
+        collectionIds: [ferrariCollectionId],
+        audience: "UNISEX",
+        variants: [variant("CANNOT-ACTIVATE-EMPTY", 0)],
+      }).expect(400, { error: { code: "OUT_OF_STOCK", message: "Active products must have stock available" } });
+
+    const draft = await create("Draft Empty Product", "draft-empty-product", [variant("DRAFT-EMPTY", 0)], "DRAFT");
+    await request(app).patch(`/api/admin/products/${draft.body.id}`).set("authorization", `Bearer ${token}`)
+      .send({ status: "ACTIVE" }).expect(400, { error: { code: "OUT_OF_STOCK", message: "Active products must have stock available" } });
+  } finally {
+    await prisma.product.deleteMany({ where: { id: { in: createdIds } } });
+  }
+});
+
 test("home collection blocks support ordered CRUD, ranked products, limits, localization, and image cleanup", async () => {
   const endpoint = "/api/admin/home/collection-blocks";
   const pngHeader = Buffer.from([0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a]);
@@ -2384,6 +2470,7 @@ test("checkout verifies payment notifications, reserves stock, and waits for man
     serviceCode: "reg",
     turnstileToken: "turnstile-valid",
   };
+  let selloutProductId: string | undefined;
 
   try {
     const ordersBeforeRejectedHuman = await prisma.order.count();
@@ -2490,6 +2577,7 @@ test("checkout verifies payment notifications, reserves stock, and waits for man
     assert.equal(sentEmails[0].subject, `Payment received — ${checkout.body.orderNumber}`);
     assert.match(sentEmails[0].text ?? "", /Ferrari Team Jersey \(Color: Red \/ Size: M\) x1/);
     assert.match(sentEmails[0].text ?? "", /Total paid: Rp\s?1\.168\.000/);
+    assert.ok(sentEmails[0].text?.includes(`We received your payment for order ${checkout.body.orderNumber}\n\n`));
     assert.match(sentEmails[0].html ?? "", /Track your order/);
     assert.ok((await prisma.order.findUniqueOrThrow({ where: { id: checkout.body.orderId } })).paymentConfirmationEmailSentAt);
     config.emailDeliveryEnabled = false;
@@ -2914,7 +3002,58 @@ test("checkout verifies payment notifications, reserves stock, and waits for man
     await reconcilePendingTelegramNotifications();
     await waitForTelegram(refundedTelegramCheckout.body.orderId);
     assert.match(telegramBodies.at(-1)?.text ?? "", /pembayaran kemudian direfund/);
+
+    const sellout = await prisma.product.create({
+      data: {
+        name: "Settlement Sellout Product",
+        slug: "settlement-sellout-product",
+        priceIdr: 100_000,
+        status: "ACTIVE",
+        condition: "BNWT",
+        categoryId,
+        variants: {
+          create: [{
+            sku: "SETTLEMENT-SELLOUT",
+            stockQuantity: 1,
+            packageLengthMm: 100,
+            packageWidthMm: 100,
+            packageHeightMm: 100,
+            packageWeightG: 100,
+          }],
+        },
+      },
+      include: { variants: true },
+    });
+    selloutProductId = sellout.id;
+    const selloutPayload = {
+      ...payload,
+      idempotencyKey: randomUUID(),
+      items: [{ variantId: sellout.variants[0].id, quantity: 1 }],
+    };
+    const pendingSellout = await request(app).post("/api/checkout").send(selloutPayload).expect(201);
+    assert.equal((await prisma.product.findUniqueOrThrow({ where: { id: sellout.id } })).status, "ACTIVE");
+    assert.equal((await prisma.productVariant.findUniqueOrThrow({ where: { id: sellout.variants[0].id } })).stockQuantity, 0);
+    const selloutGross = `${pendingSellout.body.totalIdr}.00`;
+    await request(app).post("/api/payments/midtrans/notification")
+      .send(notification(pendingSellout.body.orderId, "pending", selloutGross)).expect(200);
+    assert.equal((await prisma.product.findUniqueOrThrow({ where: { id: sellout.id } })).status, "ACTIVE");
+    await request(app).post("/api/payments/midtrans/notification")
+      .send(notification(pendingSellout.body.orderId, "expire", selloutGross)).expect(200);
+    assert.equal((await prisma.product.findUniqueOrThrow({ where: { id: sellout.id } })).status, "ACTIVE");
+    assert.equal((await prisma.productVariant.findUniqueOrThrow({ where: { id: sellout.variants[0].id } })).stockQuantity, 1);
+
+    const confirmedSellout = await request(app).post("/api/checkout").send({
+      ...selloutPayload,
+      idempotencyKey: randomUUID(),
+    }).expect(201);
+    await request(app).post("/api/payments/midtrans/notification")
+      .send(notification(confirmedSellout.body.orderId, "settlement", selloutGross)).expect(200);
+    assert.equal((await prisma.product.findUniqueOrThrow({ where: { id: sellout.id } })).status, "ARCHIVED");
+    await request(app).post("/api/payments/midtrans/notification")
+      .send(notification(confirmedSellout.body.orderId, "settlement", selloutGross)).expect(200);
+    assert.equal((await prisma.product.findUniqueOrThrow({ where: { id: sellout.id } })).status, "ARCHIVED");
   } finally {
+    if (selloutProductId) await prisma.product.delete({ where: { id: selloutProductId } });
     await prisma.product.deleteMany({ where: { slug: "telegram-test-product" } });
     globalThis.fetch = originalFetch;
     config.biteshipApiKey = originalConfig.apiKey;

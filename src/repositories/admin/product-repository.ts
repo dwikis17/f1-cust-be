@@ -30,6 +30,7 @@ type ProductCreateData = Omit<Prisma.ProductCreateArgs["data"], "variants"> & {
 
 type VariantCreateData = Omit<Prisma.ProductVariantUncheckedCreateInput, "sizingGuide"> & { sizingGuide?: unknown | null };
 type VariantUpdateData = Omit<Prisma.ProductVariantUpdateInput, "sizingGuide"> & { sizingGuide?: unknown | null };
+type ProductClient = Prisma.TransactionClient | typeof prisma;
 
 export class ProductRepository {
   static listProducts() {
@@ -82,8 +83,12 @@ export class ProductRepository {
   }
 
   static createVariant(data: VariantCreateData) {
-    return prisma.productVariant.create({
-      data: { ...data, sizingGuide: data.sizingGuide ?? Prisma.JsonNull } as Prisma.ProductVariantUncheckedCreateInput,
+    return prisma.$transaction(async (tx) => {
+      const variant = await tx.productVariant.create({
+        data: { ...data, sizingGuide: data.sizingGuide ?? Prisma.JsonNull } as Prisma.ProductVariantUncheckedCreateInput,
+      });
+      await ProductRepository.archiveSoldOutProducts(tx, [data.productId]);
+      return variant;
     });
   }
   static maxVariantPosition(productId: string) {
@@ -92,19 +97,39 @@ export class ProductRepository {
   static findVariant(id: string, productId: string) {
     return prisma.productVariant.findFirst({ where: { id, productId } });
   }
-  static updateVariant(id: string, data: VariantUpdateData) {
-    return prisma.productVariant.update({
-      where: { id },
-      data: {
-        ...data,
-        ...(data.sizingGuide !== undefined
-          ? { sizingGuide: data.sizingGuide === null ? Prisma.JsonNull : data.sizingGuide }
-          : {}),
-      } as Prisma.ProductVariantUpdateInput,
+  static updateVariant(id: string, productId: string, data: VariantUpdateData) {
+    return prisma.$transaction(async (tx) => {
+      const variant = await tx.productVariant.update({
+        where: { id },
+        data: {
+          ...data,
+          ...(data.sizingGuide !== undefined
+            ? { sizingGuide: data.sizingGuide === null ? Prisma.JsonNull : data.sizingGuide }
+            : {}),
+        } as Prisma.ProductVariantUpdateInput,
+      });
+      await ProductRepository.archiveSoldOutProducts(tx, [productId]);
+      return variant;
     });
   }
   static deleteVariant(id: string, productId: string) {
-    return prisma.productVariant.deleteMany({ where: { id, productId } });
+    return prisma.$transaction(async (tx) => {
+      const deleted = await tx.productVariant.deleteMany({ where: { id, productId } });
+      if (deleted.count > 0) await ProductRepository.archiveSoldOutProducts(tx, [productId]);
+      return deleted;
+    });
+  }
+  static archiveSoldOutProducts(client: ProductClient, productIds: string[]) {
+    const ids = [...new Set(productIds)];
+    if (ids.length === 0) return Promise.resolve({ count: 0 });
+    return client.product.updateMany({
+      where: {
+        id: { in: ids },
+        status: "ACTIVE",
+        variants: { some: {}, none: { stockQuantity: { gt: 0 } } },
+      },
+      data: { status: "ARCHIVED" },
+    });
   }
   static countVariants(productId: string) {
     return prisma.productVariant.count({ where: { productId } });

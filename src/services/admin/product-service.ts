@@ -72,6 +72,12 @@ export class ProductService {
     }
   }
 
+  private static rejectIfSoldOut(variants: Array<{ stockQuantity: number }>) {
+    if (variants.length > 0 && variants.every(({ stockQuantity }) => stockQuantity === 0)) {
+      throw new HttpError(400, "OUT_OF_STOCK", "Active products must have stock available");
+    }
+  }
+
   private static salePrice(
     priceIdr: number,
     salePercentage: number | null,
@@ -96,6 +102,7 @@ export class ProductService {
     const collectionIds = unique(input.collectionIds) ?? [];
     const tagIds = unique(input.tagIds) ?? [];
     await ProductService.validateReferences({ ...input, driverIds, collectionIds, tagIds });
+    if (input.status === "ACTIVE") ProductService.rejectIfSoldOut(input.variants);
     await ProductService.validateActivation(input.status, input.audience, collectionIds, input.variants.length);
     const salePercentage = input.salePercentage ?? null;
     const salePriceIdr = ProductService.salePrice(input.priceIdr, salePercentage);
@@ -130,6 +137,7 @@ export class ProductService {
     const effectiveCollectionIds = collectionIds ?? current.collections.map(({ collectionId }) => collectionId);
     const effectiveAudience = input.audience === undefined ? current.audience : input.audience;
     const effectiveStatus = input.status ?? current.status;
+    if (input.status === "ACTIVE" && current.status !== "ACTIVE") ProductService.rejectIfSoldOut(current.variants);
     await ProductService.validateActivation(effectiveStatus, effectiveAudience, effectiveCollectionIds, current.variants.length);
     const priceIdr = input.priceIdr ?? current.priceIdr;
     const salePercentage = input.salePercentage === undefined ? current.salePercentage : input.salePercentage;
@@ -160,7 +168,7 @@ export class ProductService {
     const current = await ProductRepository.findVariant(id, productId);
     if (!current) notFound("Variant not found");
     const { sizingGuide, ...variant } = input;
-    return ProductRepository.updateVariant(id, {
+    return ProductRepository.updateVariant(id, productId, {
       ...variant,
       ...(sizingGuide !== undefined ? { sizingGuide } : {}),
     });
