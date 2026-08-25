@@ -218,18 +218,16 @@ test("admins manage the live Biteship courier allowlist", async () => {
     assert.equal(catalog.body.couriers.find((courier: { code: string }) => courier.code === "jne").serviceCount, 2);
     assert.equal(catalog.body.couriers.find((courier: { code: string }) => courier.code === "lalamove").active, false);
     assert.deepEqual(catalog.body.freeShippingRule, {
-      id: 1,
       active: false,
       minimumPurchaseIdr: 1_000_000,
       maxCoverageIdr: 25_000,
-      updatedAt: catalog.body.freeShippingRule.updatedAt,
     });
     await request(app).put("/api/admin/couriers/free-shipping")
       .set("authorization", `Bearer ${token}`)
       .send({ active: true, minimumPurchaseIdr: 0, maxCoverageIdr: 25_000 }).expect(400);
     const savedRule = await request(app).put("/api/admin/couriers/free-shipping")
       .set("authorization", `Bearer ${token}`)
-      .send({ active: true, minimumPurchaseIdr: 1_000_000, maxCoverageIdr: 25_000 }).expect(200);
+      .send({ ...catalog.body.freeShippingRule, active: true }).expect(200);
     assert.equal(savedRule.body.active, true);
 
     await request(app).patch("/api/admin/couriers/lalamove")
