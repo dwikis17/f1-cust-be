@@ -1492,8 +1492,38 @@ test("home collection blocks support ordered CRUD, ranked products, limits, loca
 
   try {
     await request(app).get(endpoint).expect(401);
-    await request(app).post(endpoint).set("authorization", `Bearer ${token}`)
-      .field({ collectionId: ferrariCollectionId, active: "true" }).expect(400);
+    await request(app).put(`/api/admin/collections/${ferrariCollectionId}/products`)
+      .set("authorization", `Bearer ${token}`)
+      .send({
+        productIds: [productId, ...extraProducts.map(({ id }) => id)],
+        featuredProductIds: [extraProducts[4].id],
+      }).expect(200);
+
+    const empty = await request(app).post(endpoint).set("authorization", `Bearer ${token}`)
+      .field({ collectionId: ferrariCollectionId, active: "true" }).expect(201);
+    assert.equal(empty.body.leadImageUrl, null);
+    assert.equal(empty.body.sideImageOneUrl, null);
+    assert.equal(empty.body.sideImageTwoUrl, null);
+    const publicEmpty = await request(app).get("/api/home/collection-blocks").expect(200);
+    assert.equal(publicEmpty.body.find((block: { id: string }) => block.id === empty.body.id).leadImageUrl, null);
+    await request(app).delete(`${endpoint}/${empty.body.id}`).set("authorization", `Bearer ${token}`).expect(204);
+
+    const partial = await request(app).post(endpoint).set("authorization", `Bearer ${token}`)
+      .field({ collectionId: extraCollections[0].id, active: "false" })
+      .attach("leadImage", pngHeader, "lead-only.png")
+      .expect(201);
+    assert.ok(partial.body.leadImageUrl);
+    assert.equal(partial.body.sideImageOneUrl, null);
+    assert.equal(partial.body.sideImageTwoUrl, null);
+    const preserved = await request(app).put(`${endpoint}/${partial.body.id}`)
+      .set("authorization", `Bearer ${token}`)
+      .field({ collectionId: extraCollections[0].id, active: "false" })
+      .expect(200);
+    assert.equal(preserved.body.leadImageUrl, partial.body.leadImageUrl);
+    assert.equal(preserved.body.sideImageOneUrl, null);
+    assert.equal(preserved.body.sideImageTwoUrl, null);
+    await request(app).delete(`${endpoint}/${partial.body.id}`).set("authorization", `Bearer ${token}`).expect(204);
+
     await request(app).post(endpoint).set("authorization", `Bearer ${token}`)
       .field({ collectionId: ferrariCollectionId, active: "true" })
       .attach("leadImage", Buffer.from("invalid"), "lead.png")

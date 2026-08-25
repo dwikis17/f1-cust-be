@@ -261,9 +261,9 @@ model HomeHero {
 
 model HomeCollectionBlock {
   id              String      @id @default(uuid()) @db.Uuid
-  leadImageUrl    String
-  sideImageOneUrl String
-  sideImageTwoUrl String
+  leadImageUrl    String?
+  sideImageOneUrl String?
+  sideImageTwoUrl String?
   collectionId    String?     @unique @db.Uuid
   collection      Collection? @relation(fields: [collectionId], references: [id], onDelete: SetNull)
   position        Int         @default(0)
