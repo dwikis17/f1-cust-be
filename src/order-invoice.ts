@@ -13,6 +13,8 @@ type InvoiceOrder = {
   postalCode: string;
   subtotalIdr: number;
   discountIdr: number;
+  shippingOriginalIdr: number;
+  shippingDiscountIdr: number;
   shippingIdr: number;
   totalIdr: number;
   paymentStatus: string;
@@ -230,7 +232,9 @@ export async function createOrderInvoice(order: InvoiceOrder) {
   const totals: Array<[string, string]> = [
     ["Subtotal", idr(order.subtotalIdr)],
     ["Discount", `-${idr(order.discountIdr)}`],
-    ["Shipping", idr(order.shippingIdr)],
+    ["Shipping", idr(order.shippingOriginalIdr)],
+    ...(order.shippingDiscountIdr ? [["Free-shipping coverage", `-${idr(order.shippingDiscountIdr)}`] as [string, string]] : []),
+    ...(order.shippingDiscountIdr ? [["Shipping charged", idr(order.shippingIdr)] as [string, string]] : []),
   ];
   for (const [label, value] of totals) {
     page.drawText(label, { x: 350, y, font: regular, size: 9, color: MUTED });

@@ -114,6 +114,14 @@ model ShippingCourier {
   updatedAt DateTime @updatedAt
 }
 
+model FreeShippingRule {
+  id                 Int      @id @default(1)
+  active             Boolean  @default(false)
+  minimumPurchaseIdr Int      @default(1000000)
+  maxCoverageIdr     Int      @default(25000)
+  updatedAt          DateTime @updatedAt
+}
+
 model Category {
   id        String    @id @default(uuid()) @db.Uuid
   name      String    @unique
@@ -370,6 +378,8 @@ model Order {
   postalCode                         String
   subtotalIdr                        Int
   discountIdr                        Int                        @default(0)
+  shippingOriginalIdr                Int                        @default(0)
+  shippingDiscountIdr                Int                        @default(0)
   shippingIdr                        Int
   totalIdr                           Int
   promoCodeId                        String?                    @db.Uuid

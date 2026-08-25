@@ -28,6 +28,7 @@ router.get("/auth/me", AuthController.me);
 
 router.get("/dashboard", DashboardController.summary);
 router.get("/couriers", CourierController.list);
+router.put("/couriers/free-shipping", CourierController.updateFreeShippingRule);
 router.patch("/couriers/:code", CourierController.update);
 router.get("/orders", OrderController.list);
 router.get("/orders/export.csv", OrderController.exportCsv);

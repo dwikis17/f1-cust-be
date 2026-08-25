@@ -2,6 +2,7 @@ import { z } from "zod";
 import { config } from "../../config.js";
 import { HttpError } from "../../http.js";
 import { ShippingCourierRepository } from "../../repositories/shipping-courier-repository.js";
+import { FreeShippingRuleRepository } from "../../repositories/free-shipping-rule-repository.js";
 
 const biteshipCourierSchema = z.object({
   success: z.literal(true),
@@ -55,7 +56,10 @@ async function fetchBiteshipCouriers() {
 
 export class CourierService {
   static async list() {
-    const configured = await ShippingCourierRepository.list();
+    const [configured, freeShippingRule] = await Promise.all([
+      ShippingCourierRepository.list(),
+      FreeShippingRuleRepository.get(),
+    ]);
     const activeCodes = new Set(configured.filter(({ active }) => active).map(({ code }) => code));
 
     let catalog: Map<string, CatalogCourier>;
@@ -66,6 +70,7 @@ export class CourierService {
         catalogAvailable: false,
         warning: "Biteship's courier catalog is unavailable. Only active courier codes are shown.",
         couriers: [...activeCodes].sort().map((code) => ({ code, name: code, serviceCount: 0, active: true })),
+        freeShippingRule,
       };
     }
 
@@ -82,7 +87,11 @@ export class CourierService {
       || left.name.localeCompare(right.name)
       || left.code.localeCompare(right.code));
 
-    return { catalogAvailable: true, couriers };
+    return { catalogAvailable: true, couriers, freeShippingRule };
+  }
+
+  static updateFreeShippingRule(input: { active: boolean; minimumPurchaseIdr: number; maxCoverageIdr: number }) {
+    return FreeShippingRuleRepository.update(input);
   }
 
   static async setActive(code: string, active: boolean) {

@@ -4,11 +4,16 @@ import { HttpError } from "../../http.js";
 import { effectivePriceIdr } from "../../product-price.js";
 import { PublicShippingRepository } from "../../repositories/public/shipping-repository.js";
 import { ShippingCourierRepository } from "../../repositories/shipping-courier-repository.js";
+import { FreeShippingRuleRepository } from "../../repositories/free-shipping-rule-repository.js";
+import { PromoCodeRepository } from "../../repositories/promo-code-repository.js";
 import { normalizeCollectionMethods, type ShipmentCollectionMethod } from "../../shipment-collection.js";
+import { calculatePromoDiscount } from "../promo-code-service.js";
+import { calculateShippingPrice } from "../../free-shipping.js";
 
 type ShippingInput = {
   destinationPostalCode: string;
   items: Array<{ variantId: string; quantity: number }>;
+  promoCode?: string;
 };
 
 export type BiteshipRateItem = {
@@ -33,6 +38,8 @@ export type ShippingRate = {
   duration: string;
   serviceType: string;
   currency: string;
+  originalPrice: number;
+  shippingDiscountIdr: number;
   price: number;
   availableCollectionMethods: ShipmentCollectionMethod[];
 };
@@ -114,6 +121,8 @@ export class PublicShippingService {
       duration: rate.duration ?? "",
       serviceType: rate.service_type ?? "",
       currency: rate.currency ?? "IDR",
+      originalPrice: rate.price,
+      shippingDiscountIdr: 0,
       price: rate.price,
       availableCollectionMethods: normalizeCollectionMethods(rate.available_collection_method),
     })).sort((left, right) => left.price - right.price);
@@ -126,28 +135,46 @@ export class PublicShippingService {
     for (const item of input.items) {
       quantities.set(item.variantId, (quantities.get(item.variantId) ?? 0) + item.quantity);
     }
-    const variants = await PublicShippingRepository.findRateVariants([...quantities.keys()]);
+    const [variants, rule, promoCode] = await Promise.all([
+      PublicShippingRepository.findRateVariants([...quantities.keys()]),
+      FreeShippingRuleRepository.get(),
+      input.promoCode ? PromoCodeRepository.findByCode(input.promoCode) : null,
+    ]);
     if (variants.length !== quantities.size || variants.some((variant) =>
       variant.product.status !== "ACTIVE" || variant.stockQuantity < (quantities.get(variant.id) ?? 0))) {
       throw new HttpError(409, "CART_CHANGED", "One or more cart items are unavailable; refresh your cart and try again");
     }
 
+    if (input.promoCode && !promoCode?.active) {
+      throw new HttpError(409, "PROMO_CODE_UNAVAILABLE", "Promo code is invalid or inactive");
+    }
+
+    const subtotalIdr = variants.reduce(
+      (sum, variant) => sum + effectivePriceIdr(variant.product) * (quantities.get(variant.id) ?? 0),
+      0,
+    );
+    const discountIdr = promoCode ? calculatePromoDiscount(subtotalIdr, promoCode) : 0;
+    const purchaseIdr = subtotalIdr - discountIdr;
+    const rates = await PublicShippingService.requestBiteshipRates({
+      destinationPostalCode: input.destinationPostalCode,
+      items: variants.map((variant) => ({
+        name: variant.product.name,
+        category: "fashion",
+        sku: variant.sku,
+        value: effectivePriceIdr(variant.product),
+        quantity: quantities.get(variant.id) ?? 0,
+        weight: variant.packageWeightG,
+        height: variant.packageHeightMm / 10,
+        length: variant.packageLengthMm / 10,
+        width: variant.packageWidthMm / 10,
+      })),
+      courierCodes,
+    });
+
     return {
       destinationPostalCode: input.destinationPostalCode,
-      rates: await PublicShippingService.requestBiteshipRates({
-        destinationPostalCode: input.destinationPostalCode,
-        items: variants.map((variant) => ({
-          name: variant.product.name,
-          category: "fashion",
-          sku: variant.sku,
-          value: effectivePriceIdr(variant.product),
-          quantity: quantities.get(variant.id) ?? 0,
-          weight: variant.packageWeightG,
-          height: variant.packageHeightMm / 10,
-          length: variant.packageLengthMm / 10,
-          width: variant.packageWidthMm / 10,
-        })),
-        courierCodes,
+      rates: rates.map((rate) => {
+        return { ...rate, ...calculateShippingPrice(rate.originalPrice, purchaseIdr, rule) };
       }),
     };
   }

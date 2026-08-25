@@ -542,7 +542,8 @@ export class OrderService {
       return `"${safe.replaceAll('"', '""')}"`;
     };
     const header = [
-      "order_number", "created_at", "customer_name", "email", "phone", "total_idr", "payment_status",
+      "order_number", "created_at", "customer_name", "email", "phone", "shipping_original_idr",
+      "shipping_discount_idr", "shipping_idr", "total_idr", "payment_status",
       "lifecycle_status", "shipment_booking_status", "refund_state", "courier", "waybill", "item_count", "sku_summary",
     ];
     const rows = orders.map((order) => [
@@ -551,6 +552,9 @@ export class OrderService {
       `${order.firstName} ${order.lastName}`.trim(),
       order.email,
       order.phone,
+      order.shippingOriginalIdr,
+      order.shippingDiscountIdr,
+      order.shippingIdr,
       order.totalIdr,
       order.paymentStatus,
       order.lifecycleStatus,

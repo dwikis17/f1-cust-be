@@ -217,6 +217,20 @@ test("admins manage the live Biteship courier allowlist", async () => {
     ]);
     assert.equal(catalog.body.couriers.find((courier: { code: string }) => courier.code === "jne").serviceCount, 2);
     assert.equal(catalog.body.couriers.find((courier: { code: string }) => courier.code === "lalamove").active, false);
+    assert.deepEqual(catalog.body.freeShippingRule, {
+      id: 1,
+      active: false,
+      minimumPurchaseIdr: 1_000_000,
+      maxCoverageIdr: 25_000,
+      updatedAt: catalog.body.freeShippingRule.updatedAt,
+    });
+    await request(app).put("/api/admin/couriers/free-shipping")
+      .set("authorization", `Bearer ${token}`)
+      .send({ active: true, minimumPurchaseIdr: 0, maxCoverageIdr: 25_000 }).expect(400);
+    const savedRule = await request(app).put("/api/admin/couriers/free-shipping")
+      .set("authorization", `Bearer ${token}`)
+      .send({ active: true, minimumPurchaseIdr: 1_000_000, maxCoverageIdr: 25_000 }).expect(200);
+    assert.equal(savedRule.body.active, true);
 
     await request(app).patch("/api/admin/couriers/lalamove")
       .set("authorization", `Bearer ${token}`).send({ active: true }).expect(200);
@@ -244,6 +258,10 @@ test("admins manage the live Biteship courier allowlist", async () => {
   } finally {
     globalThis.fetch = previousFetch;
     config.biteshipApiKey = previousApiKey;
+    await prisma.freeShippingRule.update({
+      where: { id: 1 },
+      data: { active: false, minimumPurchaseIdr: 1_000_000, maxCoverageIdr: 25_000 },
+    });
     await setActiveCourierCodes(["jne", "jnt", "sicepat", "anteraja"]);
   }
 });
@@ -2025,6 +2043,21 @@ test("shipping rates use authoritative cart data and normalize Biteship response
       }],
     });
 
+    await prisma.freeShippingRule.update({
+      where: { id: 1 },
+      data: { active: true, minimumPurchaseIdr: 900_000, maxCoverageIdr: 25_000 },
+    });
+    const coveredQuote = await request(app).post("/api/shipping/rates").send({
+      ...protectedRequest,
+      turnstileToken: "turnstile-valid",
+    }).expect(200);
+    assert.deepEqual(coveredQuote.body.rates.map((rate: {
+      originalPrice: number; shippingDiscountIdr: number; price: number;
+    }) => [rate.originalPrice, rate.shippingDiscountIdr, rate.price]), [
+      [18_000, 18_000, 0], [25_000, 25_000, 0], [32_000, 25_000, 7_000],
+    ]);
+    await prisma.freeShippingRule.update({ where: { id: 1 }, data: { active: false } });
+
     await request(app).post("/api/shipping/rates")
       .send({ destinationPostalCode: "123", items: [{ variantId, quantity: 1 }], turnstileToken: "turnstile-valid" }).expect(400);
     await request(app).post("/api/shipping/rates")
@@ -2063,6 +2096,10 @@ test("shipping rates use authoritative cart data and normalize Biteship response
     await setActiveCourierCodes(originalShippingConfig.couriers);
     config.turnstileSecretKey = originalShippingConfig.turnstileSecretKey;
     config.storefrontUrl = originalShippingConfig.storefrontUrl;
+    await prisma.freeShippingRule.update({
+      where: { id: 1 },
+      data: { active: false, minimumPurchaseIdr: 1_000_000, maxCoverageIdr: 25_000 },
+    });
   }
 });
 
@@ -2476,6 +2513,7 @@ test("checkout verifies payment notifications, reserves stock, and waits for man
     items: [{ variantId, quantity: 1 }],
     courierCode: "jne",
     serviceCode: "reg",
+    quotedShippingIdr: 18_000,
     turnstileToken: "turnstile-valid",
   };
   let selloutProductId: string | undefined;
@@ -2501,6 +2539,13 @@ test("checkout verifies payment notifications, reserves stock, and waits for man
     assert.equal(repeated.body.orderId, checkout.body.orderId);
     assert.equal(rateCalls, 1);
     assert.equal(snapCalls, 1);
+    await request(app).post("/api/checkout").send({
+      ...payload,
+      idempotencyKey: randomUUID(),
+      quotedShippingIdr: 18_001,
+    }).expect(409, {
+      error: { code: "SHIPPING_RATE_CHANGED", message: "The selected shipping service or price has changed" },
+    });
     assert.equal((await prisma.productVariant.findUniqueOrThrow({ where: { id: variantId } })).stockQuantity, 7);
     assert.deepEqual(snapBodies[0].item_details[0], {
       id: "FER-JER-RED-M",
@@ -2523,6 +2568,8 @@ test("checkout verifies payment notifications, reserves stock, and waits for man
     assert.equal(itemSnapshot.color, "Red");
     assert.equal(itemSnapshot.size, "M");
     const createdOrder = await prisma.order.findUniqueOrThrow({ where: { id: checkout.body.orderId } });
+    assert.equal(createdOrder.shippingOriginalIdr, 18_000);
+    assert.equal(createdOrder.shippingDiscountIdr, 0);
     assert.deepEqual(createdOrder.shipmentAvailableCollectionMethods, ["PICKUP", "DROP_OFF"]);
     assert.equal(createdOrder.paymentExpiresAt.getTime() - createdOrder.createdAt.getTime(), 6 * 60 * 60 * 1_000);
 

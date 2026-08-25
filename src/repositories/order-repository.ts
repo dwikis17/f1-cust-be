@@ -42,6 +42,7 @@ export type CheckoutInput = {
   items: Array<{ variantId: string; quantity: number }>;
   courierCode: string;
   serviceCode: string;
+  quotedShippingIdr: number;
   promoCode?: string;
 };
 
@@ -507,6 +508,8 @@ export class OrderRepository {
     createdAt: Date;
     paymentExpiresAt: Date;
     shippingPrice: number;
+    shippingOriginalPrice: number;
+    shippingDiscount: number;
     shippingName: string;
     shippingServiceName: string;
     shippingDuration: string;
@@ -576,6 +579,8 @@ export class OrderRepository {
             postalCode: input.postalCode,
             subtotalIdr,
             discountIdr,
+            shippingOriginalIdr: input.shippingOriginalPrice,
+            shippingDiscountIdr: input.shippingDiscount,
             shippingIdr: input.shippingPrice,
             totalIdr: subtotalIdr - discountIdr + input.shippingPrice,
             promoCodeId: promoCode?.id,
@@ -629,7 +634,7 @@ export class OrderRepository {
         ...(legacyId ? { id: legacyId } : { orderNumber }),
         email: { equals: email, mode: "insensitive" },
       },
-      include: { items: true },
+      include: { items: true, promoCode: { select: { code: true } } },
     });
   }
 

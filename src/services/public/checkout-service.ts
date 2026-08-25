@@ -85,6 +85,8 @@ function publicOrder(order: {
   orderNumber: string;
   subtotalIdr: number;
   discountIdr: number;
+  shippingOriginalIdr: number;
+  shippingDiscountIdr: number;
   shippingIdr: number;
   totalIdr: number;
   promoCode: { code: string } | null;
@@ -108,6 +110,8 @@ function publicOrder(order: {
     orderNumber: order.orderNumber,
     subtotalIdr: order.subtotalIdr,
     discountIdr: order.discountIdr,
+    shippingOriginalIdr: order.shippingOriginalIdr,
+    shippingDiscountIdr: order.shippingDiscountIdr,
     shippingIdr: order.shippingIdr,
     totalIdr: order.totalIdr,
     promoCode: order.promoCode?.code ?? null,
@@ -143,6 +147,8 @@ function checkoutResponse(order: {
   paymentStatus: string;
   subtotalIdr: number;
   discountIdr: number;
+  shippingOriginalIdr: number;
+  shippingDiscountIdr: number;
   shippingIdr: number;
   totalIdr: number;
   promoCode: { code: string } | null;
@@ -155,6 +161,8 @@ function checkoutResponse(order: {
     paymentStatus: order.paymentStatus,
     subtotalIdr: order.subtotalIdr,
     discountIdr: order.discountIdr,
+    shippingOriginalIdr: order.shippingOriginalIdr,
+    shippingDiscountIdr: order.shippingDiscountIdr,
     shippingIdr: order.shippingIdr,
     totalIdr: order.totalIdr,
     promoCode: order.promoCode?.code ?? null,
@@ -232,7 +240,13 @@ async function createSnapToken(order: CheckoutOrder) {
           quantity: 1,
           name: `Promo ${order.promoCode?.code ?? "discount"}`.slice(0, 50),
         }] : []),
-        { id: "shipping", price: order.shippingIdr, quantity: 1, name: `${order.courierName} ${order.courierServiceName}`.slice(0, 50) },
+        { id: "shipping", price: order.shippingOriginalIdr, quantity: 1, name: `${order.courierName} ${order.courierServiceName}`.slice(0, 50) },
+        ...(order.shippingDiscountIdr > 0 ? [{
+          id: "free-shipping",
+          price: -order.shippingDiscountIdr,
+          quantity: 1,
+          name: "Free-shipping coverage",
+        }] : []),
       ],
       customer_details: {
         first_name: order.firstName,
@@ -439,9 +453,12 @@ export class PublicCheckoutService {
     const quote = await PublicShippingService.rates({
       destinationPostalCode: input.postalCode,
       items: input.items,
+      promoCode: input.promoCode,
     });
     const rate = quote.rates.find((item) => item.courierCode === input.courierCode && item.serviceCode === input.serviceCode);
-    if (!rate) throw new HttpError(409, "SHIPPING_RATE_CHANGED", "The selected shipping service is no longer available");
+    if (!rate || rate.price !== input.quotedShippingIdr) {
+      throw new HttpError(409, "SHIPPING_RATE_CHANGED", "The selected shipping service or price has changed");
+    }
 
     const orderId = randomUUID();
     const createdAt = new Date();
@@ -454,6 +471,8 @@ export class PublicCheckoutService {
         createdAt,
         paymentExpiresAt: new Date(createdAt.getTime() + PAYMENT_EXPIRY_HOURS * HOUR_MS),
         shippingPrice: rate.price,
+        shippingOriginalPrice: rate.originalPrice,
+        shippingDiscount: rate.shippingDiscountIdr,
         shippingName: rate.courierName,
         shippingServiceName: rate.serviceName,
         shippingDuration: rate.duration,
@@ -509,6 +528,13 @@ export class PublicCheckoutService {
           ? "REQUIRED"
           : "NONE",
       destination: { city: order.city, province: order.province },
+      subtotalIdr: order.subtotalIdr,
+      discountIdr: order.discountIdr,
+      shippingOriginalIdr: order.shippingOriginalIdr,
+      shippingDiscountIdr: order.shippingDiscountIdr,
+      shippingIdr: order.shippingIdr,
+      totalIdr: order.totalIdr,
+      promoCode: order.promoCode?.code ?? null,
       courier: {
         name: order.courierName,
         serviceName: order.courierServiceName,
