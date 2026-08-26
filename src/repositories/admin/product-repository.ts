@@ -22,6 +22,19 @@ type RelationUpdates = {
   collectionIds?: string[];
 };
 
+export type ProductListInput = {
+  all: boolean;
+  search?: string;
+  status?: "DRAFT" | "ACTIVE" | "ARCHIVED";
+  categoryId?: string;
+  teamId?: string | "MISSING";
+  driverId?: string | "MISSING";
+  audience?: "MEN" | "WOMEN" | "KIDS" | "UNISEX" | "MISSING";
+  collectionId?: string | "MISSING";
+  page: number;
+  limit: number;
+};
+
 type ProductCreateData = Omit<Prisma.ProductCreateArgs["data"], "variants"> & {
   variants: {
     create: Array<Omit<Prisma.ProductVariantCreateWithoutProductInput, "sizingGuide"> & { sizingGuide?: unknown | null }>;
@@ -32,9 +45,58 @@ type VariantCreateData = Omit<Prisma.ProductVariantUncheckedCreateInput, "sizing
 type VariantUpdateData = Omit<Prisma.ProductVariantUpdateInput, "sizingGuide"> & { sizingGuide?: unknown | null };
 type ProductClient = Prisma.TransactionClient | typeof prisma;
 
+function productWhere(input: Omit<ProductListInput, "all" | "page" | "limit">): Prisma.ProductWhereInput {
+  const search = input.search?.trim();
+  const where: Prisma.ProductWhereInput = {
+    ...(input.status ? { status: input.status } : {}),
+    ...(input.categoryId ? { categoryId: input.categoryId } : {}),
+    ...(input.teamId === "MISSING" ? { teamId: null } : input.teamId ? { teamId: input.teamId } : {}),
+    ...(input.audience === "MISSING" ? { audience: null } : input.audience ? { audience: input.audience } : {}),
+    ...(input.driverId === "MISSING"
+      ? { drivers: { none: {} } }
+      : input.driverId
+        ? { drivers: { some: { driverId: input.driverId } } }
+        : {}),
+    ...(input.collectionId === "MISSING"
+      ? { collections: { none: {} } }
+      : input.collectionId
+        ? { collections: { some: { collectionId: input.collectionId } } }
+        : {}),
+    ...(search
+      ? {
+          OR: [
+            { name: { contains: search, mode: "insensitive" } },
+            { nameId: { contains: search, mode: "insensitive" } },
+            { slug: { contains: search, mode: "insensitive" } },
+            { category: { name: { contains: search, mode: "insensitive" } } },
+            { drivers: { some: { driver: { name: { contains: search, mode: "insensitive" } } } } },
+            { collections: { some: { collection: { name: { contains: search, mode: "insensitive" } } } } },
+          ],
+        }
+      : {}),
+  };
+  return where;
+}
+
 export class ProductRepository {
-  static listProducts() {
-    return prisma.product.findMany({ include: productInclude, orderBy: { createdAt: "desc" } });
+  static async listProducts(input: ProductListInput) {
+    const where = productWhere(input);
+    const orderBy = [{ createdAt: "desc" as const }, { id: "desc" as const }];
+    if (input.all) {
+      // ponytail: collection assignment loads all full rows; paginate that picker if catalog size makes this slow.
+      return { data: await prisma.product.findMany({ where, include: productInclude, orderBy }) };
+    }
+    const [data, total] = await Promise.all([
+      prisma.product.findMany({
+        where,
+        include: productInclude,
+        orderBy,
+        skip: (input.page - 1) * input.limit,
+        take: input.limit,
+      }),
+      prisma.product.count({ where }),
+    ]);
+    return { data, total };
   }
   static findProduct(id: string) {
     return prisma.product.findUnique({ where: { id }, include: productInclude });

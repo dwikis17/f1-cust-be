@@ -1,7 +1,9 @@
 import type { NextFunction, Request, Response } from "express";
+import { z } from "zod";
 import { parse } from "../../http.js";
 import {
   idSchema,
+  productAudienceSchema,
   productPatchSchema,
   productSchema,
   variantPatchSchema,
@@ -10,10 +12,26 @@ import {
 import { ProductService } from "../../services/admin/product-service.js";
 import { revalidateStorefrontNow } from "../../storefront-revalidation.js";
 
+const filterId = z.union([idSchema, z.literal("MISSING")]);
+const listQuerySchema = z.object({
+  all: z.enum(["true", "false"]).default("false"),
+  search: z.string().trim().max(200).optional(),
+  status: z.enum(["DRAFT", "ACTIVE", "ARCHIVED"]).optional(),
+  categoryId: idSchema.optional(),
+  teamId: filterId.optional(),
+  driverId: filterId.optional(),
+  audience: z.union([productAudienceSchema, z.literal("MISSING")]).optional(),
+  collectionId: filterId.optional(),
+  page: z.coerce.number().int().min(1).default(1),
+  limit: z.coerce.number().int().min(1).max(100).default(25),
+}).strict();
+
 export class ProductController {
-  static async listProducts(_request: Request, response: Response, next: NextFunction) {
+  static async listProducts(request: Request, response: Response, next: NextFunction) {
     try {
-      response.json(await ProductService.listProducts());
+      const query = parse(listQuerySchema, request.query);
+      response.set("cache-control", "no-store");
+      response.json(await ProductService.listProducts({ ...query, all: query.all === "true" }));
     } catch (error) {
       next(error);
     }

@@ -1066,6 +1066,57 @@ test("admin creates catalog data and public API hides drafts", async () => {
   await request(app).get("/api/products/ferrari-team-jersey").expect(404);
 });
 
+test("admin product list paginates and filters on the server", async () => {
+  const list = (query = "") => request(app)
+    .get(`/api/admin/products${query ? `?${query}` : ""}`)
+    .set("authorization", `Bearer ${token}`);
+  const names = async (query: string) => {
+    const response = await list(query).expect(200);
+    return response.body.data.map((product: { name: string }) => product.name).sort();
+  };
+
+  await request(app).get("/api/admin/products").expect(401);
+
+  const firstPage = await list("page=1&limit=2").expect(200);
+  const secondPage = await list("page=2&limit=2").expect(200);
+  assert.equal(firstPage.body.page, 1);
+  assert.equal(firstPage.body.limit, 2);
+  assert.equal(firstPage.body.total, 3);
+  assert.equal(firstPage.body.data.length, 2);
+  assert.equal(secondPage.body.page, 2);
+  assert.equal(secondPage.body.data.length, 1);
+  assert.equal(new Set([...firstPage.body.data, ...secondPage.body.data].map((product: { id: string }) => product.id)).size, 3);
+
+  assert.deepEqual(await names("search=tim"), ["Ferrari Team Jersey"]);
+  assert.deepEqual(await names("search=jerseys"), ["Ferrari Team Jersey", "General F1 Cap", "Historic Driver Product"]);
+  assert.deepEqual(await names("search=historic"), ["Historic Driver Product"]);
+  assert.deepEqual(await names("search=charles"), ["Ferrari Team Jersey", "Historic Driver Product"]);
+  assert.deepEqual(await names("status=DRAFT"), ["Ferrari Team Jersey", "General F1 Cap", "Historic Driver Product"]);
+  assert.deepEqual(await names(`categoryId=${categoryId}`), ["Ferrari Team Jersey", "General F1 Cap", "Historic Driver Product"]);
+  assert.deepEqual(await names(`teamId=${secondTeamId}`), ["Historic Driver Product"]);
+  assert.deepEqual(await names("teamId=MISSING"), ["General F1 Cap"]);
+  assert.deepEqual(await names(`driverId=${driverId}`), ["Ferrari Team Jersey", "Historic Driver Product"]);
+  assert.deepEqual(await names("driverId=MISSING"), ["General F1 Cap"]);
+  assert.deepEqual(await names("audience=UNISEX"), ["Ferrari Team Jersey"]);
+  assert.deepEqual(await names("audience=MISSING"), ["General F1 Cap", "Historic Driver Product"]);
+  assert.deepEqual(await names(`collectionId=${ferrariCollectionId}`), ["Ferrari Team Jersey"]);
+  assert.deepEqual(await names("collectionId=MISSING"), ["General F1 Cap", "Historic Driver Product"]);
+  assert.deepEqual(
+    await names(`teamId=${teamId}&driverId=${driverId}&audience=UNISEX&collectionId=${ferrariCollectionId}`),
+    ["Ferrari Team Jersey"],
+  );
+
+  const all = await list("all=true").expect(200);
+  assert.ok(Array.isArray(all.body));
+  assert.equal(all.body.length, 3);
+  assert.ok(Array.isArray(all.body[0].variants));
+
+  await list("page=0").expect(400);
+  await list("limit=101").expect(400);
+  await list("categoryId=not-a-uuid").expect(400);
+  await list("unknown=true").expect(400);
+});
+
 test("collection relations validate kind and allow multiple collections per entity", async () => {
   await request(app).post("/api/admin/collections").set("authorization", `Bearer ${token}`)
     .send({ name: "Missing Driver", slug: "missing-driver", kind: "DRIVER" }).expect(400);

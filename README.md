@@ -71,7 +71,8 @@ Send the login token as `Authorization: Bearer <token>` for all remaining admin 
 - `GET|POST /api/admin/drivers`
 - `PATCH|DELETE /api/admin/drivers/:id`
 - `POST|DELETE /api/admin/drivers/:id/photo` using multipart field `image`
-- `GET|POST /api/admin/products`
+- `GET /api/admin/products?page=1&limit=25&search=&status=&categoryId=&teamId=&driverId=&audience=&collectionId=` returns paginated product data; use `all=true` for the full product list used by collection assignment.
+- `POST /api/admin/products`
 - `GET|PATCH /api/admin/products/:id`
 - `GET /api/admin/orders/:id/payment-events`
 - `POST /api/admin/orders/:id/telegram-notification/resend`

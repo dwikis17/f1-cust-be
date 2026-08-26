@@ -3,6 +3,7 @@ import { HttpError, notFound } from "../../http.js";
 import { CatalogRepository } from "../../repositories/admin/catalog-repository.js";
 import {
   ProductRepository,
+  type ProductListInput,
   type ProductWithRelations,
 } from "../../repositories/admin/product-repository.js";
 import { salePercentageFromSalePrice } from "../../product-price.js";
@@ -88,8 +89,11 @@ export class ProductService {
     return { salePriceIdr, salePercentage: salePercentageFromSalePrice(priceIdr, salePriceIdr) };
   }
 
-  static async listProducts() {
-    return (await ProductRepository.listProducts()).map(ProductService.response);
+  static async listProducts(input: ProductListInput) {
+    const result = await ProductRepository.listProducts(input);
+    const data = result.data.map(ProductService.response);
+    if (input.all) return data;
+    return { data, page: input.page, limit: input.limit, total: result.total ?? 0 };
   }
   static async findProduct(id: string) {
     const product = await ProductRepository.findProduct(id);
