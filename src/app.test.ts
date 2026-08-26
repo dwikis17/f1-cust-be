@@ -1308,9 +1308,11 @@ test("active products are filterable with exact variant stock", async () => {
     .find((collection: { slug: string }) => collection.slug === "ferrari");
   assert.equal(indonesianFerrariCollection.description, "Jelajahi koleksi Ferrari.");
   assert.equal(indonesianFerrariCollection.descriptionId, undefined);
-  const indonesianSearch = await request(app).get("/api/products?locale=id&search=merah").expect(200);
+  const indonesianSearch = await request(app).get("/api/products?locale=id&search=tim").expect(200);
   assert.equal(indonesianSearch.body.total, 1);
   assert.equal(indonesianSearch.body.data[0].name, "Jersey Tim Ferrari");
+  const descriptionOnlySearch = await request(app).get("/api/products?search=official").expect(200);
+  assert.equal(descriptionOnlySearch.body.total, 0);
   await request(app).get("/api/products?locale=fr").expect(400);
   await request(app).patch(`/api/admin/products/${productId}`).set("authorization", `Bearer ${token}`)
     .send({ descriptionId: null }).expect(200);
