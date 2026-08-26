@@ -61,6 +61,27 @@ type PriceRow = { id: string; priceIdr: number; salePriceIdr: number | null };
 
 const hasPriceFilter = (filters: ProductFilters) => filters.minPrice !== undefined || filters.maxPrice !== undefined;
 
+function searchTerms(value: string) {
+  return [...new Set(value.normalize("NFKC").match(/[\p{L}\p{N}]+/gu)?.map((term) => term.toLowerCase()) ?? [])];
+}
+
+function productSearchWhere(search: string): Prisma.ProductWhereInput {
+  const terms = searchTerms(search);
+  // ponytail: tokenized ILIKE scans across catalog relations; use PostgreSQL full-text/trigram indexing if search latency grows.
+  return {
+    AND: terms.length ? terms.map((term) => ({
+      OR: [
+        { name: { contains: term, mode: "insensitive" } },
+        { nameId: { contains: term, mode: "insensitive" } },
+        { category: { name: { contains: term, mode: "insensitive" } } },
+        { team: { name: { contains: term, mode: "insensitive" } } },
+        { tags: { some: { tag: { name: { contains: term, mode: "insensitive" } } } } },
+        { drivers: { some: { driver: { name: { contains: term, mode: "insensitive" } } } } },
+      ],
+    })) : [{ name: { contains: search, mode: "insensitive" } }],
+  };
+}
+
 function matchesPrice(product: PriceRow, filters: ProductFilters) {
   const price = effectivePriceIdr(product);
   return (filters.minPrice === undefined || price >= filters.minPrice)
@@ -76,12 +97,7 @@ function productWhere(filters: ProductFilters, omit?: FacetName): Prisma.Product
   const hasVariantFilter = Object.keys(variantFilter).length > 0;
   return {
     status: "ACTIVE",
-    ...(filters.search && {
-      OR: [
-        { name: { contains: filters.search, mode: "insensitive" } },
-        { nameId: { contains: filters.search, mode: "insensitive" } },
-      ],
-    }),
+    ...(filters.search && productSearchWhere(filters.search)),
     ...(omit !== "productType" && filters.productTypes?.length && {
       category: { slug: { in: filters.productTypes } },
     }),

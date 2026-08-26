@@ -1269,6 +1269,24 @@ test("public team and driver references support catalog filters", async () => {
 test("active products are filterable with exact variant stock", async () => {
   await request(app).patch(`/api/admin/products/${productId}`).set("authorization", `Bearer ${token}`)
     .send({ status: "ACTIVE", sizingNote: "  Allow a 1 cm tolerance.  " }).expect(200);
+  try {
+    await request(app).patch(`/api/admin/products/${productId}`).set("authorization", `Bearer ${token}`)
+      .send({ name: "Oracle Red Bull Racing Formula 1 Team Polo 2026", nameId: "Polo Oracle Red Bull 2026" }).expect(200);
+    const separatedTerms = await request(app).get("/api/products?search=red%20bull%202026").expect(200);
+    assert.equal(separatedTerms.body.total, 1);
+    assert.equal(separatedTerms.body.data[0].id, productId);
+    const reorderedTerms = await request(app).get("/api/products?search=2026%20red-bull").expect(200);
+    assert.equal(reorderedTerms.body.total, 1);
+    assert.equal(reorderedTerms.body.data[0].id, productId);
+    const missingTerm = await request(app).get("/api/products?search=red%20bull%202030").expect(200);
+    assert.equal(missingTerm.body.total, 0);
+    assert.equal((await request(app).get("/api/products?search=limited%20edition")).body.total, 1);
+    assert.equal((await request(app).get("/api/products?search=charles")).body.total, 1);
+    assert.equal((await request(app).get("/api/products?search=jerseys")).body.total, 1);
+  } finally {
+    await request(app).patch(`/api/admin/products/${productId}`).set("authorization", `Bearer ${token}`)
+      .send({ name: "Ferrari Team Jersey", nameId: "Jersey Tim Ferrari" }).expect(200);
+  }
   const response = await request(app)
     .get("/api/products?search=team&size=M&color=Red&team=ferrari&driver=charles-leclerc")
     .expect(200);
