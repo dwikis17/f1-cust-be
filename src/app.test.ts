@@ -2634,6 +2634,11 @@ test("checkout verifies payment notifications, reserves stock, and waits for man
     assert.match(sentEmails[0].text ?? "", /Total paid: Rp\s?1\.168\.000/);
     assert.ok(sentEmails[0].text?.includes(`We received your payment for order ${checkout.body.orderNumber}\n\n`));
     assert.match(sentEmails[0].html ?? "", /Track your order/);
+    const paymentTrackUrl = new URL("/track-order", config.storefrontUrl);
+    paymentTrackUrl.searchParams.set("orderNumber", checkout.body.orderNumber);
+    paymentTrackUrl.searchParams.set("email", payload.email);
+    assert.ok(sentEmails[0].text?.includes(`Track your order: ${paymentTrackUrl.toString()}`));
+    assert.ok(sentEmails[0].html?.includes(`href="${paymentTrackUrl.toString().replaceAll("&", "&amp;")}"`));
     assert.ok((await prisma.order.findUniqueOrThrow({ where: { id: checkout.body.orderId } })).paymentConfirmationEmailSentAt);
     config.emailDeliveryEnabled = false;
     assert.equal(await sendPaymentConfirmationEmail(checkout.body.orderId, { force: true }), false);
