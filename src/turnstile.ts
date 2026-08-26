@@ -10,6 +10,7 @@ const siteverifyResponseSchema = z.object({
 }).passthrough();
 
 export async function verifyHuman(token: string | undefined, expectedAction: "shipping-rates" | "checkout", remoteIp?: string) {
+  if (!config.turnstileEnabled) return;
   if (!token) throw new HttpError(403, "HUMAN_VERIFICATION_FAILED", "Human verification failed");
   if (!config.turnstileSecretKey || !config.storefrontUrl) {
     throw new HttpError(503, "HUMAN_VERIFICATION_UNAVAILABLE", "Human verification is temporarily unavailable");
