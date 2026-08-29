@@ -43,7 +43,6 @@ export type CheckoutInput = {
   courierCode: string;
   serviceCode: string;
   quotedShippingIdr: number;
-  includeInsurance?: boolean;
   promoCode?: string;
 };
 

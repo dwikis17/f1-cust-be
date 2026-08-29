@@ -13,7 +13,6 @@ import { calculateShippingPrice } from "../../free-shipping.js";
 type ShippingInput = {
   destinationPostalCode: string;
   items: Array<{ variantId: string; quantity: number }>;
-  includeInsurance?: boolean;
   promoCode?: string;
 };
 
@@ -183,7 +182,7 @@ export class PublicShippingService {
         width: variant.packageWidthMm / 10,
       })),
       courierCodes,
-      ...(input.includeInsurance ? { courierInsuranceIdr: subtotalIdr } : {}),
+      courierInsuranceIdr: subtotalIdr,
     });
 
     return {

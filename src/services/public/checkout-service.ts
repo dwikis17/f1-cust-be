@@ -479,10 +479,9 @@ export class PublicCheckoutService {
       destinationPostalCode: input.postalCode,
       items: input.items,
       promoCode: input.promoCode,
-      includeInsurance: input.includeInsurance,
     });
     const rate = quote.rates.find((item) => item.courierCode === input.courierCode && item.serviceCode === input.serviceCode);
-    if (!rate || rate.price !== input.quotedShippingIdr || (input.includeInsurance && !rate.insuranceAvailable)) {
+    if (!rate || rate.price !== input.quotedShippingIdr || !rate.insuranceAvailable) {
       throw new HttpError(409, "SHIPPING_RATE_CHANGED", "The selected shipping service or price has changed");
     }
 
@@ -499,8 +498,8 @@ export class PublicCheckoutService {
         shippingPrice: rate.price,
         shippingOriginalPrice: rate.originalPrice,
         shippingDiscount: rate.shippingDiscountIdr,
-        insuranceValue: input.includeInsurance ? rate.insuranceValueIdr : 0,
-        insuranceFee: input.includeInsurance ? rate.insuranceFeeIdr : 0,
+        insuranceValue: rate.insuranceValueIdr,
+        insuranceFee: rate.insuranceFeeIdr,
         shippingName: rate.courierName,
         shippingServiceName: rate.serviceName,
         shippingDuration: rate.duration,

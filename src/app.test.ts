@@ -2213,7 +2213,7 @@ test("shipping rates use authoritative cart data and normalize Biteship response
       });
     });
     const insuredQuote = await request(app).post("/api/shipping/rates").send({
-      ...protectedRequest, includeInsurance: true, turnstileToken: "turnstile-valid",
+      ...protectedRequest, turnstileToken: "turnstile-valid",
     }).expect(200);
     assert.deepEqual(upstreamBody?.courier_insurance, 900_000);
     assert.deepEqual(insuredQuote.body.rates[0], {
@@ -2516,7 +2516,7 @@ test("checkout verifies payment notifications, reserves stock, and waits for man
       return new Response(JSON.stringify({ pricing: [{
         courier_code: "jne", courier_name: "JNE", courier_service_code: "reg", courier_service_name: "Reguler",
         description: "Regular service", duration: "2 - 3 days", service_type: "standard", currency: "IDR",
-        price: 18_000, available_collection_method: rateCollectionMethods,
+        price: 18_000, insurance_fee: 0, available_for_insurance: true, available_collection_method: rateCollectionMethods,
       }] }), { status: 200, headers: { "content-type": "application/json" } });
     }
     if (url.includes("midtrans.com/snap/v1/transactions")) {
