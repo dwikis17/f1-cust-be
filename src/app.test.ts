@@ -2202,6 +2202,27 @@ test("shipping rates use authoritative cart data and normalize Biteship response
     ]);
     await prisma.freeShippingRule.update({ where: { id: 1 }, data: { active: false } });
 
+    globalThis.fetch = withTurnstile(async (_input, init) => {
+      upstreamBody = JSON.parse(String(init?.body)) as Record<string, unknown>;
+      return Response.json({
+        pricing: [{
+          courier_code: "jne", courier_name: "JNE", courier_service_code: "reg",
+          courier_service_name: "Reguler", price: 22_000, insurance_fee: 4_000,
+          available_for_insurance: true, available_collection_method: ["pickup"],
+        }],
+      });
+    });
+    const insuredQuote = await request(app).post("/api/shipping/rates").send({
+      ...protectedRequest, includeInsurance: true, turnstileToken: "turnstile-valid",
+    }).expect(200);
+    assert.deepEqual(upstreamBody?.courier_insurance, 900_000);
+    assert.deepEqual(insuredQuote.body.rates[0], {
+      courierCode: "jne", courierName: "JNE", serviceCode: "reg", serviceName: "Reguler",
+      description: "", duration: "", serviceType: "", currency: "IDR", originalPrice: 18_000,
+      shippingDiscountIdr: 0, insuranceAvailable: true, insuranceFeeIdr: 4_000,
+      insuranceValueIdr: 900_000, price: 22_000, availableCollectionMethods: ["pickup"],
+    });
+
     await request(app).post("/api/shipping/rates")
       .send({ destinationPostalCode: "123", items: [{ variantId, quantity: 1 }], turnstileToken: "turnstile-valid" }).expect(400);
     await request(app).post("/api/shipping/rates")

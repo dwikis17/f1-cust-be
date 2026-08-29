@@ -20,6 +20,7 @@ const checkoutSchema = z.object({
   courierCode: z.string().trim().min(1).max(50).regex(/^[a-z0-9_-]+$/),
   serviceCode: z.string().trim().min(1).max(50).regex(/^[a-z0-9_-]+$/),
   quotedShippingIdr: z.number().int().nonnegative().max(2_000_000_000),
+  includeInsurance: z.boolean().optional(),
   promoCode: promoCodeValueSchema.optional(),
   turnstileToken: z.string().trim().min(1).max(2048).optional(),
 }).strict();

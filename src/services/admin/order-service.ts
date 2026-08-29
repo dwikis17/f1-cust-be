@@ -459,6 +459,8 @@ export class OrderService {
       waybillId: order.biteshipWaybillId,
       providerStatus: order.biteshipStatus,
       priceIdr: order.biteshipPriceIdr,
+      insuranceValueIdr: order.insuranceValueIdr,
+      insuranceFeeIdr: order.insuranceFeeIdr,
       collectionMethod: order.shipmentCollectionMethod
         ? fromDbCollectionMethod(order.shipmentCollectionMethod)
         : null,

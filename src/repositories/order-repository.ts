@@ -43,6 +43,7 @@ export type CheckoutInput = {
   courierCode: string;
   serviceCode: string;
   quotedShippingIdr: number;
+  includeInsurance?: boolean;
   promoCode?: string;
 };
 
@@ -77,6 +78,8 @@ export type ShipmentBookingSuccess = {
   trackingId: string | null;
   waybillId: string | null;
   priceIdr: number | null;
+  insuranceValueIdr: number;
+  insuranceFeeIdr: number;
   providerStatus: string;
   collectionMethod: ShipmentCollectionMethod;
   availableCollectionMethods: ShipmentCollectionMethod[];
@@ -359,6 +362,8 @@ export class OrderRepository {
           biteshipTrackingId: input.result.trackingId,
           biteshipWaybillId: input.result.waybillId,
           biteshipPriceIdr: input.result.priceIdr,
+          insuranceValueIdr: input.result.insuranceValueIdr,
+          insuranceFeeIdr: input.result.insuranceFeeIdr,
           biteshipStatus: input.result.providerStatus,
         },
       });
@@ -510,6 +515,8 @@ export class OrderRepository {
     shippingPrice: number;
     shippingOriginalPrice: number;
     shippingDiscount: number;
+    insuranceValue: number;
+    insuranceFee: number;
     shippingName: string;
     shippingServiceName: string;
     shippingDuration: string;
@@ -582,6 +589,8 @@ export class OrderRepository {
             shippingOriginalIdr: input.shippingOriginalPrice,
             shippingDiscountIdr: input.shippingDiscount,
             shippingIdr: input.shippingPrice,
+            insuranceValueIdr: input.insuranceValue,
+            insuranceFeeIdr: input.insuranceFee,
             totalIdr: subtotalIdr - discountIdr + input.shippingPrice,
             promoCodeId: promoCode?.id,
             courierCode: input.courierCode,

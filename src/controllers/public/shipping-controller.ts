@@ -13,6 +13,7 @@ const shippingRatesSchema = z.object({
     variantId: idSchema,
     quantity: z.number().int().min(1).max(9),
   }).strict()).min(1).max(50),
+  includeInsurance: z.boolean().optional(),
   promoCode: promoCodeValueSchema.optional(),
   turnstileToken: z.string().trim().min(1).max(2048).optional(),
 }).strict();

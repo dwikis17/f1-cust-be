@@ -13,6 +13,7 @@ import { calculateShippingPrice } from "../../free-shipping.js";
 type ShippingInput = {
   destinationPostalCode: string;
   items: Array<{ variantId: string; quantity: number }>;
+  includeInsurance?: boolean;
   promoCode?: string;
 };
 
@@ -40,6 +41,9 @@ export type ShippingRate = {
   currency: string;
   originalPrice: number;
   shippingDiscountIdr: number;
+  insuranceAvailable: boolean;
+  insuranceFeeIdr: number;
+  insuranceValueIdr: number;
   price: number;
   availableCollectionMethods: ShipmentCollectionMethod[];
 };
@@ -55,6 +59,8 @@ const biteshipResponseSchema = z.object({
     service_type: z.string().nullish(),
     currency: z.string().nullish(),
     price: z.number().nonnegative(),
+    available_for_insurance: z.boolean().optional(),
+    insurance_fee: z.number().nonnegative().nullish(),
     available_collection_method: z.array(z.string()).default(["pickup"]),
   }).passthrough()),
 }).passthrough();
@@ -75,6 +81,7 @@ export class PublicShippingService {
     destinationPostalCode: string;
     items: BiteshipRateItem[];
     courierCodes: string[];
+    courierInsuranceIdr?: number;
   }) {
     assertShippingConfig(input.courierCodes);
     const apiKey = config.biteshipApiKey;
@@ -89,6 +96,7 @@ export class PublicShippingService {
           origin_postal_code: Number(config.biteshipOriginPostalCode),
           destination_postal_code: Number(input.destinationPostalCode),
           couriers: input.courierCodes.join(","),
+          ...(input.courierInsuranceIdr ? { courier_insurance: input.courierInsuranceIdr } : {}),
           items: input.items,
         }),
         signal: AbortSignal.timeout(8_000),
@@ -112,7 +120,9 @@ export class PublicShippingService {
 
     const parsed = biteshipResponseSchema.safeParse(body);
     if (!parsed.success) throw new HttpError(502, "SHIPPING_UPSTREAM_ERROR", "Biteship returned an unexpected response");
-    return parsed.data.pricing.map((rate): ShippingRate => ({
+    return parsed.data.pricing.map((rate): ShippingRate => {
+      const insuranceFeeIdr = input.courierInsuranceIdr ? rate.insurance_fee ?? 0 : 0;
+      return {
       courierCode: rate.courier_code,
       courierName: rate.courier_name,
       serviceCode: rate.courier_service_code,
@@ -121,11 +131,15 @@ export class PublicShippingService {
       duration: rate.duration ?? "",
       serviceType: rate.service_type ?? "",
       currency: rate.currency ?? "IDR",
-      originalPrice: rate.price,
+      originalPrice: rate.price - insuranceFeeIdr,
       shippingDiscountIdr: 0,
+      insuranceAvailable: rate.available_for_insurance ?? false,
+      insuranceFeeIdr,
+      insuranceValueIdr: input.courierInsuranceIdr ?? 0,
       price: rate.price,
       availableCollectionMethods: normalizeCollectionMethods(rate.available_collection_method),
-    })).sort((left, right) => left.price - right.price);
+      };
+    }).sort((left, right) => left.price - right.price);
   }
 
   static async rates(input: ShippingInput) {
@@ -169,12 +183,14 @@ export class PublicShippingService {
         width: variant.packageWidthMm / 10,
       })),
       courierCodes,
+      ...(input.includeInsurance ? { courierInsuranceIdr: subtotalIdr } : {}),
     });
 
     return {
       destinationPostalCode: input.destinationPostalCode,
       rates: rates.map((rate) => {
-        return { ...rate, ...calculateShippingPrice(rate.originalPrice, purchaseIdr, rule) };
+        const shipping = calculateShippingPrice(rate.originalPrice, purchaseIdr, rule);
+        return { ...rate, ...shipping, price: shipping.price + rate.insuranceFeeIdr };
       }),
     };
   }

@@ -16,6 +16,7 @@ type InvoiceOrder = {
   shippingOriginalIdr: number;
   shippingDiscountIdr: number;
   shippingIdr: number;
+  insuranceFeeIdr: number;
   totalIdr: number;
   paymentStatus: string;
   lifecycleStatus: string;
@@ -235,6 +236,7 @@ export async function createOrderInvoice(order: InvoiceOrder) {
     ["Shipping", idr(order.shippingOriginalIdr)],
     ...(order.shippingDiscountIdr ? [["Free-shipping coverage", `-${idr(order.shippingDiscountIdr)}`] as [string, string]] : []),
     ...(order.shippingDiscountIdr ? [["Shipping charged", idr(order.shippingIdr)] as [string, string]] : []),
+    ...(order.insuranceFeeIdr ? [["Shipping insurance", idr(order.insuranceFeeIdr)] as [string, string]] : []),
   ];
   for (const [label, value] of totals) {
     page.drawText(label, { x: 350, y, font: regular, size: 9, color: MUTED });

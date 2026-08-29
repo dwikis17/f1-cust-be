@@ -33,7 +33,11 @@ export type MidtransNotification = {
 const snapResponseSchema = z.object({ token: z.string().min(1), redirect_url: z.string().url() }).passthrough();
 const biteshipOrderSchema = z.object({
   id: z.string(),
-  courier: z.object({ tracking_id: z.string().nullish(), waybill_id: z.string().nullish() }).passthrough(),
+  courier: z.object({
+    tracking_id: z.string().nullish(),
+    waybill_id: z.string().nullish(),
+    insurance: z.object({ amount: z.number().int().nonnegative(), fee: z.number().int().nonnegative() }).nullish(),
+  }).passthrough(),
   price: z.number().int().nonnegative(),
   status: z.string(),
 }).passthrough();
@@ -88,6 +92,8 @@ function publicOrder(order: {
   shippingOriginalIdr: number;
   shippingDiscountIdr: number;
   shippingIdr: number;
+  insuranceValueIdr: number;
+  insuranceFeeIdr: number;
   totalIdr: number;
   promoCode: { code: string } | null;
   paymentStatus: string;
@@ -113,6 +119,8 @@ function publicOrder(order: {
     shippingOriginalIdr: order.shippingOriginalIdr,
     shippingDiscountIdr: order.shippingDiscountIdr,
     shippingIdr: order.shippingIdr,
+    insuranceValueIdr: order.insuranceValueIdr,
+    insuranceFeeIdr: order.insuranceFeeIdr,
     totalIdr: order.totalIdr,
     promoCode: order.promoCode?.code ?? null,
     paymentStatus: order.paymentStatus,
@@ -150,6 +158,8 @@ function checkoutResponse(order: {
   shippingOriginalIdr: number;
   shippingDiscountIdr: number;
   shippingIdr: number;
+  insuranceValueIdr: number;
+  insuranceFeeIdr: number;
   totalIdr: number;
   promoCode: { code: string } | null;
 }) {
@@ -164,6 +174,8 @@ function checkoutResponse(order: {
     shippingOriginalIdr: order.shippingOriginalIdr,
     shippingDiscountIdr: order.shippingDiscountIdr,
     shippingIdr: order.shippingIdr,
+    insuranceValueIdr: order.insuranceValueIdr,
+    insuranceFeeIdr: order.insuranceFeeIdr,
     totalIdr: order.totalIdr,
     promoCode: order.promoCode?.code ?? null,
   };
@@ -247,6 +259,12 @@ async function createSnapToken(order: CheckoutOrder) {
           quantity: 1,
           name: "Free-shipping coverage",
         }] : []),
+        ...(order.insuranceFeeIdr > 0 ? [{
+          id: "shipping-insurance",
+          price: order.insuranceFeeIdr,
+          quantity: 1,
+          name: "Shipping insurance",
+        }] : []),
       ],
       customer_details: {
         first_name: order.firstName,
@@ -278,6 +296,8 @@ export type ShipmentBookingResult = {
   trackingId: string | null;
   waybillId: string | null;
   priceIdr: number | null;
+  insuranceValueIdr: number;
+  insuranceFeeIdr: number;
   providerStatus: string;
   collectionMethod: ShipmentCollectionMethod;
   availableCollectionMethods: ShipmentCollectionMethod[];
@@ -373,6 +393,7 @@ async function requestShipmentBookingInternal(
         destination_postal_code: Number(order.postalCode),
         courier_company: order.courierCode,
         courier_type: order.courierServiceCode,
+        ...(order.insuranceValueIdr > 0 ? { courier_insurance: order.insuranceValueIdr } : {}),
         delivery_type: "now",
         reference_id: order.id,
         items: biteshipItems(order),
@@ -397,6 +418,8 @@ async function requestShipmentBookingInternal(
       trackingId: created.data.courier.tracking_id ?? null,
       waybillId: created.data.courier.waybill_id ?? null,
       priceIdr: created.data.price,
+      insuranceValueIdr: created.data.courier.insurance?.amount ?? order.insuranceValueIdr,
+      insuranceFeeIdr: created.data.courier.insurance?.fee ?? order.insuranceFeeIdr,
       providerStatus: created.data.status,
       collectionMethod,
       availableCollectionMethods,
@@ -411,6 +434,8 @@ async function requestShipmentBookingInternal(
     trackingId: null,
     waybillId: duplicate.data.details.waybill_id ?? null,
     priceIdr: null,
+    insuranceValueIdr: order.insuranceValueIdr,
+    insuranceFeeIdr: order.insuranceFeeIdr,
     providerStatus: "confirmed",
     collectionMethod,
     availableCollectionMethods,
@@ -454,9 +479,10 @@ export class PublicCheckoutService {
       destinationPostalCode: input.postalCode,
       items: input.items,
       promoCode: input.promoCode,
+      includeInsurance: input.includeInsurance,
     });
     const rate = quote.rates.find((item) => item.courierCode === input.courierCode && item.serviceCode === input.serviceCode);
-    if (!rate || rate.price !== input.quotedShippingIdr) {
+    if (!rate || rate.price !== input.quotedShippingIdr || (input.includeInsurance && !rate.insuranceAvailable)) {
       throw new HttpError(409, "SHIPPING_RATE_CHANGED", "The selected shipping service or price has changed");
     }
 
@@ -473,6 +499,8 @@ export class PublicCheckoutService {
         shippingPrice: rate.price,
         shippingOriginalPrice: rate.originalPrice,
         shippingDiscount: rate.shippingDiscountIdr,
+        insuranceValue: input.includeInsurance ? rate.insuranceValueIdr : 0,
+        insuranceFee: input.includeInsurance ? rate.insuranceFeeIdr : 0,
         shippingName: rate.courierName,
         shippingServiceName: rate.serviceName,
         shippingDuration: rate.duration,
@@ -533,6 +561,8 @@ export class PublicCheckoutService {
       shippingOriginalIdr: order.shippingOriginalIdr,
       shippingDiscountIdr: order.shippingDiscountIdr,
       shippingIdr: order.shippingIdr,
+      insuranceValueIdr: order.insuranceValueIdr,
+      insuranceFeeIdr: order.insuranceFeeIdr,
       totalIdr: order.totalIdr,
       promoCode: order.promoCode?.code ?? null,
       courier: {
