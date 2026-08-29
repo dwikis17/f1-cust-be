@@ -1,4 +1,5 @@
 import type { z } from "zod";
+import { Prisma } from "../../generated/prisma/client.js";
 import { HttpError, notFound } from "../../http.js";
 import { CatalogRepository } from "../../repositories/admin/catalog-repository.js";
 import {
@@ -20,6 +21,25 @@ type VariantInput = z.infer<typeof variantSchema>;
 type VariantPatch = z.infer<typeof variantPatchSchema>;
 
 const unique = (ids: string[] | undefined) => ids === undefined ? undefined : [...new Set(ids)];
+
+function copyName(name: string, copyNumber: number) {
+  const prefix = copyNumber === 1 ? "Copy of " : `Copy ${copyNumber} of `;
+  return `${prefix}${name.slice(0, 120 - prefix.length)}`;
+}
+
+function copyValue(value: string, copyNumber: number) {
+  const suffix = copyNumber === 1 ? "-copy" : `-copy-${copyNumber}`;
+  return `${value.slice(0, 100 - suffix.length).replace(/-+$/, "")}${suffix}`;
+}
+
+function copySku(sku: string, copyNumber: number, variantIndex: number) {
+  const suffix = copyNumber === 1 ? `-copy-${variantIndex + 1}` : `-copy-${copyNumber}-${variantIndex + 1}`;
+  return `${sku.slice(0, 80 - suffix.length)}${suffix}`;
+}
+
+function isUniqueViolation(error: unknown) {
+  return error instanceof Prisma.PrismaClientKnownRequestError && error.code === "P2002";
+}
 
 export class ProductService {
   private static response(product: ProductWithRelations) {
@@ -126,6 +146,53 @@ export class ProductService {
       },
     });
     return ProductService.response(created);
+  }
+  static async duplicateProduct(id: string) {
+    const source = await ProductRepository.findProduct(id);
+    if (!source) notFound("Product not found");
+
+    for (let copyNumber = 1; copyNumber <= 100; copyNumber += 1) {
+      try {
+        const created = await ProductRepository.createProduct({
+          name: copyName(source.name, copyNumber),
+          nameId: source.nameId,
+          slug: copyValue(source.slug, copyNumber),
+          description: source.description,
+          descriptionId: source.descriptionId,
+          bulletPoints: source.bulletPoints === null ? Prisma.JsonNull : source.bulletPoints,
+          sizingNote: source.sizingNote,
+          priceIdr: source.priceIdr,
+          salePriceIdr: source.salePriceIdr,
+          salePercentage: source.salePercentage,
+          status: "DRAFT",
+          condition: source.condition,
+          category: { connect: { id: source.categoryId } },
+          ...(source.teamId ? { team: { connect: { id: source.teamId } } } : {}),
+          audience: source.audience,
+          tags: { create: source.tags.map(({ tagId }) => ({ tag: { connect: { id: tagId } } })) },
+          drivers: { create: source.drivers.map(({ driverId }) => ({ driver: { connect: { id: driverId } } })) },
+          collections: { create: source.collections.map(({ collectionId }) => ({ collection: { connect: { id: collectionId } } })) },
+          variants: {
+            create: source.variants.map((variant, index) => ({
+              sku: copySku(variant.sku, copyNumber, index),
+              size: variant.size,
+              color: variant.color,
+              stockQuantity: 0,
+              packageLengthMm: variant.packageLengthMm,
+              packageWidthMm: variant.packageWidthMm,
+              packageHeightMm: variant.packageHeightMm,
+              packageWeightG: variant.packageWeightG,
+              sizingGuide: variant.sizingGuide,
+              position: variant.position,
+            })),
+          },
+        });
+        return ProductService.response(created);
+      } catch (error) {
+        if (!isUniqueViolation(error) || copyNumber === 100) throw error;
+      }
+    }
+    throw new Error("Unreachable");
   }
   static async updateProduct(id: string, input: ProductPatch) {
     const current = await ProductRepository.findProduct(id);

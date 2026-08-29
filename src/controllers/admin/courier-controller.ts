@@ -2,6 +2,7 @@ import type { NextFunction, Request, Response } from "express";
 import { z } from "zod";
 import { parse } from "../../http.js";
 import { CourierService } from "../../services/admin/courier-service.js";
+import { revalidateStorefrontNow } from "../../storefront-revalidation.js";
 
 const courierCodeSchema = z.string().trim().toLowerCase().min(1).max(64).regex(/^[a-z0-9_]+$/);
 const courierUpdateSchema = z.object({ active: z.boolean() }).strict();
@@ -32,7 +33,9 @@ export class CourierController {
 
   static async updateFreeShippingRule(request: Request, response: Response, next: NextFunction) {
     try {
-      response.json(await CourierService.updateFreeShippingRule(parse(freeShippingRuleSchema, request.body)));
+      const rule = await CourierService.updateFreeShippingRule(parse(freeShippingRuleSchema, request.body));
+      await revalidateStorefrontNow(["shipping:free-shipping-policy"]);
+      response.json(rule);
     } catch (error) {
       next(error);
     }

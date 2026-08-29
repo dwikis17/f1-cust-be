@@ -134,6 +134,7 @@ router.post("/collections/:id/image", upload.single("image"), MediaController.re
 router.get("/products", ProductController.listProducts);
 router.get("/products/:id", ProductController.findProduct);
 router.post("/products", ProductController.createProduct);
+router.post("/products/:id/duplicate", ProductController.duplicateProduct);
 router.patch("/products/:id", ProductController.updateProduct);
 router.post("/products/:productId/variants", ProductController.createVariant);
 router.patch("/products/:productId/variants/:id", ProductController.updateVariant);

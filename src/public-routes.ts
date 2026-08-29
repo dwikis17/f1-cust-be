@@ -26,6 +26,7 @@ router.get("/content/shipping-returns", StorefrontContentController.findShipping
 router.get("/content/support", StorefrontContentController.findSupport);
 router.get("/home", HomeController.listPublic);
 router.get("/home/collection-blocks", HomeController.listPublicCollectionBlocks);
+router.get("/shipping/free-shipping-policy", PublicShippingController.freeShippingPolicy);
 router.post("/shipping/rates", PublicShippingController.rates);
 router.post("/promo-codes/preview", PromoCodeController.preview);
 router.post("/checkout", PublicCheckoutController.create);

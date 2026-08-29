@@ -1117,6 +1117,76 @@ test("admin product list paginates and filters on the server", async () => {
   await list("unknown=true").expect(400);
 });
 
+test("admins duplicate products as drafts without photos or inventory", async () => {
+  const source = await request(app).post("/api/admin/products").set("authorization", `Bearer ${token}`)
+    .send({
+      name: "Duplicate Source",
+      nameId: "Sumber Duplikat",
+      slug: "duplicate-source",
+      description: "A complete product to copy.",
+      descriptionId: "Produk lengkap untuk disalin.",
+      bulletPoints: [{ text: "Original detail", textId: "Detail asli" }],
+      sizingNote: "Original sizing note.",
+      priceIdr: 100_000,
+      salePriceIdr: 90_000,
+      status: "ACTIVE",
+      condition: "BNWT",
+      categoryId,
+      teamId,
+      driverIds: [driverId],
+      collectionIds: [ferrariCollectionId],
+      audience: "UNISEX",
+      variants: [{
+        sku: "DUP-SOURCE-M",
+        size: "M",
+        color: "Red",
+        stockQuantity: 5,
+        packageLengthMm: 300,
+        packageWidthMm: 200,
+        packageHeightMm: 50,
+        packageWeightG: 400,
+        sizingGuide: { unit: "cm", measurements: { length: 70, chestWidth: 50, waistWidth: 48 } },
+      }],
+    }).expect(201);
+  const sourceId = source.body.id;
+  await prisma.productPhoto.create({
+    data: { productId: sourceId, path: `duplicate-source-${randomUUID()}.webp`, altText: "Source photo" },
+  });
+  await prisma.productCollection.updateMany({ where: { productId: sourceId }, data: { featured: true, position: 7 } });
+
+  await request(app).post("/api/admin/products/not-a-uuid/duplicate").set("authorization", `Bearer ${token}`).expect(400);
+  await request(app).post(`/api/admin/products/${randomUUID()}/duplicate`).set("authorization", `Bearer ${token}`).expect(404);
+
+  const duplicate = await request(app).post(`/api/admin/products/${sourceId}/duplicate`)
+    .set("authorization", `Bearer ${token}`).expect(201);
+  assert.equal(duplicate.body.status, "DRAFT");
+  assert.equal(duplicate.body.name, "Copy of Duplicate Source");
+  assert.equal(duplicate.body.slug, "duplicate-source-copy");
+  assert.equal(duplicate.body.nameId, source.body.nameId);
+  assert.equal(duplicate.body.descriptionId, source.body.descriptionId);
+  assert.deepEqual(duplicate.body.bulletPoints, source.body.bulletPoints);
+  assert.equal(duplicate.body.variants[0].sku, "DUP-SOURCE-M-copy-1");
+  assert.equal(duplicate.body.variants[0].stockQuantity, 0);
+  assert.equal(duplicate.body.variants[0].sizingGuide.unit, "cm");
+  assert.equal(duplicate.body.photos.length, 0);
+  assert.deepEqual(duplicate.body.driverIds, [driverId]);
+  assert.deepEqual(duplicate.body.collectionIds, [ferrariCollectionId]);
+  const copiedMembership = await prisma.productCollection.findUniqueOrThrow({
+    where: { productId_collectionId: { productId: duplicate.body.id, collectionId: ferrariCollectionId } },
+  });
+  assert.equal(copiedMembership.featured, false);
+  assert.equal(copiedMembership.position, null);
+
+  await request(app).patch(`/api/admin/products/${sourceId}`).set("authorization", `Bearer ${token}`)
+    .send({ status: "ARCHIVED" }).expect(200);
+  const archivedDuplicate = await request(app).post(`/api/admin/products/${sourceId}/duplicate`)
+    .set("authorization", `Bearer ${token}`).expect(201);
+  assert.equal(archivedDuplicate.body.status, "DRAFT");
+  assert.equal(archivedDuplicate.body.slug, "duplicate-source-copy-2");
+
+  await prisma.product.deleteMany({ where: { id: { in: [sourceId, duplicate.body.id, archivedDuplicate.body.id] } } });
+});
+
 test("collection relations validate kind and allow multiple collections per entity", async () => {
   await request(app).post("/api/admin/collections").set("authorization", `Bearer ${token}`)
     .send({ name: "Missing Driver", slug: "missing-driver", kind: "DRIVER" }).expect(400);
@@ -2086,6 +2156,11 @@ test("shipping rates use authoritative cart data and normalize Biteship response
       destinationPostalCode: "12240",
       items: [{ variantId, quantity: 1 }],
     };
+    await request(app).get("/api/shipping/free-shipping-policy").expect(200, {
+      active: false,
+      minimumPurchaseIdr: 1_000_000,
+      maxCoverageIdr: 25_000,
+    });
     await request(app).post("/api/shipping/rates").send(protectedRequest).expect(403);
     for (const turnstileToken of ["turnstile-rejected", "turnstile-wrong-action", "turnstile-wrong-hostname"]) {
       await request(app).post("/api/shipping/rates").send({ ...protectedRequest, turnstileToken }).expect(403);

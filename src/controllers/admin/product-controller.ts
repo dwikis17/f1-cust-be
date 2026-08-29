@@ -52,6 +52,14 @@ export class ProductController {
       next(error);
     }
   }
+  static async duplicateProduct(request: Request, response: Response, next: NextFunction) {
+    try {
+      const product = await ProductService.duplicateProduct(parse(idSchema, request.params.id));
+      response.status(201).json(product);
+    } catch (error) {
+      next(error);
+    }
+  }
   static async updateProduct(request: Request, response: Response, next: NextFunction) {
     try {
       const id = parse(idSchema, request.params.id);
