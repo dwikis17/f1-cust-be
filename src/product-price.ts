@@ -3,8 +3,8 @@ type ProductPrice = {
   salePriceIdr: number | null;
 };
 
-export function salePriceFromPercentage(priceIdr: number, salePercentage: number | null) {
-  return salePercentage === null ? null : Math.round(priceIdr * (100 - salePercentage) / 100);
+export function salePercentageFromSalePrice(priceIdr: number, salePriceIdr: number | null) {
+  return salePriceIdr === null ? null : Math.max(1, Math.round((priceIdr - salePriceIdr) * 100 / priceIdr));
 }
 
 export function effectivePriceIdr(product: ProductPrice) {

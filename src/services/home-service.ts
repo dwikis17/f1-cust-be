@@ -189,11 +189,8 @@ async function validateActiveBlockLimit(active: boolean, wasActive = false) {
 
 async function storeBlockImages(
   images: CollectionBlockImages,
-  current?: { leadImageUrl: string; sideImageOneUrl: string; sideImageTwoUrl: string },
+  current?: { leadImageUrl: string | null; sideImageOneUrl: string | null; sideImageTwoUrl: string | null },
 ) {
-  if (!current && (!images.leadImage || !images.sideImageOne || !images.sideImageTwo)) {
-    throw new HttpError(400, "COLLECTION_BLOCK_IMAGES_REQUIRED", "Lead and both side images are required");
-  }
   const uploads = [
     ["leadImageUrl", "home-collection-lead", images.leadImage],
     ["sideImageOneUrl", "home-collection-side-one", images.sideImageOne],
@@ -216,9 +213,9 @@ async function storeBlockImages(
   const urls = Object.fromEntries(entries.map(({ field, key }) => [field, MediaRepository.photoUrl(key)]));
   return {
     keys: entries.map(({ key }) => key),
-    leadImageUrl: urls.leadImageUrl ?? current!.leadImageUrl,
-    sideImageOneUrl: urls.sideImageOneUrl ?? current!.sideImageOneUrl,
-    sideImageTwoUrl: urls.sideImageTwoUrl ?? current!.sideImageTwoUrl,
+    leadImageUrl: urls.leadImageUrl ?? current?.leadImageUrl ?? null,
+    sideImageOneUrl: urls.sideImageOneUrl ?? current?.sideImageOneUrl ?? null,
+    sideImageTwoUrl: urls.sideImageTwoUrl ?? current?.sideImageTwoUrl ?? null,
   };
 }
 
@@ -230,26 +227,23 @@ export class HomeCollectionBlockService {
   static async listPublic(locale: "en" | "id") {
     const blocks = await HomeRepository.listPublicBlocks(MAX_ACTIVE_COLLECTION_BLOCKS);
     const values = await Promise.all(blocks.map(async (block) => {
-      const [, memberships] = await PublicProductRepository.listCollectionProducts(
+      const memberships = await PublicProductRepository.listFeaturedCollectionProductCards(
         block.collection!.slug,
-        {},
-        "featured",
-        1,
         5,
       );
       if (!memberships.length) return null;
       const collection = block.collection!;
       return {
         id: block.id,
-        leadImageUrl: storedPhotoUrl(block.leadImageUrl),
-        sideImageOneUrl: storedPhotoUrl(block.sideImageOneUrl),
-        sideImageTwoUrl: storedPhotoUrl(block.sideImageTwoUrl),
+        leadImageUrl: block.leadImageUrl ? storedPhotoUrl(block.leadImageUrl) : null,
+        sideImageOneUrl: block.sideImageOneUrl ? storedPhotoUrl(block.sideImageOneUrl) : null,
+        sideImageTwoUrl: block.sideImageTwoUrl ? storedPhotoUrl(block.sideImageTwoUrl) : null,
         collection: {
           name: collection.name,
           slug: collection.slug,
           description: locale === "id" ? collection.descriptionId ?? collection.description : collection.description,
         },
-        products: memberships.map(({ product }) => PublicProductService.publicProduct(product, locale)),
+        products: memberships.map(({ product }) => PublicProductService.publicProductCard(product, locale)),
       };
     }));
     return values.filter((value) => value !== null);

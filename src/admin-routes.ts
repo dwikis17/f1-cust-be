@@ -3,6 +3,7 @@ import multer from "multer";
 import { config } from "./config.js";
 import { AuthController } from "./controllers/admin/auth-controller.js";
 import { CatalogController } from "./controllers/admin/catalog-controller.js";
+import { CourierController } from "./controllers/admin/courier-controller.js";
 import { DashboardController } from "./controllers/admin/dashboard-controller.js";
 import { MediaController } from "./controllers/admin/media-controller.js";
 import { OrderController } from "./controllers/admin/order-controller.js";
@@ -10,6 +11,7 @@ import { ProductController } from "./controllers/admin/product-controller.js";
 import { PromoCodeController } from "./controllers/promo-code-controller.js";
 import { FaqController } from "./controllers/faq-controller.js";
 import { HomeController } from "./controllers/home-controller.js";
+import { StorefrontContentController } from "./controllers/storefront-content-controller.js";
 
 const router = Router();
 const upload = multer({ storage: multer.memoryStorage(), limits: { fileSize: config.maxUploadBytes, files: 3 } });
@@ -25,6 +27,9 @@ router.post("/auth/logout", AuthController.logout);
 router.get("/auth/me", AuthController.me);
 
 router.get("/dashboard", DashboardController.summary);
+router.get("/couriers", CourierController.list);
+router.put("/couriers/free-shipping", CourierController.updateFreeShippingRule);
+router.patch("/couriers/:code", CourierController.update);
 router.get("/orders", OrderController.list);
 router.get("/orders/export.csv", OrderController.exportCsv);
 router.get("/orders/:id", OrderController.find);
@@ -46,6 +51,9 @@ router.get("/faqs", FaqController.list);
 router.post("/faqs", FaqController.create);
 router.patch("/faqs/:id", FaqController.update);
 router.delete("/faqs/:id", FaqController.remove);
+
+router.get("/content/shipping-returns", StorefrontContentController.findAdmin);
+router.put("/content/shipping-returns", StorefrontContentController.replace);
 
 router.get("/home", HomeController.listAdmin);
 router.get("/home/collection-blocks", HomeController.listAdminCollectionBlocks);
@@ -126,6 +134,7 @@ router.post("/collections/:id/image", upload.single("image"), MediaController.re
 router.get("/products", ProductController.listProducts);
 router.get("/products/:id", ProductController.findProduct);
 router.post("/products", ProductController.createProduct);
+router.post("/products/:id/duplicate", ProductController.duplicateProduct);
 router.patch("/products/:id", ProductController.updateProduct);
 router.post("/products/:productId/variants", ProductController.createVariant);
 router.patch("/products/:productId/variants/:id", ProductController.updateVariant);

@@ -9,8 +9,8 @@
 	"placement": { "mode": "smart" },
   "triggers": {
     "crons": [
-      "45 16 * * *",
-      "*/5 * * * *"
+      "0 * * * *",
+      "0 */3 * * *"
     ]
   },
   "vars": {
@@ -20,19 +20,20 @@
     "MAX_UPLOAD_BYTES": "5242880",
     "MAX_PHOTOS_PER_PRODUCT": "12",
     "PHOTO_PUBLIC_BASE_URL": "https://media.valydejersey.com",
-    "BITESHIP_COURIERS": "jne,jnt,sicepat,anteraja",
     "BITESHIP_ORIGIN_POSTAL_CODE": "28123",
     "BITESHIP_ORIGIN_CONTACT_NAME": "Valyde Jersey",
     "BITESHIP_ORIGIN_CONTACT_PHONE": "+6285121565774",
     "BITESHIP_ORIGIN_ADDRESS": "Jalan Kemiri No 2 Sukajadi Pekanbaru Riau",
     "MIDTRANS_ENV": "production",
     "MIDTRANS_MERCHANT_ID": "M309500554",
+    "MIDTRANS_NOTIFICATION_URL": "https://api.valydejersey.com/api/payments/midtrans/notification",
     "STOREFRONT_URL": "https://valydejersey.com",
     "ADMIN_DASHBOARD_URL": "https://admin-dash.valydejersey.com",
     "EMAIL_FROM_ADDRESS": "orders@valydejersey.com",
     "EMAIL_FROM_NAME": "Valyde Jersey",
     "EMAIL_REPLY_TO": "support@valydejersey.com",
     "EMAIL_DELIVERY_ENABLED": "true",
+    "TURNSTILE_ENABLED": "false",
     "INVOICE_SELLER_NAME": "Valyde Jersey",
     "INVOICE_SELLER_EMAIL": "support@valydejersey.com",
     "INVOICE_SELLER_PHONE": "+6285121565774",
@@ -49,7 +50,7 @@
   "hyperdrive": [
     {
       "binding": "HYPERDRIVE",
-      "id": "dc41a0198dc848fb8179a4b6d72d0473",
+      "id": "7dcd4ec3f00e451598df6fe75b8dd41e",
       "localConnectionString": "postgresql://f1:f1@localhost:5432/f1_store"
     }
   ],
@@ -84,7 +85,6 @@
         "MAX_UPLOAD_BYTES": "5242880",
         "MAX_PHOTOS_PER_PRODUCT": "12",
         "PHOTO_PUBLIC_BASE_URL": "https://dev-media.valydejersey.com",
-        "BITESHIP_COURIERS": "jne,jnt,sicepat,anteraja",
         "BITESHIP_ORIGIN_POSTAL_CODE": "15318",
         "BITESHIP_ORIGIN_CONTACT_NAME": "dwiki",
         "BITESHIP_ORIGIN_CONTACT_PHONE": "081382854010",
@@ -98,6 +98,7 @@
         "EMAIL_FROM_NAME": "Valyde Jersey",
         "EMAIL_REPLY_TO": "support@valydejersey.com",
         "EMAIL_DELIVERY_ENABLED": "false",
+        "TURNSTILE_ENABLED": "false",
         "INVOICE_SELLER_NAME": "Valyde Jersey",
         "INVOICE_SELLER_EMAIL": "support@valydejersey.com",
         "INVOICE_SELLER_PHONE": "081382854010",

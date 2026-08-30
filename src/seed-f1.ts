@@ -2,6 +2,7 @@ import "dotenv/config";
 import { resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 import { prisma } from "./db-node.js";
+import { storefrontContentSeed } from "./storefront-content.js";
 
 const logoUrl = (team: string) =>
   `https://media.formula1.com/image/upload/c_fit,w_512,h_256/q_auto/v1740000001/common/f1/2026/${team}/2026${team}logowhite.webp`;
@@ -208,6 +209,22 @@ export const driversCopy = {
 };
 
 async function main() {
+  await prisma.storefrontContent.upsert({
+    where: { id: "default" },
+    create: {
+      id: "default",
+      supportEmail: storefrontContentSeed.support.email,
+      supportWhatsappNumber: storefrontContentSeed.support.whatsappNumber,
+      supportWhatsappDisplay: storefrontContentSeed.support.whatsappDisplay,
+      shippingReturns: storefrontContentSeed.shippingReturns,
+    },
+    update: {
+      supportEmail: storefrontContentSeed.support.email,
+      supportWhatsappNumber: storefrontContentSeed.support.whatsappNumber,
+      supportWhatsappDisplay: storefrontContentSeed.support.whatsappDisplay,
+      shippingReturns: storefrontContentSeed.shippingReturns,
+    },
+  });
   const teamIds = new Map<string, string>();
   const driverIds = new Map<string, string>();
   const teamCollectionIds = new Map<string, string>();

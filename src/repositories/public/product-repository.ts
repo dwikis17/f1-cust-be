@@ -9,6 +9,27 @@ import { storedPhotoUrl } from "../../photo-storage.js";
 import { effectivePriceIdr } from "../../product-price.js";
 import { productInclude } from "../admin/product-repository.js";
 
+const productCardSelect = {
+  id: true,
+  name: true,
+  nameId: true,
+  slug: true,
+  priceIdr: true,
+  salePriceIdr: true,
+  salePercentage: true,
+  condition: true,
+  category: { select: { name: true } },
+  team: { select: { name: true } },
+  tags: { select: { tag: { select: { id: true, name: true } } } },
+  photos: {
+    select: { path: true, altText: true },
+    orderBy: [{ position: "asc" as const }, { createdAt: "asc" as const }],
+    take: 2,
+  },
+} satisfies Prisma.ProductSelect;
+
+export type PublicProductCardRecord = Prisma.ProductGetPayload<{ select: typeof productCardSelect }>;
+
 export type ProductSort =
   | "featured"
   | "relevance"
@@ -35,10 +56,31 @@ export type ProductFilters = {
   onSale?: boolean;
 };
 
-type FacetName = "team" | "driver" | "productType" | "audience" | "condition" | "availability" | "price";
+type FacetName = "tag" | "team" | "driver" | "productType" | "audience" | "condition" | "availability" | "price";
 type PriceRow = { id: string; priceIdr: number; salePriceIdr: number | null };
 
 const hasPriceFilter = (filters: ProductFilters) => filters.minPrice !== undefined || filters.maxPrice !== undefined;
+
+function searchTerms(value: string) {
+  return [...new Set(value.normalize("NFKC").match(/[\p{L}\p{N}]+/gu)?.map((term) => term.toLowerCase()) ?? [])];
+}
+
+function productSearchWhere(search: string): Prisma.ProductWhereInput {
+  const terms = searchTerms(search);
+  // ponytail: tokenized ILIKE scans across catalog relations; use PostgreSQL full-text/trigram indexing if search latency grows.
+  return {
+    AND: terms.length ? terms.map((term) => ({
+      OR: [
+        { name: { contains: term, mode: "insensitive" } },
+        { nameId: { contains: term, mode: "insensitive" } },
+        { category: { name: { contains: term, mode: "insensitive" } } },
+        { team: { name: { contains: term, mode: "insensitive" } } },
+        { tags: { some: { tag: { name: { contains: term, mode: "insensitive" } } } } },
+        { drivers: { some: { driver: { name: { contains: term, mode: "insensitive" } } } } },
+      ],
+    })) : [{ name: { contains: search, mode: "insensitive" } }],
+  };
+}
 
 function matchesPrice(product: PriceRow, filters: ProductFilters) {
   const price = effectivePriceIdr(product);
@@ -55,14 +97,7 @@ function productWhere(filters: ProductFilters, omit?: FacetName): Prisma.Product
   const hasVariantFilter = Object.keys(variantFilter).length > 0;
   return {
     status: "ACTIVE",
-    ...(filters.search && {
-      OR: [
-        { name: { contains: filters.search, mode: "insensitive" } },
-        { nameId: { contains: filters.search, mode: "insensitive" } },
-        { description: { contains: filters.search, mode: "insensitive" } },
-        { descriptionId: { contains: filters.search, mode: "insensitive" } },
-      ],
-    }),
+    ...(filters.search && productSearchWhere(filters.search)),
     ...(omit !== "productType" && filters.productTypes?.length && {
       category: { slug: { in: filters.productTypes } },
     }),
@@ -135,7 +170,7 @@ export class PublicProductRepository {
           || left.id.localeCompare(right.id));
       }
       const ids = filtered.slice((page - 1) * limit, page * limit).map(({ id }) => id);
-      const products = await prisma.product.findMany({ where: { id: { in: ids } }, include: productInclude });
+      const products = await prisma.product.findMany({ where: { id: { in: ids } }, select: productCardSelect });
       const byId = new Map(products.map((product) => [product.id, product]));
       return [filtered.length, ids.flatMap((id) => {
         const product = byId.get(id);
@@ -146,7 +181,7 @@ export class PublicProductRepository {
       prisma.product.count({ where }),
       prisma.product.findMany({
         where,
-        include: productInclude,
+        select: productCardSelect,
         orderBy: productOrderBy(sort),
         skip: (page - 1) * limit,
         take: limit,
@@ -181,7 +216,7 @@ export class PublicProductRepository {
       const ids = filtered.slice((page - 1) * limit, page * limit).map(({ product: { id } }) => id);
       const memberships = await prisma.productCollection.findMany({
         where: { collection: { slug: collectionSlug, active: true }, productId: { in: ids } },
-        include: { product: { include: productInclude } },
+        select: { productId: true, product: { select: productCardSelect } },
       });
       const byId = new Map(memberships.map((membership) => [membership.productId, membership]));
       return [filtered.length, ids.flatMap((id) => {
@@ -193,7 +228,7 @@ export class PublicProductRepository {
       prisma.productCollection.count({ where }),
       prisma.productCollection.findMany({
         where,
-        include: { product: { include: productInclude } },
+        select: { productId: true, product: { select: productCardSelect } },
         orderBy: membershipOrderBy(sort),
         skip: (page - 1) * limit,
         take: limit,
@@ -209,6 +244,7 @@ export class PublicProductRepository {
         omit,
       );
     const [
+      tagWhere,
       teamWhere,
       driverWhere,
       productTypeWhere,
@@ -217,6 +253,7 @@ export class PublicProductRepository {
       availabilityWhere,
       priceWhere,
     ] = await Promise.all([
+      scoped("tag"),
       scoped("team"),
       scoped("driver"),
       scoped("productType"),
@@ -226,6 +263,10 @@ export class PublicProductRepository {
       scoped("price"),
     ]);
     return Promise.all([
+      prisma.product.findMany({
+        where: tagWhere,
+        select: { tags: { select: { tag: true } } },
+      }),
       prisma.product.findMany({ where: teamWhere, select: { team: true } }),
       prisma.product.findMany({
         where: driverWhere,
@@ -245,12 +286,21 @@ export class PublicProductRepository {
     ]);
   }
 
+  static listFeaturedCollectionProductCards(collectionSlug: string, limit: number) {
+    return prisma.productCollection.findMany({
+      where: { collection: { slug: collectionSlug, active: true }, product: { status: "ACTIVE" } },
+      select: { product: { select: productCardSelect } },
+      orderBy: membershipOrderBy("featured"),
+      take: limit,
+    });
+  }
+
   static findProduct(slug: string) {
     return prisma.product.findFirst({ where: { slug, status: "ACTIVE" }, include: productInclude });
   }
 
-  static findCartItems(variantIds: string[]) {
-    return prisma.productVariant.findMany({
+  static async findCartItems(variantIds: string[]) {
+    const variants = prisma.productVariant.findMany({
       where: { id: { in: variantIds }, product: { status: "ACTIVE" } },
       select: {
         id: true,
@@ -277,6 +327,17 @@ export class PublicProductRepository {
         },
       },
     });
+    const sales = prisma.orderItem.groupBy({
+      by: ["variantId"],
+      where: {
+        variantId: { in: variantIds },
+        order: { paymentStatus: "PAID", lifecycleStatus: { not: "CANCELLED" } },
+      },
+      _sum: { quantity: true },
+    });
+    const [cartItems, saleCounts] = await Promise.all([variants, sales]);
+    const unitsSold = new Map(saleCounts.map((sale) => [sale.variantId, sale._sum.quantity ?? 0]));
+    return cartItems.map((variant) => ({ ...variant, unitsSold: unitsSold.get(variant.id) ?? 0 }));
   }
 }
 

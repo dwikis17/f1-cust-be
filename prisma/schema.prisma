@@ -107,6 +107,21 @@ model AdminSession {
   @@index([expiresAt])
 }
 
+model ShippingCourier {
+  code      String   @id
+  active    Boolean  @default(false)
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+}
+
+model FreeShippingRule {
+  id                 Int      @id @default(1)
+  active             Boolean  @default(false)
+  minimumPurchaseIdr Int      @default(1000000)
+  maxCoverageIdr     Int      @default(25000)
+  updatedAt          DateTime @updatedAt
+}
+
 model Category {
   id        String    @id @default(uuid()) @db.Uuid
   name      String    @unique
@@ -160,6 +175,7 @@ model Product {
   slug          String              @unique
   description   String              @default("")
   descriptionId String?
+  bulletPoints  Json                @default("[]")
   sizingNote    String?
   priceIdr      Int
   salePriceIdr  Int?
@@ -253,9 +269,9 @@ model HomeHero {
 
 model HomeCollectionBlock {
   id              String      @id @default(uuid()) @db.Uuid
-  leadImageUrl    String
-  sideImageOneUrl String
-  sideImageTwoUrl String
+  leadImageUrl    String?
+  sideImageOneUrl String?
+  sideImageTwoUrl String?
   collectionId    String?     @unique @db.Uuid
   collection      Collection? @relation(fields: [collectionId], references: [id], onDelete: SetNull)
   position        Int         @default(0)
@@ -292,6 +308,7 @@ model ProductVariant {
   id              String      @id @default(uuid()) @db.Uuid
   productId       String      @db.Uuid
   product         Product     @relation(fields: [productId], references: [id], onDelete: Cascade)
+  position        Int         @default(0)
   sku             String      @unique
   size            String?
   color           String?
@@ -337,6 +354,16 @@ model Faq {
   @@index([active, position, createdAt])
 }
 
+model StorefrontContent {
+  id                     String   @id
+  supportEmail           String
+  supportWhatsappNumber  String
+  supportWhatsappDisplay String
+  shippingReturns        Json
+  createdAt              DateTime @default(now())
+  updatedAt              DateTime @updatedAt
+}
+
 model Order {
   id                                 String                     @id @default(uuid()) @db.Uuid
   orderNumber                        String                     @unique
@@ -351,7 +378,11 @@ model Order {
   postalCode                         String
   subtotalIdr                        Int
   discountIdr                        Int                        @default(0)
+  shippingOriginalIdr                Int                        @default(0)
+  shippingDiscountIdr                Int                        @default(0)
   shippingIdr                        Int
+  insuranceValueIdr                  Int                        @default(0)
+  insuranceFeeIdr                    Int                        @default(0)
   totalIdr                           Int
   promoCodeId                        String?                    @db.Uuid
   promoCode                          PromoCode?                 @relation(fields: [promoCodeId], references: [id], onDelete: Restrict)
@@ -366,6 +397,7 @@ model Order {
   midtransTransactionId              String?
   midtransPaymentType                String?
   midtransSnapToken                  String?
+  paymentExpiresAt                   DateTime                   @default(dbgenerated("(CURRENT_TIMESTAMP + INTERVAL '24 hours')"))
   paymentConfirmationEmailSendingAt  DateTime?
   paymentConfirmationEmailSentAt     DateTime?
   telegramNotificationQueuedAt       DateTime?
@@ -398,6 +430,7 @@ model Order {
   updatedAt                          DateTime                   @updatedAt
 
   @@index([paymentStatus, createdAt])
+  @@index([paymentStatus, paymentExpiresAt])
   @@index([telegramNotificationQueuedAt, telegramNotificationSentAt])
   @@index([shipmentBookingStatus, createdAt])
   @@index([shipmentBookingStartedAt])

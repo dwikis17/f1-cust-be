@@ -8,14 +8,20 @@ function isHttpError(status: number, code: string) {
   return (error: unknown) => error instanceof HttpError && error.status === status && error.code === code;
 }
 
-test("human verification validates the expected action and hostname and fails closed", async () => {
+test("human verification validates the expected action and can be disabled", async () => {
   const originalFetch = globalThis.fetch;
+  const originalEnabled = config.turnstileEnabled;
   const originalSecret = config.turnstileSecretKey;
   const originalStorefrontUrl = config.storefrontUrl;
   config.turnstileSecretKey = "turnstile-test-secret";
   config.storefrontUrl = "https://valydejersey.com";
 
   try {
+    config.turnstileEnabled = false;
+    globalThis.fetch = async () => { throw new Error("Turnstile should be disabled"); };
+    await verifyHuman(undefined, "checkout");
+
+    config.turnstileEnabled = true;
     globalThis.fetch = async (_input, init) => {
       const request = JSON.parse(String(init?.body)) as { secret: string; response: string; remoteip?: string };
       assert.equal(request.secret, "turnstile-test-secret");
@@ -53,6 +59,7 @@ test("human verification validates the expected action and hostname and fails cl
     await assert.rejects(() => verifyHuman("valid-token", "checkout"), isHttpError(503, "HUMAN_VERIFICATION_UNAVAILABLE"));
   } finally {
     globalThis.fetch = originalFetch;
+    config.turnstileEnabled = originalEnabled;
     config.turnstileSecretKey = originalSecret;
     config.storefrontUrl = originalStorefrontUrl;
   }

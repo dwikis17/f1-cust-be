@@ -1,6 +1,7 @@
 import type { Prisma } from "../generated/prisma/client.js";
 import { prisma } from "../db.js";
 import { effectivePriceIdr } from "../product-price.js";
+import { ProductRepository } from "./admin/product-repository.js";
 import {
   defaultCollectionMethod,
   fromDbCollectionMethod,
@@ -41,6 +42,7 @@ export type CheckoutInput = {
   items: Array<{ variantId: string; quantity: number }>;
   courierCode: string;
   serviceCode: string;
+  quotedShippingIdr: number;
   promoCode?: string;
 };
 
@@ -75,6 +77,8 @@ export type ShipmentBookingSuccess = {
   trackingId: string | null;
   waybillId: string | null;
   priceIdr: number | null;
+  insuranceValueIdr: number;
+  insuranceFeeIdr: number;
   providerStatus: string;
   collectionMethod: ShipmentCollectionMethod;
   availableCollectionMethods: ShipmentCollectionMethod[];
@@ -357,6 +361,8 @@ export class OrderRepository {
           biteshipTrackingId: input.result.trackingId,
           biteshipWaybillId: input.result.waybillId,
           biteshipPriceIdr: input.result.priceIdr,
+          insuranceValueIdr: input.result.insuranceValueIdr,
+          insuranceFeeIdr: input.result.insuranceFeeIdr,
           biteshipStatus: input.result.providerStatus,
         },
       });
@@ -503,7 +509,13 @@ export class OrderRepository {
   static async createCheckoutOrder(input: CheckoutInput & {
     orderId: string;
     orderNumber: string;
+    createdAt: Date;
+    paymentExpiresAt: Date;
     shippingPrice: number;
+    shippingOriginalPrice: number;
+    shippingDiscount: number;
+    insuranceValue: number;
+    insuranceFee: number;
     shippingName: string;
     shippingServiceName: string;
     shippingDuration: string;
@@ -560,6 +572,8 @@ export class OrderRepository {
           data: {
             id: input.orderId,
             orderNumber: input.orderNumber,
+            createdAt: input.createdAt,
+            paymentExpiresAt: input.paymentExpiresAt,
             idempotencyKey: input.idempotencyKey,
             email: input.email,
             firstName: input.firstName,
@@ -571,7 +585,11 @@ export class OrderRepository {
             postalCode: input.postalCode,
             subtotalIdr,
             discountIdr,
+            shippingOriginalIdr: input.shippingOriginalPrice,
+            shippingDiscountIdr: input.shippingDiscount,
             shippingIdr: input.shippingPrice,
+            insuranceValueIdr: input.insuranceValue,
+            insuranceFeeIdr: input.insuranceFee,
             totalIdr: subtotalIdr - discountIdr + input.shippingPrice,
             promoCodeId: promoCode?.id,
             courierCode: input.courierCode,
@@ -624,7 +642,7 @@ export class OrderRepository {
         ...(legacyId ? { id: legacyId } : { orderNumber }),
         email: { equals: email, mode: "insensitive" },
       },
-      include: { items: true },
+      include: { items: true, promoCode: { select: { code: true } } },
     });
   }
 
@@ -677,9 +695,13 @@ export class OrderRepository {
         SELECT "id" FROM "Order" WHERE "id" = ${input.orderId}::uuid FOR UPDATE
       `;
       if (!locked.length) return { status: "NOT_FOUND" as const };
-      const order = await tx.order.findUnique({ where: { id: input.orderId }, include: { items: true } });
+      const order = await tx.order.findUnique({
+        where: { id: input.orderId },
+        include: { items: { include: { variant: { select: { productId: true } } } } },
+      });
       if (!order) return { status: "NOT_FOUND" as const };
       const updateData = (data: Record<string, unknown>) => data as Prisma.OrderUpdateInput;
+      const productIds = [...new Set(order.items.flatMap(({ variant }) => variant?.productId ? [variant.productId] : []))];
 
       if (input.paid && order.lifecycleStatus === "CANCELLED" && order.paymentStatus !== "REFUNDED") {
         await tx.order.update({
@@ -777,6 +799,7 @@ export class OrderRepository {
             data: updateData({ ...input.transaction, ...redemption, ...input.telegramPaidFields(order), paymentStatus: "PAID" }),
           });
         }
+        await ProductRepository.archiveSoldOutProducts(tx, productIds);
       } else if (input.terminal && order.paymentStatus === "PENDING") {
         if (!order.stockReleasedAt) {
           for (const item of order.items) {
@@ -814,16 +837,15 @@ export class OrderRepository {
     }, { timeout: 10_000 });
   }
 
-  static listPendingPaymentReconciliations(staleBefore: Date, batchSize: number) {
+  static listPendingPaymentReconciliations(now: Date, batchSize: number) {
     return prisma.order.findMany({
       where: {
         paymentStatus: "PENDING",
         midtransSnapToken: { not: null },
-        createdAt: { lte: staleBefore },
-        updatedAt: { lte: staleBefore },
+        paymentExpiresAt: { lte: now },
       },
       select: { id: true, totalIdr: true },
-      orderBy: [{ updatedAt: "asc" }, { id: "asc" }],
+      orderBy: [{ paymentExpiresAt: "asc" }, { id: "asc" }],
       take: batchSize,
     });
   }
@@ -836,10 +858,10 @@ export class OrderRepository {
   }
 
   static async releaseStock(orderId: string, paymentStatus: "FAILED" | "EXPIRED" | "CANCELLED", midtransStatus: string) {
-    await prisma.$transaction(async (tx) => {
+    return prisma.$transaction(async (tx) => {
       await tx.$queryRaw`SELECT "id" FROM "Order" WHERE "id" = ${orderId}::uuid FOR UPDATE`;
       const order = await tx.order.findUnique({ where: { id: orderId }, include: { items: true } });
-      if (!order || order.paymentStatus !== "PENDING" || order.stockReleasedAt) return;
+      if (!order || order.paymentStatus !== "PENDING" || order.stockReleasedAt) return false;
       for (const item of order.items) {
         if (item.variantId) {
           await tx.productVariant.updateMany({
@@ -852,6 +874,7 @@ export class OrderRepository {
         where: { id: order.id },
         data: { paymentStatus, midtransStatus, stockReleasedAt: new Date() },
       });
+      return true;
     });
   }
 }

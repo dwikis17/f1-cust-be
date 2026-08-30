@@ -10,7 +10,7 @@ import {
   localeSchema,
 } from "../schemas.js";
 import { HomeCollectionBlockService, HomeService } from "../services/home-service.js";
-import { revalidateStorefront } from "../storefront-revalidation.js";
+import { revalidateStorefrontNow } from "../storefront-revalidation.js";
 
 const publicQuerySchema = z.object({ locale: localeSchema.default("en") }).strict();
 
@@ -35,7 +35,7 @@ function blockImages(request: Request) {
 }
 
 function revalidate() {
-  revalidateStorefront(["content:home"]);
+  return revalidateStorefrontNow(["content:home"]);
 }
 
 export class HomeController {
@@ -59,7 +59,7 @@ export class HomeController {
   static async create(request: Request, response: Response, next: NextFunction) {
     try {
       const campaign = await HomeService.create(parse(homeHeroSchema, request.body), images(request));
-      revalidate();
+      await revalidate();
       response.status(201).json(campaign);
     } catch (error) {
       next(error);
@@ -73,7 +73,7 @@ export class HomeController {
         parse(homeHeroSchema, request.body),
         images(request),
       );
-      revalidate();
+      await revalidate();
       response.json(campaign);
     } catch (error) {
       next(error);
@@ -84,7 +84,7 @@ export class HomeController {
     try {
       const { active } = parse(homeHeroStatusSchema, request.body);
       const campaign = await HomeService.setActive(parse(idSchema, request.params.id), active);
-      revalidate();
+      await revalidate();
       response.json(campaign);
     } catch (error) {
       next(error);
@@ -94,7 +94,7 @@ export class HomeController {
   static async reorder(request: Request, response: Response, next: NextFunction) {
     try {
       const campaigns = await HomeService.reorder(parse(homeHeroOrderSchema, request.body));
-      revalidate();
+      await revalidate();
       response.json(campaigns);
     } catch (error) {
       next(error);
@@ -104,7 +104,7 @@ export class HomeController {
   static async remove(request: Request, response: Response, next: NextFunction) {
     try {
       await HomeService.remove(parse(idSchema, request.params.id));
-      revalidate();
+      await revalidate();
       response.status(204).end();
     } catch (error) {
       next(error);
@@ -134,7 +134,7 @@ export class HomeController {
         parse(homeCollectionBlockSchema, request.body),
         blockImages(request),
       );
-      revalidate();
+      await revalidate();
       response.status(201).json(block);
     } catch (error) {
       next(error);
@@ -148,7 +148,7 @@ export class HomeController {
         parse(homeCollectionBlockSchema, request.body),
         blockImages(request),
       );
-      revalidate();
+      await revalidate();
       response.json(block);
     } catch (error) {
       next(error);
@@ -159,7 +159,7 @@ export class HomeController {
     try {
       const { active } = parse(homeHeroStatusSchema, request.body);
       const block = await HomeCollectionBlockService.setActive(parse(idSchema, request.params.id), active);
-      revalidate();
+      await revalidate();
       response.json(block);
     } catch (error) {
       next(error);
@@ -169,7 +169,7 @@ export class HomeController {
   static async reorderCollectionBlocks(request: Request, response: Response, next: NextFunction) {
     try {
       const blocks = await HomeCollectionBlockService.reorder(parse(homeHeroOrderSchema, request.body));
-      revalidate();
+      await revalidate();
       response.json(blocks);
     } catch (error) {
       next(error);
@@ -179,7 +179,7 @@ export class HomeController {
   static async removeCollectionBlock(request: Request, response: Response, next: NextFunction) {
     try {
       await HomeCollectionBlockService.remove(parse(idSchema, request.params.id));
-      revalidate();
+      await revalidate();
       response.status(204).end();
     } catch (error) {
       next(error);

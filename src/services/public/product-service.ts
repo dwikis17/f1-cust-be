@@ -2,6 +2,7 @@ import { notFound } from "../../http.js";
 import { PublicCatalogRepository } from "../../repositories/public/catalog-repository.js";
 import {
   PublicProductRepository,
+  type PublicProductCardRecord,
   type ProductFilters,
   type ProductSort,
 } from "../../repositories/public/product-repository.js";
@@ -12,6 +13,19 @@ import { publicCollection, PublicCatalogService } from "./catalog-service.js";
 type NamedFacetValue = { id: string; name: string; slug: string };
 type Locale = "en" | "id";
 const conditions = ["BNWT", "BNWOT", "USED"] as const;
+
+function localizedBulletPoints(value: unknown, locale: Locale) {
+  if (!Array.isArray(value)) return [];
+  return value.flatMap((item) => {
+    if (!item || typeof item !== "object") return [];
+    const point = item as { text?: unknown; textId?: unknown };
+    if (typeof point.text !== "string" || !point.text.trim()) return [];
+    const translated = locale === "id" && typeof point.textId === "string" && point.textId.trim()
+      ? point.textId
+      : point.text;
+    return [translated];
+  });
+}
 
 function increment(map: Map<string, { value: NamedFacetValue; count: number }>, value: NamedFacetValue) {
   const current = map.get(value.id);
@@ -26,12 +40,33 @@ function namedFacet(map: Map<string, { value: NamedFacetValue; count: number }>)
 }
 
 export class PublicProductService {
+  static publicProductCard(product: PublicProductCardRecord, locale: Locale) {
+    return {
+      id: product.id,
+      name: locale === "id" ? product.nameId ?? product.name : product.name,
+      slug: product.slug,
+      priceIdr: effectivePriceIdr(product),
+      originalPriceIdr: product.salePriceIdr === null ? null : product.priceIdr,
+      salePercentage: product.salePercentage,
+      condition: product.condition,
+      team: product.team,
+      productType: product.category,
+      tags: product.tags.map(({ tag }) => tag).sort((a, b) => a.name.localeCompare(b.name)),
+      photos: product.photos.map((photo) => ({
+        url: PublicProductRepository.storedPhotoUrl(photo.path),
+        altText: photo.altText,
+      })),
+    };
+  }
+
   static publicProduct(product: ProductWithRelations, locale: Locale) {
     const {
       drivers,
       collections,
+      tags,
       variants,
       photos,
+      bulletPoints,
       category,
       nameId,
       descriptionId,
@@ -47,17 +82,23 @@ export class PublicProductService {
       salePercentage,
       name: locale === "id" ? nameId ?? product.name : product.name,
       description: locale === "id" ? descriptionId ?? product.description : product.description,
+      bulletPoints: localizedBulletPoints(bulletPoints, locale),
       category,
       productType: category,
       drivers: drivers.map(({ driver }) => driver),
       collections: collections.map(({ collection }) => publicCollection(collection, locale)),
-      variants: variants.map((variant) => ({ ...variant, available: variant.stockQuantity > 0 })),
+      tags: tags.map(({ tag }) => tag).sort((a, b) => a.name.localeCompare(b.name)),
+      variants: variants.map(({ position: _position, ...variant }) => ({
+        ...variant,
+        available: variant.stockQuantity > 0,
+      })),
       photos: photos.map((photo) => ({ ...photo, url: PublicProductRepository.storedPhotoUrl(photo.path) })),
     };
   }
 
   private static async facets(collectionSlug: string | null, filters: ProductFilters) {
     const [
+      tagProducts,
       teamProducts,
       driverProducts,
       productTypeProducts,
@@ -67,11 +108,15 @@ export class PublicProductService {
       priceProducts,
     ] = await PublicProductRepository.facetSources(collectionSlug, filters);
     const teams = new Map<string, { value: NamedFacetValue; count: number }>();
+    const tags = new Map<string, { value: NamedFacetValue; count: number }>();
     const drivers = new Map<string, { value: NamedFacetValue; count: number }>();
     const productTypes = new Map<string, { value: NamedFacetValue; count: number }>();
     const audiences = new Map<string, number>();
     const conditionCounts = new Map<string, number>();
 
+    for (const product of tagProducts) {
+      for (const { tag } of product.tags) increment(tags, tag);
+    }
     for (const { team } of teamProducts) if (team) increment(teams, team);
     for (const product of driverProducts) {
       for (const { driver } of product.drivers) increment(drivers, driver);
@@ -97,6 +142,7 @@ export class PublicProductService {
     }
 
     return {
+      tags: namedFacet(tags),
       teams: namedFacet(teams),
       drivers: namedFacet(drivers),
       productTypes: namedFacet(productTypes),
@@ -124,7 +170,7 @@ export class PublicProductService {
     ]);
     const [total, products] = result;
     return {
-      data: products.map((product) => PublicProductService.publicProduct(product, locale)),
+      data: products.map((product) => PublicProductService.publicProductCard(product, locale)),
       page,
       limit,
       total,
@@ -151,7 +197,7 @@ export class PublicProductService {
     if (!collection) notFound("Collection not found");
     return {
       collection,
-      data: memberships.map(({ product }) => PublicProductService.publicProduct(product, locale)),
+      data: memberships.map(({ product }) => PublicProductService.publicProductCard(product, locale)),
       page,
       limit,
       total,
@@ -190,6 +236,7 @@ export class PublicProductService {
           color: value.color,
           stockQuantity: value.stockQuantity,
           available: value.stockQuantity > 0,
+          unitsSold: value.unitsSold,
         },
       }];
     });

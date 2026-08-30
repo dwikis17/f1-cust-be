@@ -1,19 +1,37 @@
 import type { NextFunction, Request, Response } from "express";
+import { z } from "zod";
 import { parse } from "../../http.js";
 import {
   idSchema,
+  productAudienceSchema,
   productPatchSchema,
   productSchema,
   variantPatchSchema,
   variantSchema,
 } from "../../schemas.js";
 import { ProductService } from "../../services/admin/product-service.js";
-import { revalidateStorefront } from "../../storefront-revalidation.js";
+import { revalidateStorefrontNow } from "../../storefront-revalidation.js";
+
+const filterId = z.union([idSchema, z.literal("MISSING")]);
+const listQuerySchema = z.object({
+  all: z.enum(["true", "false"]).default("false"),
+  search: z.string().trim().max(200).optional(),
+  status: z.enum(["DRAFT", "ACTIVE", "ARCHIVED"]).optional(),
+  categoryId: idSchema.optional(),
+  teamId: filterId.optional(),
+  driverId: filterId.optional(),
+  audience: z.union([productAudienceSchema, z.literal("MISSING")]).optional(),
+  collectionId: filterId.optional(),
+  page: z.coerce.number().int().min(1).default(1),
+  limit: z.coerce.number().int().min(1).max(100).default(25),
+}).strict();
 
 export class ProductController {
-  static async listProducts(_request: Request, response: Response, next: NextFunction) {
+  static async listProducts(request: Request, response: Response, next: NextFunction) {
     try {
-      response.json(await ProductService.listProducts());
+      const query = parse(listQuerySchema, request.query);
+      response.set("cache-control", "no-store");
+      response.json(await ProductService.listProducts({ ...query, all: query.all === "true" }));
     } catch (error) {
       next(error);
     }
@@ -28,7 +46,15 @@ export class ProductController {
   static async createProduct(request: Request, response: Response, next: NextFunction) {
     try {
       const product = await ProductService.createProduct(parse(productSchema, request.body));
-      revalidateStorefront(["catalog:products", `catalog:product:${product.slug}`]);
+      await revalidateStorefrontNow(["catalog:products", `catalog:product:${product.slug}`]);
+      response.status(201).json(product);
+    } catch (error) {
+      next(error);
+    }
+  }
+  static async duplicateProduct(request: Request, response: Response, next: NextFunction) {
+    try {
+      const product = await ProductService.duplicateProduct(parse(idSchema, request.params.id));
       response.status(201).json(product);
     } catch (error) {
       next(error);
@@ -39,7 +65,7 @@ export class ProductController {
       const id = parse(idSchema, request.params.id);
       const previous = await ProductService.findProduct(id);
       const product = await ProductService.updateProduct(id, parse(productPatchSchema, request.body));
-      revalidateStorefront(["catalog:products", `catalog:product:${previous.slug}`, `catalog:product:${product.slug}`]);
+      await revalidateStorefrontNow(["catalog:products", `catalog:product:${previous.slug}`, `catalog:product:${product.slug}`]);
       response.json(product);
     } catch (error) {
       next(error);
@@ -54,7 +80,7 @@ export class ProductController {
         parse(variantSchema, request.body),
       );
       const product = await ProductService.findProduct(productId);
-      revalidateStorefront(["catalog:products", `catalog:product:${product.slug}`]);
+      await revalidateStorefrontNow(["catalog:products", `catalog:product:${product.slug}`]);
       response.status(201).json(variant);
     } catch (error) {
       next(error);
@@ -69,7 +95,7 @@ export class ProductController {
         parse(variantPatchSchema, request.body),
       );
       const product = await ProductService.findProduct(productId);
-      revalidateStorefront(["catalog:products", `catalog:product:${product.slug}`]);
+      await revalidateStorefrontNow(["catalog:products", `catalog:product:${product.slug}`]);
       response.json(variant);
     } catch (error) {
       next(error);
@@ -80,7 +106,7 @@ export class ProductController {
       const productId = parse(idSchema, request.params.productId);
       const product = await ProductService.findProduct(productId);
       await ProductService.deleteVariant(productId, parse(idSchema, request.params.id));
-      revalidateStorefront(["catalog:products", `catalog:product:${product.slug}`]);
+      await revalidateStorefrontNow(["catalog:products", `catalog:product:${product.slug}`]);
       response.status(204).send();
     } catch (error) {
       next(error);

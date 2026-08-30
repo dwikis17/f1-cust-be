@@ -1,5 +1,4 @@
 import { z } from "zod";
-import { salePriceFromPercentage } from "./product-price.js";
 
 export const idSchema = z.string().uuid();
 export const slugSchema = z.string().trim().min(2).max(100).regex(/^[a-z0-9]+(?:-[a-z0-9]+)*$/);
@@ -118,17 +117,21 @@ export const sizingGuideSchema = z.object({
 
 const sizingNoteSchema = z.string().trim().max(2_000).nullable();
 
-const salePercentageSchema = z.number().int().min(1).max(99);
+const productBulletPointSchema = z.object({
+  text: z.string().trim().min(1).max(240),
+  textId: z.preprocess((value) => value === "" ? null : value, z.string().trim().max(240).nullable().default(null)),
+}).strict();
+const productBulletPointsSchema = z.array(productBulletPointSchema).max(10);
+
+const salePriceIdrSchema = z.number().int().positive();
 
 function validateSale(
-  value: { priceIdr: number; salePercentage?: number | null },
+  value: { priceIdr: number; salePriceIdr?: number | null },
   context: z.RefinementCtx,
 ) {
-  if (value.salePercentage == null) return;
-  const salePriceIdr = salePriceFromPercentage(value.priceIdr, value.salePercentage);
-  if (salePriceIdr === null) return;
-  if (salePriceIdr < 1 || salePriceIdr >= value.priceIdr) {
-    context.addIssue({ code: "custom", path: ["salePercentage"], message: "Sale percentage must produce a price lower than the regular price" });
+  if (value.salePriceIdr == null) return;
+  if (value.salePriceIdr >= value.priceIdr) {
+    context.addIssue({ code: "custom", path: ["salePriceIdr"], message: "Sale price must be lower than the regular price" });
   }
 }
 
@@ -144,7 +147,10 @@ const variantBaseSchema = z.object({
   sizingGuide: sizingGuideSchema.nullable().optional(),
 }).strict();
 export const variantSchema = variantBaseSchema;
-export const variantPatchSchema = variantBaseSchema.partial().refine((value) => Object.keys(value).length > 0);
+export const variantPatchSchema = variantBaseSchema
+  .extend({ position: z.number().int().nonnegative().optional() })
+  .partial()
+  .refine((value) => Object.keys(value).length > 0);
 
 export const productSchema = z.object({
   name: nameSchema,
@@ -152,9 +158,10 @@ export const productSchema = z.object({
   slug: slugSchema,
   description: z.string().trim().max(10_000).default(""),
   descriptionId: z.string().trim().max(10_000).nullable().optional(),
+  bulletPoints: productBulletPointsSchema.default([]),
   sizingNote: sizingNoteSchema.optional(),
   priceIdr: z.number().int().nonnegative(),
-  salePercentage: salePercentageSchema.nullable().default(null),
+  salePriceIdr: salePriceIdrSchema.nullable().default(null),
   status: z.enum(["DRAFT", "ACTIVE", "ARCHIVED"]).default("DRAFT"),
   condition: productConditionSchema,
   categoryId: idSchema,
@@ -182,9 +189,10 @@ export const productPatchSchema = z.object({
   slug: slugSchema.optional(),
   description: z.string().trim().max(10_000).optional(),
   descriptionId: z.string().trim().max(10_000).nullable().optional(),
+  bulletPoints: productBulletPointsSchema.optional(),
   sizingNote: sizingNoteSchema.optional(),
   priceIdr: z.number().int().nonnegative().optional(),
-  salePercentage: salePercentageSchema.nullable().optional(),
+  salePriceIdr: salePriceIdrSchema.nullable().optional(),
   status: z.enum(["DRAFT", "ACTIVE", "ARCHIVED"]).optional(),
   condition: productConditionSchema.optional(),
   categoryId: idSchema.optional(),

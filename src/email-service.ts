@@ -56,7 +56,10 @@ export function buildPaymentConfirmationEmail(order: ConfirmationOrder): EmailMe
   }
 
   const customerName = `${order.firstName} ${order.lastName}`.trim();
-  const trackUrl = `${config.storefrontUrl}/track-order`;
+  const trackUrl = new URL("/track-order", config.storefrontUrl);
+  trackUrl.searchParams.set("orderNumber", order.orderNumber);
+  trackUrl.searchParams.set("email", order.email);
+  const trackLink = trackUrl.toString();
   const lineItemsText = order.items.map((item) => {
     const options = itemDescription(item);
     return `- ${item.productName}${options ? ` (${options})` : ""} x${item.quantity}: ${idr(item.unitPriceIdr * item.quantity)}`;
@@ -78,24 +81,28 @@ export function buildPaymentConfirmationEmail(order: ConfirmationOrder): EmailMe
     subject: `Payment received — ${order.orderNumber}`,
     text: `Hi ${customerName},
 
-We received your payment for order ${order.orderNumber}.
+We received your payment for order ${order.orderNumber}
 
 ${lineItemsText}
 
 Subtotal: ${idr(order.subtotalIdr)}
 Discount: -${idr(order.discountIdr)}
-Shipping: ${idr(order.shippingIdr)}
+Shipping: ${idr(order.shippingOriginalIdr)}
+${order.shippingDiscountIdr ? `Free-shipping coverage: -${idr(order.shippingDiscountIdr)}\n` : ""}Net shipping: ${idr(order.shippingIdr)}
+${order.insuranceFeeIdr ? `Shipping insurance: ${idr(order.insuranceFeeIdr)}\n` : ""}
 Total paid: ${idr(order.totalIdr)}${promoText}
 
 Delivery: ${order.courierName} ${order.courierServiceName} (${order.courierDuration})${trackingNumber}
 Ship to: ${order.address}, ${order.city}, ${order.province} ${order.postalCode}
 
 ${deliveryStatus}
-Track your order: ${trackUrl}
+Your tracking link opens with your order details already filled in.
+Track your order: ${trackLink}
+If needed, use order number ${order.orderNumber} and this email address on the tracking page.
 
 Thank you,
 ${config.emailFromName}`,
-    html: `<!doctype html><html><body style="margin:0;background:#f4f4f4;color:#151515;font-family:Arial,sans-serif"><table role="presentation" width="100%" cellspacing="0" cellpadding="0"><tr><td style="padding:32px 16px"><table role="presentation" width="100%" cellspacing="0" cellpadding="0" style="max-width:640px;margin:auto;background:#fff;border:1px solid #ddd"><tr><td style="padding:30px 32px;background:#151515;color:#fff"><div style="font-size:13px;letter-spacing:2px;text-transform:uppercase">${escapeHtml(config.emailFromName)}</div><h1 style="margin:12px 0 0;font-size:28px">Payment received</h1></td></tr><tr><td style="padding:32px"><p style="margin-top:0">Hi ${escapeHtml(customerName)},</p><p>We received your payment for order <strong>${escapeHtml(order.orderNumber)}</strong>.</p><table role="presentation" width="100%" cellspacing="0" cellpadding="0" style="margin:24px 0"><thead><tr><th style="padding-bottom:8px;text-align:left">Item</th><th style="padding:0 12px 8px;text-align:center">Qty</th><th style="padding-bottom:8px;text-align:right">Amount</th></tr></thead><tbody>${lineItemsHtml}</tbody></table><table role="presentation" width="100%" cellspacing="0" cellpadding="0" style="margin:0 0 24px"><tr><td style="padding:4px 0;color:#666">Subtotal</td><td style="padding:4px 0;text-align:right">${escapeHtml(idr(order.subtotalIdr))}</td></tr><tr><td style="padding:4px 0;color:#666">Discount</td><td style="padding:4px 0;text-align:right">-${escapeHtml(idr(order.discountIdr))}</td></tr><tr><td style="padding:4px 0;color:#666">Shipping</td><td style="padding:4px 0;text-align:right">${escapeHtml(idr(order.shippingIdr))}</td></tr><tr><td style="padding:12px 0 4px;border-top:2px solid #151515;font-size:18px"><strong>Total paid</strong></td><td style="padding:12px 0 4px;border-top:2px solid #151515;text-align:right;font-size:18px"><strong>${escapeHtml(idr(order.totalIdr))}</strong></td></tr></table><div style="padding:20px;background:#f5f5f5"><strong>Delivery</strong><p style="margin:8px 0 0">${escapeHtml(order.courierName)} ${escapeHtml(order.courierServiceName)} (${escapeHtml(order.courierDuration)})${order.biteshipWaybillId ? `<br>Tracking number: ${escapeHtml(order.biteshipWaybillId)}` : ""}</p><p style="margin:12px 0 0;color:#555">${escapeHtml(order.address)}, ${escapeHtml(order.city)}, ${escapeHtml(order.province)} ${escapeHtml(order.postalCode)}</p></div><p style="margin:24px 0">${escapeHtml(deliveryStatus)}</p><a href="${escapeHtml(trackUrl)}" style="display:inline-block;padding:13px 20px;background:#151515;color:#fff;text-decoration:none;font-weight:bold">Track your order</a><p style="margin:28px 0 0;color:#666;font-size:13px">Use order number <strong>${escapeHtml(order.orderNumber)}</strong> and this email address on the tracking page.</p></td></tr></table></td></tr></table></body></html>`,
+    html: `<!doctype html><html><body style="margin:0;background:#f4f4f4;color:#151515;font-family:Arial,sans-serif"><table role="presentation" width="100%" cellspacing="0" cellpadding="0"><tr><td style="padding:32px 16px"><table role="presentation" width="100%" cellspacing="0" cellpadding="0" style="max-width:640px;margin:auto;background:#fff;border:1px solid #ddd"><tr><td style="padding:30px 32px;background:#151515;color:#fff"><div style="font-size:13px;letter-spacing:2px;text-transform:uppercase">${escapeHtml(config.emailFromName)}</div><h1 style="margin:12px 0 0;font-size:28px">Payment received</h1></td></tr><tr><td style="padding:32px"><p style="margin-top:0">Hi ${escapeHtml(customerName)},</p><p>We received your payment for order <strong>${escapeHtml(order.orderNumber)}</strong></p><table role="presentation" width="100%" cellspacing="0" cellpadding="0" style="margin:24px 0"><thead><tr><th style="padding-bottom:8px;text-align:left">Item</th><th style="padding:0 12px 8px;text-align:center">Qty</th><th style="padding-bottom:8px;text-align:right">Amount</th></tr></thead><tbody>${lineItemsHtml}</tbody></table><table role="presentation" width="100%" cellspacing="0" cellpadding="0" style="margin:0 0 24px"><tr><td style="padding:4px 0;color:#666">Subtotal</td><td style="padding:4px 0;text-align:right">${escapeHtml(idr(order.subtotalIdr))}</td></tr><tr><td style="padding:4px 0;color:#666">Discount</td><td style="padding:4px 0;text-align:right">-${escapeHtml(idr(order.discountIdr))}</td></tr><tr><td style="padding:4px 0;color:#666">Shipping</td><td style="padding:4px 0;text-align:right">${escapeHtml(idr(order.shippingOriginalIdr))}</td></tr>${order.shippingDiscountIdr ? `<tr><td style="padding:4px 0;color:#666">Free-shipping coverage</td><td style="padding:4px 0;text-align:right">-${escapeHtml(idr(order.shippingDiscountIdr))}</td></tr>` : ""}<tr><td style="padding:4px 0;color:#666">Net shipping</td><td style="padding:4px 0;text-align:right">${escapeHtml(idr(order.shippingIdr))}</td></tr>${order.insuranceFeeIdr ? `<tr><td style="padding:4px 0;color:#666">Shipping insurance</td><td style="padding:4px 0;text-align:right">${escapeHtml(idr(order.insuranceFeeIdr))}</td></tr>` : ""}<tr><td style="padding:12px 0 4px;border-top:2px solid #151515;font-size:18px"><strong>Total paid</strong></td><td style="padding:12px 0 4px;border-top:2px solid #151515;text-align:right;font-size:18px"><strong>${escapeHtml(idr(order.totalIdr))}</strong></td></tr></table><div style="padding:20px;background:#f5f5f5"><strong>Delivery</strong><p style="margin:8px 0 0">${escapeHtml(order.courierName)} ${escapeHtml(order.courierServiceName)} (${escapeHtml(order.courierDuration)})${order.biteshipWaybillId ? `<br>Tracking number: ${escapeHtml(order.biteshipWaybillId)}` : ""}</p><p style="margin:12px 0 0;color:#555">${escapeHtml(order.address)}, ${escapeHtml(order.city)}, ${escapeHtml(order.province)} ${escapeHtml(order.postalCode)}</p></div><p style="margin:24px 0">${escapeHtml(deliveryStatus)}</p><p style="margin:0 0 24px;color:#555">Your tracking link opens with your order details already filled in.</p><a href="${escapeHtml(trackLink)}" style="display:inline-block;padding:13px 20px;background:#151515;color:#fff;text-decoration:none;font-weight:bold">Track your order</a><p style="margin:28px 0 0;color:#666;font-size:13px">Use order number <strong>${escapeHtml(order.orderNumber)}</strong> and this email address on the tracking page.</p></td></tr></table></td></tr></table></body></html>`,
   };
 }
 

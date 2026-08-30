@@ -7,9 +7,9 @@ export type HomeHeroOrder = z.infer<typeof homeHeroOrderSchema>;
 export type HomeCollectionBlockInput = z.infer<typeof homeCollectionBlockSchema>;
 export type StoredHeroImages = { desktopImageUrl: string; mobileImageUrl: string };
 export type StoredCollectionBlockImages = {
-  leadImageUrl: string;
-  sideImageOneUrl: string;
-  sideImageTwoUrl: string;
+  leadImageUrl: string | null;
+  sideImageOneUrl: string | null;
+  sideImageTwoUrl: string | null;
 };
 
 const includeCollection = { collection: true } as const;

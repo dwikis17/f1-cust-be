@@ -71,7 +71,8 @@ Send the login token as `Authorization: Bearer <token>` for all remaining admin 
 - `GET|POST /api/admin/drivers`
 - `PATCH|DELETE /api/admin/drivers/:id`
 - `POST|DELETE /api/admin/drivers/:id/photo` using multipart field `image`
-- `GET|POST /api/admin/products`
+- `GET /api/admin/products?page=1&limit=25&search=&status=&categoryId=&teamId=&driverId=&audience=&collectionId=` returns paginated product data; use `all=true` for the full product list used by collection assignment.
+- `POST /api/admin/products`
 - `GET|PATCH /api/admin/products/:id`
 - `GET /api/admin/orders/:id/payment-events`
 - `POST /api/admin/orders/:id/telegram-notification/resend`
@@ -114,13 +115,15 @@ curl -X POST http://localhost:3000/api/admin/auth/login \
 
 Prices use integer Indonesian rupiah. Public product responses expose `available` for each variant but do not expose exact stock quantities.
 
+Product and collection list endpoints return compact product cards: localized name, slug, pricing, condition, team/product-type labels, tags, and at most two photos. Use `GET /api/products/:slug` for full descriptions, variants, collections, and galleries; use the uncached cart-items endpoint for authoritative stock quantities.
+
 `POST /api/products/cart-items` accepts `{ variantIds, locale }` for at most 50 variants and returns only the product and variant fields required to render a cart. Missing or inactive variants are reported separately, and the response is never cached.
 
 ### Biteship shipping estimates
 
 `POST /api/shipping/rates` accepts a five-digit destination postal code and cart lines shaped as `{ variantId, quantity }`. The API resolves price, stock, weight, and package dimensions from the database before requesting live Biteship courier rates, so clients cannot supply shipping measurements.
 
-For local development, set `BITESHIP_API_KEY`, `BITESHIP_WEBHOOK_SECRET`, `BITESHIP_ORIGIN_POSTAL_CODE`, and optionally `BITESHIP_COURIERS` in `.env`. The courier list defaults to `jne,jnt,sicepat,anteraja`. For the deployed Worker, keep the API key and webhook secret private and set them independently for each environment:
+For local development, set `BITESHIP_API_KEY`, `BITESHIP_WEBHOOK_SECRET`, and `BITESHIP_ORIGIN_POSTAL_CODE` in `.env`. Available courier companies are managed from **Operations → Couriers** in `f1-admin`; the initial database migration enables `jne`, `jnt`, `sicepat`, and `anteraja`. For the deployed Worker, keep the API key and webhook secret private and set them independently for each environment:
 
 ```sh
 npx wrangler secret put BITESHIP_API_KEY
@@ -142,11 +145,11 @@ New and migrated orders use public numbers shaped like `VLD-AB12-CD34-EF56`. Exi
 
 Guest checkout uses Midtrans Snap. The backend owns all price and stock calculations, verifies Midtrans notifications, and creates the Biteship shipment only after an accepted `capture` or `settlement`. Configure the local variables shown in `.env.example`; keep `MIDTRANS_SERVER_KEY` and `BITESHIP_API_KEY` as Worker secrets when deployed. Set the Midtrans Payment Notification URL to `https://<api-host>/api/payments/midtrans/notification`.
 
-Checkout also requires a Cloudflare Turnstile token with action `checkout`. Local development uses the always-pass test secret from `.env.example`; configure the production secret with `npx wrangler secret put TURNSTILE_SECRET_KEY`. The storefront loads Snap using `NEXT_PUBLIC_MIDTRANS_CLIENT_KEY`. Biteship booking also requires the full pickup contact and address variables; a paid order remains visible as `BOOKING_FAILED` and a replayed Midtrans notification safely retries it.
+Turnstile is disabled for now. Set `TURNSTILE_ENABLED=true`, configure `TURNSTILE_SECRET_KEY` with `npx wrangler secret put TURNSTILE_SECRET_KEY`, and provide the storefront site key when re-enabling it. The storefront loads Snap using `NEXT_PUBLIC_MIDTRANS_CLIENT_KEY`. Biteship booking also requires the full pickup contact and address variables; a paid order remains visible as `BOOKING_FAILED` and a replayed Midtrans notification safely retries it.
 
 Accepted `capture` and `settlement` notifications also send a payment confirmation through the Worker `EMAIL` binding. The message contains the order lines, totals, delivery service, destination, tracking number when available, and a link to `/track-order`. Delivery is idempotent across repeated Midtrans notifications and is retried when Cloudflare temporarily rejects a send. Configure `EMAIL_FROM_ADDRESS`, `EMAIL_FROM_NAME`, and optional `EMAIL_REPLY_TO`; the sender domain must first be onboarded in Cloudflare Email Service.
 
-Accepted `capture` and `settlement` notifications also queue one Indonesian Telegram alert for the configured private chat. Telegram delivery runs after the payment transaction commits, retries transient failures every five minutes, and never changes payment state when Telegram is unavailable. Configure `TELEGRAM_BOT_TOKEN` and `TELEGRAM_CHAT_ID`; production payments refuse to start without both values. Create the bot with BotFather, have the recipient start the bot, then obtain the private chat ID from Telegram's `getUpdates` response. The bot is outbound-only and does not need a Telegram webhook.
+Accepted `capture` and `settlement` notifications also queue one Indonesian Telegram alert for the configured private chat. Telegram delivery runs after the payment transaction commits, retries transient failures every three hours, and never changes payment state when Telegram is unavailable. Configure `TELEGRAM_BOT_TOKEN` and `TELEGRAM_CHAT_ID`; production payments refuse to start without both values. Create the bot with BotFather, have the recipient start the bot, then obtain the private chat ID from Telegram's `getUpdates` response. The bot is outbound-only and does not need a Telegram webhook.
 
 For production Workers, store both values as secrets:
 

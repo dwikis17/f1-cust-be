@@ -12,6 +12,7 @@ import { sendPaymentConfirmationEmail, setDefaultEmailSender } from "./email-ser
 import { storePhoto } from "./photo-storage.js";
 import { PublicCheckoutService } from "./services/public/checkout-service.js";
 import { reconcilePendingTelegramNotifications } from "./telegram-service.js";
+import { storefrontContentSeed } from "./storefront-content.js";
 
 const app = createApp();
 import { hashPassword, hashToken } from "./security.js";
@@ -28,11 +29,32 @@ let driverCollectionId = "";
 let historicalDriverCollectionId = "";
 let promoCodeId = "";
 
+async function activeCourierCodes() {
+  const couriers = await prisma.shippingCourier.findMany({
+    where: { active: true },
+    select: { code: true },
+    orderBy: { code: "asc" },
+  });
+  return couriers.map(({ code }) => code);
+}
+
+async function setActiveCourierCodes(codes: string[]) {
+  await prisma.$transaction([
+    prisma.shippingCourier.updateMany({ data: { active: false } }),
+    ...codes.map((code) => prisma.shippingCourier.upsert({
+      where: { code },
+      create: { code, active: true },
+      update: { active: true },
+    })),
+  ]);
+}
+
 before(async () => {
   assert.match(config.databaseUrl, /f1_store_test/, "Tests must use the test database");
   await prisma.order.deleteMany();
   await prisma.promoCode.deleteMany();
   await prisma.faq.deleteMany();
+  await prisma.storefrontContent.deleteMany();
   await prisma.homeHero.deleteMany();
   await prisma.homeCollectionBlock.deleteMany();
   await prisma.productPhoto.deleteMany();
@@ -58,6 +80,7 @@ before(async () => {
       passwordHash: password.hash,
     },
   });
+  await setActiveCourierCodes(["jne", "jnt", "sicepat", "anteraja"]);
 });
 
 after(async () => prisma.$disconnect());
@@ -71,6 +94,174 @@ test("health and admin authentication", async () => {
   token = login.body.token;
   assert.ok(token);
   await request(app).get("/api/admin/auth/me").set("authorization", `Bearer ${token}`).expect(200);
+});
+
+test("admins replace bilingual storefront content and public APIs localize it", async () => {
+  const endpoint = "/api/admin/content/shipping-returns";
+  await request(app).get(endpoint).expect(401);
+  await request(app).get("/api/content/shipping-returns").expect(404);
+
+  const originalUrl = config.storefrontUrl;
+  const originalSecret = config.storefrontRevalidateSecret;
+  const originalFetch = globalThis.fetch;
+  const deliveries: string[][] = [];
+  config.storefrontUrl = "https://storefront.example";
+  config.storefrontRevalidateSecret = "test-secret";
+
+  try {
+    globalThis.fetch = async (_input, init) => {
+      deliveries.push(JSON.parse(String(init?.body)).tags);
+      return new Response(null, { status: 204 });
+    };
+
+    const saved = await request(app).put(endpoint).set("authorization", `Bearer ${token}`)
+      .send(storefrontContentSeed).expect(200);
+    assert.deepEqual(saved.body, storefrontContentSeed);
+    assert.deepEqual(deliveries, [[
+      "content:shipping-returns:en",
+      "content:shipping-returns:id",
+      "content:support",
+    ]]);
+
+    const managed = await request(app).get(endpoint).set("authorization", `Bearer ${token}`).expect(200);
+    assert.deepEqual(managed.body, storefrontContentSeed);
+
+    const localizedSeed = (locale: "en" | "id") => ({
+      title: storefrontContentSeed.shippingReturns.title[locale],
+      intro: storefrontContentSeed.shippingReturns.intro[locale],
+      facts: storefrontContentSeed.shippingReturns.facts.map((fact) => ({
+        id: fact.id,
+        label: fact.label[locale],
+        value: fact.value[locale],
+      })),
+      sections: storefrontContentSeed.shippingReturns.sections.map((section) => ({
+        id: section.id,
+        title: section.title[locale],
+        body: section.body[locale],
+        items: section.items.map((item) => ({ id: item.id, text: item.text[locale] })),
+      })),
+      support: {
+        ...storefrontContentSeed.support,
+        mailtoUrl: "mailto:support@valydejersey.com",
+        whatsappUrl: "https://wa.me/6285121565774",
+      },
+    });
+    const english = await request(app).get("/api/content/shipping-returns?locale=en").expect(200);
+    assert.deepEqual(english.body, localizedSeed("en"));
+
+    const indonesian = await request(app).get("/api/content/shipping-returns?locale=id").expect(200);
+    assert.deepEqual(indonesian.body, localizedSeed("id"));
+
+    const support = await request(app).get("/api/content/support").expect(200);
+    assert.deepEqual(support.body, {
+      ...storefrontContentSeed.support,
+      mailtoUrl: "mailto:support@valydejersey.com",
+      whatsappUrl: "https://wa.me/6285121565774",
+    });
+    await request(app).get("/api/content/shipping-returns?locale=fr").expect(400);
+
+    const badEmail = structuredClone(storefrontContentSeed);
+    badEmail.support.email = "not-an-email";
+    await request(app).put(endpoint).set("authorization", `Bearer ${token}`).send(badEmail).expect(400);
+
+    const missingTranslation = structuredClone(storefrontContentSeed);
+    missingTranslation.shippingReturns.title.id = "";
+    await request(app).put(endpoint).set("authorization", `Bearer ${token}`).send(missingTranslation).expect(400);
+
+    const duplicateIds = structuredClone(storefrontContentSeed);
+    duplicateIds.shippingReturns.sections[0].id = duplicateIds.shippingReturns.facts[0].id;
+    await request(app).put(endpoint).set("authorization", `Bearer ${token}`).send(duplicateIds).expect(400);
+
+    const badNumber = structuredClone(storefrontContentSeed);
+    badNumber.support.whatsappNumber = "+62 851";
+    await request(app).put(endpoint).set("authorization", `Bearer ${token}`).send(badNumber).expect(400);
+  } finally {
+    config.storefrontUrl = originalUrl;
+    config.storefrontRevalidateSecret = originalSecret;
+    globalThis.fetch = originalFetch;
+  }
+});
+
+test("admins manage the live Biteship courier allowlist", async () => {
+  await request(app).get("/api/admin/couriers").expect(401);
+
+  const previousFetch = globalThis.fetch;
+  const previousApiKey = config.biteshipApiKey;
+  config.biteshipApiKey = "biteship_test.couriers";
+  await setActiveCourierCodes(["jne", "jnt", "sicepat", "anteraja"]);
+
+  const catalogResponse = {
+    success: true,
+    couriers: [
+      { courier_code: "jne", courier_name: "JNE", courier_service_code: "reg" },
+      { courier_code: "jne", courier_name: "JNE", courier_service_code: "yes" },
+      { courier_code: "jnt", courier_name: "J&T Express", courier_service_code: "reg" },
+      { courier_code: "sicepat", courier_name: "SiCepat", courier_service_code: "reg" },
+      { courier_code: "anteraja", courier_name: "AnterAja", courier_service_code: "reg" },
+      { courier_code: "lalamove", courier_name: "Lalamove", courier_service_code: "instant" },
+    ],
+  };
+
+  try {
+    globalThis.fetch = async (input, init) => {
+      assert.equal(String(input), "https://api.biteship.com/v1/couriers");
+      assert.equal(new Headers(init?.headers).get("authorization"), "biteship_test.couriers");
+      return Response.json(catalogResponse);
+    };
+
+    const catalog = await request(app).get("/api/admin/couriers")
+      .set("authorization", `Bearer ${token}`).expect(200);
+    assert.equal(catalog.body.catalogAvailable, true);
+    assert.deepEqual(catalog.body.couriers.slice(0, 4).map((courier: { code: string }) => courier.code), [
+      "anteraja", "jnt", "jne", "sicepat",
+    ]);
+    assert.equal(catalog.body.couriers.find((courier: { code: string }) => courier.code === "jne").serviceCount, 2);
+    assert.equal(catalog.body.couriers.find((courier: { code: string }) => courier.code === "lalamove").active, false);
+    assert.deepEqual(catalog.body.freeShippingRule, {
+      active: false,
+      minimumPurchaseIdr: 1_000_000,
+      maxCoverageIdr: 25_000,
+    });
+    await request(app).put("/api/admin/couriers/free-shipping")
+      .set("authorization", `Bearer ${token}`)
+      .send({ active: true, minimumPurchaseIdr: 0, maxCoverageIdr: 25_000 }).expect(400);
+    const savedRule = await request(app).put("/api/admin/couriers/free-shipping")
+      .set("authorization", `Bearer ${token}`)
+      .send({ ...catalog.body.freeShippingRule, active: true }).expect(200);
+    assert.equal(savedRule.body.active, true);
+
+    await request(app).patch("/api/admin/couriers/lalamove")
+      .set("authorization", `Bearer ${token}`).send({ active: true }).expect(200);
+    await request(app).patch("/api/admin/couriers/unknown")
+      .set("authorization", `Bearer ${token}`).send({ active: true }).expect(400, {
+        error: {
+          code: "UNKNOWN_BITESHIP_COURIER",
+          message: "Courier is not available in Biteship's catalog",
+        },
+      });
+
+    await setActiveCourierCodes(["lalamove"]);
+    await request(app).patch("/api/admin/couriers/lalamove")
+      .set("authorization", `Bearer ${token}`).send({ active: false }).expect(409, {
+        error: { code: "LAST_ACTIVE_COURIER", message: "At least one courier must remain active" },
+      });
+
+    globalThis.fetch = async () => { throw new Error("Biteship unavailable"); };
+    const fallback = await request(app).get("/api/admin/couriers")
+      .set("authorization", `Bearer ${token}`).expect(200);
+    assert.equal(fallback.body.catalogAvailable, false);
+    assert.deepEqual(fallback.body.couriers, [
+      { code: "lalamove", name: "lalamove", serviceCount: 0, active: true },
+    ]);
+  } finally {
+    globalThis.fetch = previousFetch;
+    config.biteshipApiKey = previousApiKey;
+    await prisma.freeShippingRule.update({
+      where: { id: 1 },
+      data: { active: false, minimumPurchaseIdr: 1_000_000, maxCoverageIdr: 25_000 },
+    });
+    await setActiveCourierCodes(["jne", "jnt", "sicepat", "anteraja"]);
+  }
 });
 
 test("admin dashboard aggregates real commerce data and handles empty periods", async () => {
@@ -515,6 +706,7 @@ test("admins search, operate, audit, export, and invoice orders safely", async (
     assert.equal((await prisma.order.findUniqueOrThrow({ where: { id: searchable.id } })).paymentStatus, "PAID");
     setDefaultEmailSender(operationsSender);
 
+    await setActiveCourierCodes(["sicepat"]);
     const legacyOptions = await request(app).get(`/api/admin/orders/${lifecycle.id}/shipment/options`)
       .set("authorization", `Bearer ${token}`).expect(200);
     assert.deepEqual(legacyOptions.body, {
@@ -675,6 +867,7 @@ test("admins search, operate, audit, export, and invoice orders safely", async (
   } finally {
     globalThis.fetch = previousFetch;
     setDefaultEmailSender(undefined);
+    await setActiveCourierCodes(["jne", "jnt", "sicepat", "anteraja"]);
     await prisma.order.deleteMany({ where: { orderNumber: { startsWith: "OPS-" } } });
     await prisma.product.delete({ where: { id: product.id } });
     await prisma.category.delete({ where: { id: category.id } });
@@ -823,6 +1016,10 @@ test("admin creates catalog data and public API hides drafts", async () => {
       slug: "ferrari-team-jersey",
       description: "Official red team jersey",
       descriptionId: "Jersey tim merah resmi",
+      bulletPoints: [
+        { text: "Official team styling.", textId: "Gaya tim resmi." },
+        { text: "Lightweight performance fabric.", textId: null },
+      ],
       sizingNote: "Measured flat across the garment.",
       priceIdr: 1_250_000,
       condition: "BNWT",
@@ -847,11 +1044,16 @@ test("admin creates catalog data and public API hides drafts", async () => {
   productId = product.body.id;
   assert.equal(product.body.nameId, "Jersey Tim Ferrari");
   assert.equal(product.body.descriptionId, "Jersey tim merah resmi");
+  assert.deepEqual(product.body.bulletPoints, [
+    { text: "Official team styling.", textId: "Gaya tim resmi." },
+    { text: "Lightweight performance fabric.", textId: null },
+  ]);
   assert.equal(product.body.sizingNote, "Measured flat across the garment.");
   assert.equal(product.body.condition, "BNWT");
   assert.equal(product.body.team.slug, "ferrari");
   assert.deepEqual(product.body.drivers.map((driver: { slug: string }) => driver.slug), ["charles-leclerc", "niki-lauda"]);
   assert.equal(product.body.collections.length, 3);
+  assert.deepEqual(product.body.tags.map(({ tag }: { tag: { slug: string } }) => tag.slug), ["limited-edition"]);
   const unassigned = await request(app).post("/api/admin/products").set("authorization", `Bearer ${token}`)
     .send({ name: "General F1 Cap", slug: "general-f1-cap", priceIdr: 300_000, condition: "BNWT", categoryId })
     .expect(201);
@@ -862,6 +1064,127 @@ test("admin creates catalog data and public API hides drafts", async () => {
     .expect(200);
   assert.equal(hidden.body.total, 0);
   await request(app).get("/api/products/ferrari-team-jersey").expect(404);
+});
+
+test("admin product list paginates and filters on the server", async () => {
+  const list = (query = "") => request(app)
+    .get(`/api/admin/products${query ? `?${query}` : ""}`)
+    .set("authorization", `Bearer ${token}`);
+  const names = async (query: string) => {
+    const response = await list(query).expect(200);
+    return response.body.data.map((product: { name: string }) => product.name).sort();
+  };
+
+  await request(app).get("/api/admin/products").expect(401);
+
+  const firstPage = await list("page=1&limit=2").expect(200);
+  const secondPage = await list("page=2&limit=2").expect(200);
+  assert.equal(firstPage.body.page, 1);
+  assert.equal(firstPage.body.limit, 2);
+  assert.equal(firstPage.body.total, 3);
+  assert.equal(firstPage.body.data.length, 2);
+  assert.equal(secondPage.body.page, 2);
+  assert.equal(secondPage.body.data.length, 1);
+  assert.equal(new Set([...firstPage.body.data, ...secondPage.body.data].map((product: { id: string }) => product.id)).size, 3);
+
+  assert.deepEqual(await names("search=tim"), ["Ferrari Team Jersey"]);
+  assert.deepEqual(await names("search=jerseys"), ["Ferrari Team Jersey", "General F1 Cap", "Historic Driver Product"]);
+  assert.deepEqual(await names("search=historic"), ["Historic Driver Product"]);
+  assert.deepEqual(await names("search=charles"), ["Ferrari Team Jersey", "Historic Driver Product"]);
+  assert.deepEqual(await names("status=DRAFT"), ["Ferrari Team Jersey", "General F1 Cap", "Historic Driver Product"]);
+  assert.deepEqual(await names(`categoryId=${categoryId}`), ["Ferrari Team Jersey", "General F1 Cap", "Historic Driver Product"]);
+  assert.deepEqual(await names(`teamId=${secondTeamId}`), ["Historic Driver Product"]);
+  assert.deepEqual(await names("teamId=MISSING"), ["General F1 Cap"]);
+  assert.deepEqual(await names(`driverId=${driverId}`), ["Ferrari Team Jersey", "Historic Driver Product"]);
+  assert.deepEqual(await names("driverId=MISSING"), ["General F1 Cap"]);
+  assert.deepEqual(await names("audience=UNISEX"), ["Ferrari Team Jersey"]);
+  assert.deepEqual(await names("audience=MISSING"), ["General F1 Cap", "Historic Driver Product"]);
+  assert.deepEqual(await names(`collectionId=${ferrariCollectionId}`), ["Ferrari Team Jersey"]);
+  assert.deepEqual(await names("collectionId=MISSING"), ["General F1 Cap", "Historic Driver Product"]);
+  assert.deepEqual(
+    await names(`teamId=${teamId}&driverId=${driverId}&audience=UNISEX&collectionId=${ferrariCollectionId}`),
+    ["Ferrari Team Jersey"],
+  );
+
+  const all = await list("all=true").expect(200);
+  assert.ok(Array.isArray(all.body));
+  assert.equal(all.body.length, 3);
+  assert.ok(Array.isArray(all.body[0].variants));
+
+  await list("page=0").expect(400);
+  await list("limit=101").expect(400);
+  await list("categoryId=not-a-uuid").expect(400);
+  await list("unknown=true").expect(400);
+});
+
+test("admins duplicate products as drafts without photos or inventory", async () => {
+  const source = await request(app).post("/api/admin/products").set("authorization", `Bearer ${token}`)
+    .send({
+      name: "Duplicate Source",
+      nameId: "Sumber Duplikat",
+      slug: "duplicate-source",
+      description: "A complete product to copy.",
+      descriptionId: "Produk lengkap untuk disalin.",
+      bulletPoints: [{ text: "Original detail", textId: "Detail asli" }],
+      sizingNote: "Original sizing note.",
+      priceIdr: 100_000,
+      salePriceIdr: 90_000,
+      status: "ACTIVE",
+      condition: "BNWT",
+      categoryId,
+      teamId,
+      driverIds: [driverId],
+      collectionIds: [ferrariCollectionId],
+      audience: "UNISEX",
+      variants: [{
+        sku: "DUP-SOURCE-M",
+        size: "M",
+        color: "Red",
+        stockQuantity: 5,
+        packageLengthMm: 300,
+        packageWidthMm: 200,
+        packageHeightMm: 50,
+        packageWeightG: 400,
+        sizingGuide: { unit: "cm", measurements: { length: 70, chestWidth: 50, waistWidth: 48 } },
+      }],
+    }).expect(201);
+  const sourceId = source.body.id;
+  await prisma.productPhoto.create({
+    data: { productId: sourceId, path: `duplicate-source-${randomUUID()}.webp`, altText: "Source photo" },
+  });
+  await prisma.productCollection.updateMany({ where: { productId: sourceId }, data: { featured: true, position: 7 } });
+
+  await request(app).post("/api/admin/products/not-a-uuid/duplicate").set("authorization", `Bearer ${token}`).expect(400);
+  await request(app).post(`/api/admin/products/${randomUUID()}/duplicate`).set("authorization", `Bearer ${token}`).expect(404);
+
+  const duplicate = await request(app).post(`/api/admin/products/${sourceId}/duplicate`)
+    .set("authorization", `Bearer ${token}`).expect(201);
+  assert.equal(duplicate.body.status, "DRAFT");
+  assert.equal(duplicate.body.name, "Copy of Duplicate Source");
+  assert.equal(duplicate.body.slug, "duplicate-source-copy");
+  assert.equal(duplicate.body.nameId, source.body.nameId);
+  assert.equal(duplicate.body.descriptionId, source.body.descriptionId);
+  assert.deepEqual(duplicate.body.bulletPoints, source.body.bulletPoints);
+  assert.equal(duplicate.body.variants[0].sku, "DUP-SOURCE-M-copy-1");
+  assert.equal(duplicate.body.variants[0].stockQuantity, 0);
+  assert.equal(duplicate.body.variants[0].sizingGuide.unit, "cm");
+  assert.equal(duplicate.body.photos.length, 0);
+  assert.deepEqual(duplicate.body.driverIds, [driverId]);
+  assert.deepEqual(duplicate.body.collectionIds, [ferrariCollectionId]);
+  const copiedMembership = await prisma.productCollection.findUniqueOrThrow({
+    where: { productId_collectionId: { productId: duplicate.body.id, collectionId: ferrariCollectionId } },
+  });
+  assert.equal(copiedMembership.featured, false);
+  assert.equal(copiedMembership.position, null);
+
+  await request(app).patch(`/api/admin/products/${sourceId}`).set("authorization", `Bearer ${token}`)
+    .send({ status: "ARCHIVED" }).expect(200);
+  const archivedDuplicate = await request(app).post(`/api/admin/products/${sourceId}/duplicate`)
+    .set("authorization", `Bearer ${token}`).expect(201);
+  assert.equal(archivedDuplicate.body.status, "DRAFT");
+  assert.equal(archivedDuplicate.body.slug, "duplicate-source-copy-2");
+
+  await prisma.product.deleteMany({ where: { id: { in: [sourceId, duplicate.body.id, archivedDuplicate.body.id] } } });
 });
 
 test("collection relations validate kind and allow multiple collections per entity", async () => {
@@ -1067,40 +1390,68 @@ test("public team and driver references support catalog filters", async () => {
 test("active products are filterable with exact variant stock", async () => {
   await request(app).patch(`/api/admin/products/${productId}`).set("authorization", `Bearer ${token}`)
     .send({ status: "ACTIVE", sizingNote: "  Allow a 1 cm tolerance.  " }).expect(200);
+  try {
+    await request(app).patch(`/api/admin/products/${productId}`).set("authorization", `Bearer ${token}`)
+      .send({ name: "Oracle Red Bull Racing Formula 1 Team Polo 2026", nameId: "Polo Oracle Red Bull 2026" }).expect(200);
+    const separatedTerms = await request(app).get("/api/products?search=red%20bull%202026").expect(200);
+    assert.equal(separatedTerms.body.total, 1);
+    assert.equal(separatedTerms.body.data[0].id, productId);
+    const reorderedTerms = await request(app).get("/api/products?search=2026%20red-bull").expect(200);
+    assert.equal(reorderedTerms.body.total, 1);
+    assert.equal(reorderedTerms.body.data[0].id, productId);
+    const missingTerm = await request(app).get("/api/products?search=red%20bull%202030").expect(200);
+    assert.equal(missingTerm.body.total, 0);
+    assert.equal((await request(app).get("/api/products?search=limited%20edition")).body.total, 1);
+    assert.equal((await request(app).get("/api/products?search=charles")).body.total, 1);
+    assert.equal((await request(app).get("/api/products?search=jerseys")).body.total, 1);
+  } finally {
+    await request(app).patch(`/api/admin/products/${productId}`).set("authorization", `Bearer ${token}`)
+      .send({ name: "Ferrari Team Jersey", nameId: "Jersey Tim Ferrari" }).expect(200);
+  }
   const response = await request(app)
     .get("/api/products?search=team&size=M&color=Red&team=ferrari&driver=charles-leclerc")
     .expect(200);
   assert.equal(response.body.total, 1);
   assert.equal(response.body.data[0].priceIdr, 1_250_000);
-  assert.equal(response.body.data[0].sizingNote, "Allow a 1 cm tolerance.");
   assert.equal(response.body.data[0].condition, "BNWT");
-  assert.equal(response.body.data[0].team.slug, "ferrari");
+  assert.equal(response.body.data[0].team.name, "Ferrari");
+  assert.equal(response.body.data[0].name, "Ferrari Team Jersey");
+  assert.equal(response.body.data[0].bulletPoints, undefined);
+  assert.equal(response.body.data[0].variants, undefined);
+  assert.equal(response.body.data[0].collections, undefined);
+  const english = await request(app).get("/api/products/ferrari-team-jersey").expect(200);
+  assert.equal(english.body.sizingNote, "Allow a 1 cm tolerance.");
+  assert.deepEqual(english.body.bulletPoints, [
+    "Official team styling.",
+    "Lightweight performance fabric.",
+  ]);
+  assert.equal(english.body.team.slug, "ferrari");
   assert.deepEqual(
-    response.body.data[0].drivers.map((driver: { slug: string }) => driver.slug),
+    english.body.drivers.map((driver: { slug: string }) => driver.slug),
     ["charles-leclerc", "niki-lauda"],
   );
-  assert.equal(response.body.data[0].audience, "UNISEX");
-  assert.equal(response.body.data[0].variants[0].available, true);
-  assert.equal(response.body.data[0].variants[0].stockQuantity, 8);
-  assert.equal(response.body.data[0].name, "Ferrari Team Jersey");
-  assert.equal(response.body.data[0].nameId, undefined);
-  assert.equal(response.body.data[0].descriptionId, undefined);
-  const publicFerrariCollection = response.body.data[0].collections
+  assert.equal(english.body.audience, "UNISEX");
+  assert.equal(english.body.variants[0].available, true);
+  assert.equal(english.body.variants[0].stockQuantity, 8);
+  const publicFerrariCollection = english.body.collections
     .find((collection: { slug: string }) => collection.slug === "ferrari");
   assert.equal(publicFerrariCollection.description, "Shop the Ferrari collection.");
   assert.equal(publicFerrariCollection.descriptionId, undefined);
   const indonesian = await request(app).get("/api/products/ferrari-team-jersey?locale=id").expect(200);
   assert.equal(indonesian.body.name, "Jersey Tim Ferrari");
   assert.equal(indonesian.body.description, "Jersey tim merah resmi");
+  assert.deepEqual(indonesian.body.bulletPoints, ["Gaya tim resmi.", "Lightweight performance fabric."]);
   assert.equal(indonesian.body.nameId, undefined);
   assert.equal(indonesian.body.descriptionId, undefined);
   const indonesianFerrariCollection = indonesian.body.collections
     .find((collection: { slug: string }) => collection.slug === "ferrari");
   assert.equal(indonesianFerrariCollection.description, "Jelajahi koleksi Ferrari.");
   assert.equal(indonesianFerrariCollection.descriptionId, undefined);
-  const indonesianSearch = await request(app).get("/api/products?locale=id&search=merah").expect(200);
+  const indonesianSearch = await request(app).get("/api/products?locale=id&search=tim").expect(200);
   assert.equal(indonesianSearch.body.total, 1);
   assert.equal(indonesianSearch.body.data[0].name, "Jersey Tim Ferrari");
+  const descriptionOnlySearch = await request(app).get("/api/products?search=official").expect(200);
+  assert.equal(descriptionOnlySearch.body.total, 0);
   await request(app).get("/api/products?locale=fr").expect(400);
   await request(app).patch(`/api/admin/products/${productId}`).set("authorization", `Bearer ${token}`)
     .send({ descriptionId: null }).expect(200);
@@ -1146,6 +1497,212 @@ test("active products are filterable with exact variant stock", async () => {
   assert.equal(noGuideVariant.body.sizingGuide, null);
 });
 
+test("product bullet points validate, persist order, and localize detail responses", async () => {
+  await request(app).patch(`/api/admin/products/${productId}`).set("authorization", `Bearer ${token}`)
+    .send({ bulletPoints: [{ text: "" }] }).expect(400);
+  await request(app).patch(`/api/admin/products/${productId}`).set("authorization", `Bearer ${token}`)
+    .send({ bulletPoints: [{ text: "x".repeat(241) }] }).expect(400);
+  await request(app).patch(`/api/admin/products/${productId}`).set("authorization", `Bearer ${token}`)
+    .send({ bulletPoints: Array.from({ length: 11 }, (_, index) => ({ text: `Point ${index + 1}` })) }).expect(400);
+
+  const empty = await request(app).patch(`/api/admin/products/${productId}`).set("authorization", `Bearer ${token}`)
+    .send({ bulletPoints: [] }).expect(200);
+  assert.deepEqual(empty.body.bulletPoints, []);
+  const emptyPublic = await request(app).get("/api/products/ferrari-team-jersey").expect(200);
+  assert.deepEqual(emptyPublic.body.bulletPoints, []);
+
+  const updated = await request(app).patch(`/api/admin/products/${productId}`).set("authorization", `Bearer ${token}`)
+    .send({
+      bulletPoints: [
+        { text: "Second highlight", textId: "Sorotan kedua" },
+        { text: "First highlight", textId: "" },
+      ],
+    }).expect(200);
+  assert.deepEqual(updated.body.bulletPoints, [
+    { text: "Second highlight", textId: "Sorotan kedua" },
+    { text: "First highlight", textId: null },
+  ]);
+  const english = await request(app).get("/api/products/ferrari-team-jersey").expect(200);
+  const indonesian = await request(app).get("/api/products/ferrari-team-jersey?locale=id").expect(200);
+  assert.deepEqual(english.body.bulletPoints, ["Second highlight", "First highlight"]);
+  assert.deepEqual(indonesian.body.bulletPoints, ["Sorotan kedua", "First highlight"]);
+  assert.equal(indonesian.body.bulletPoints.some((point: unknown) => typeof point !== "string"), false);
+});
+
+test("variant order persists across admin and public product responses", async () => {
+  const product = await request(app).post("/api/admin/products").set("authorization", `Bearer ${token}`)
+    .send({
+      name: "Variant Ordering Product",
+      slug: "variant-ordering-product",
+      priceIdr: 800_000,
+      status: "ACTIVE",
+      condition: "BNWT",
+      categoryId,
+      collectionIds: [ferrariCollectionId],
+      audience: "UNISEX",
+      variants: [
+        {
+          sku: "ORDER-L-RED",
+          size: "L",
+          color: "Red",
+          stockQuantity: 1,
+          packageLengthMm: 300,
+          packageWidthMm: 220,
+          packageHeightMm: 40,
+          packageWeightG: 450,
+        },
+        {
+          sku: "ORDER-S-BLUE",
+          size: "S",
+          color: "Blue",
+          stockQuantity: 1,
+          packageLengthMm: 300,
+          packageWidthMm: 220,
+          packageHeightMm: 40,
+          packageWeightG: 450,
+        },
+        {
+          sku: "ORDER-M-RED",
+          size: "M",
+          color: "Red",
+          stockQuantity: 1,
+          packageLengthMm: 300,
+          packageWidthMm: 220,
+          packageHeightMm: 40,
+          packageWeightG: 450,
+        },
+      ],
+    }).expect(201);
+  assert.deepEqual(product.body.variants.map((variant: { sku: string; position: number }) => [variant.sku, variant.position]), [
+    ["ORDER-L-RED", 0],
+    ["ORDER-S-BLUE", 1],
+    ["ORDER-M-RED", 2],
+  ]);
+
+  const ids = Object.fromEntries(product.body.variants.map((variant: { id: string; sku: string }) => [variant.sku, variant.id]));
+  for (const [position, sku] of ["ORDER-M-RED", "ORDER-L-RED", "ORDER-S-BLUE"].entries()) {
+    await request(app).patch(`/api/admin/products/${product.body.id}/variants/${ids[sku]}`)
+      .set("authorization", `Bearer ${token}`).send({ position }).expect(200);
+  }
+
+  const admin = await request(app).get(`/api/admin/products/${product.body.id}`)
+    .set("authorization", `Bearer ${token}`).expect(200);
+  assert.deepEqual(admin.body.variants.map((variant: { sku: string }) => variant.sku), [
+    "ORDER-M-RED",
+    "ORDER-L-RED",
+    "ORDER-S-BLUE",
+  ]);
+
+  const publicProduct = await request(app).get("/api/products/variant-ordering-product").expect(200);
+  assert.deepEqual(publicProduct.body.variants.map((variant: { sku: string }) => variant.sku), [
+    "ORDER-M-RED",
+    "ORDER-L-RED",
+    "ORDER-S-BLUE",
+  ]);
+  assert.equal(publicProduct.body.variants[0].position, undefined);
+
+  const appended = await request(app).post(`/api/admin/products/${product.body.id}/variants`)
+    .set("authorization", `Bearer ${token}`)
+    .send({
+      sku: "ORDER-XL-GREEN",
+      size: "XL",
+      color: "Green",
+      stockQuantity: 1,
+      packageLengthMm: 300,
+      packageWidthMm: 220,
+      packageHeightMm: 40,
+      packageWeightG: 450,
+    }).expect(201);
+  assert.equal(appended.body.position, 3);
+  await prisma.product.delete({ where: { id: product.body.id } });
+});
+
+test("sold-out products archive after admin inventory changes and reject empty activation", async () => {
+  const createdIds: string[] = [];
+  const variant = (sku: string, stockQuantity: number) => ({
+    sku,
+    stockQuantity,
+    packageLengthMm: 300,
+    packageWidthMm: 220,
+    packageHeightMm: 40,
+    packageWeightG: 450,
+  });
+  const create = async (name: string, slug: string, variants: Array<ReturnType<typeof variant>>, status = "ACTIVE") => {
+    const response = await request(app).post("/api/admin/products").set("authorization", `Bearer ${token}`)
+      .send({
+        name,
+        slug,
+        priceIdr: 100_000,
+        status,
+        condition: "BNWT",
+        categoryId,
+        collectionIds: [ferrariCollectionId],
+        audience: "UNISEX",
+        variants,
+      }).expect(201);
+    createdIds.push(response.body.id);
+    return response;
+  };
+
+  try {
+    const multiVariant = await create("Stocked Variant Product", "stocked-variant-product", [
+      variant("STOCKED-VARIANT-EMPTY", 0),
+      variant("STOCKED-VARIANT-AVAILABLE", 1),
+    ]);
+    const availableVariantId = multiVariant.body.variants.find(({ sku }: { sku: string }) => sku === "STOCKED-VARIANT-AVAILABLE").id;
+    await request(app).patch(`/api/admin/products/${multiVariant.body.id}/variants/${availableVariantId}`)
+      .set("authorization", `Bearer ${token}`).send({ stockQuantity: 0 }).expect(200);
+    assert.equal((await prisma.product.findUniqueOrThrow({ where: { id: multiVariant.body.id } })).status, "ARCHIVED");
+    await request(app).patch(`/api/admin/products/${multiVariant.body.id}/variants/${availableVariantId}`)
+      .set("authorization", `Bearer ${token}`).send({ stockQuantity: 2 }).expect(200);
+    assert.equal((await prisma.product.findUniqueOrThrow({ where: { id: multiVariant.body.id } })).status, "ARCHIVED");
+
+    const deleteProduct = await create("Delete Sold Out Product", "delete-sold-out-product", [
+      variant("DELETE-SOLD-OUT-AVAILABLE", 1),
+      variant("DELETE-SOLD-OUT-EMPTY", 0),
+    ]);
+    const availableToDelete = deleteProduct.body.variants.find(({ sku }: { sku: string }) => sku === "DELETE-SOLD-OUT-AVAILABLE").id;
+    await request(app).delete(`/api/admin/products/${deleteProduct.body.id}/variants/${availableToDelete}`)
+      .set("authorization", `Bearer ${token}`).expect(204);
+    assert.equal((await prisma.product.findUniqueOrThrow({ where: { id: deleteProduct.body.id } })).status, "ARCHIVED");
+
+    const legacy = await prisma.product.create({
+      data: {
+        name: "Legacy Empty Product",
+        slug: "legacy-empty-product",
+        priceIdr: 100_000,
+        status: "ACTIVE",
+        condition: "BNWT",
+        categoryId,
+        variants: { create: variant("LEGACY-EMPTY", 0) },
+      },
+    });
+    createdIds.push(legacy.id);
+    await request(app).post(`/api/admin/products/${legacy.id}/variants`).set("authorization", `Bearer ${token}`)
+      .send(variant("LEGACY-EMPTY-SECOND", 0)).expect(201);
+    assert.equal((await prisma.product.findUniqueOrThrow({ where: { id: legacy.id } })).status, "ARCHIVED");
+
+    await request(app).post("/api/admin/products").set("authorization", `Bearer ${token}`)
+      .send({
+        name: "Cannot Activate Empty Product",
+        slug: "cannot-activate-empty-product",
+        priceIdr: 100_000,
+        status: "ACTIVE",
+        condition: "BNWT",
+        categoryId,
+        collectionIds: [ferrariCollectionId],
+        audience: "UNISEX",
+        variants: [variant("CANNOT-ACTIVATE-EMPTY", 0)],
+      }).expect(400, { error: { code: "OUT_OF_STOCK", message: "Active products must have stock available" } });
+
+    const draft = await create("Draft Empty Product", "draft-empty-product", [variant("DRAFT-EMPTY", 0)], "DRAFT");
+    await request(app).patch(`/api/admin/products/${draft.body.id}`).set("authorization", `Bearer ${token}`)
+      .send({ status: "ACTIVE" }).expect(400, { error: { code: "OUT_OF_STOCK", message: "Active products must have stock available" } });
+  } finally {
+    await prisma.product.deleteMany({ where: { id: { in: createdIds } } });
+  }
+});
+
 test("home collection blocks support ordered CRUD, ranked products, limits, localization, and image cleanup", async () => {
   const endpoint = "/api/admin/home/collection-blocks";
   const pngHeader = Buffer.from([0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a]);
@@ -1178,8 +1735,38 @@ test("home collection blocks support ordered CRUD, ranked products, limits, loca
 
   try {
     await request(app).get(endpoint).expect(401);
-    await request(app).post(endpoint).set("authorization", `Bearer ${token}`)
-      .field({ collectionId: ferrariCollectionId, active: "true" }).expect(400);
+    await request(app).put(`/api/admin/collections/${ferrariCollectionId}/products`)
+      .set("authorization", `Bearer ${token}`)
+      .send({
+        productIds: [productId, ...extraProducts.map(({ id }) => id)],
+        featuredProductIds: [extraProducts[4].id],
+      }).expect(200);
+
+    const empty = await request(app).post(endpoint).set("authorization", `Bearer ${token}`)
+      .field({ collectionId: ferrariCollectionId, active: "true" }).expect(201);
+    assert.equal(empty.body.leadImageUrl, null);
+    assert.equal(empty.body.sideImageOneUrl, null);
+    assert.equal(empty.body.sideImageTwoUrl, null);
+    const publicEmpty = await request(app).get("/api/home/collection-blocks").expect(200);
+    assert.equal(publicEmpty.body.find((block: { id: string }) => block.id === empty.body.id).leadImageUrl, null);
+    await request(app).delete(`${endpoint}/${empty.body.id}`).set("authorization", `Bearer ${token}`).expect(204);
+
+    const partial = await request(app).post(endpoint).set("authorization", `Bearer ${token}`)
+      .field({ collectionId: extraCollections[0].id, active: "false" })
+      .attach("leadImage", pngHeader, "lead-only.png")
+      .expect(201);
+    assert.ok(partial.body.leadImageUrl);
+    assert.equal(partial.body.sideImageOneUrl, null);
+    assert.equal(partial.body.sideImageTwoUrl, null);
+    const preserved = await request(app).put(`${endpoint}/${partial.body.id}`)
+      .set("authorization", `Bearer ${token}`)
+      .field({ collectionId: extraCollections[0].id, active: "false" })
+      .expect(200);
+    assert.equal(preserved.body.leadImageUrl, partial.body.leadImageUrl);
+    assert.equal(preserved.body.sideImageOneUrl, null);
+    assert.equal(preserved.body.sideImageTwoUrl, null);
+    await request(app).delete(`${endpoint}/${partial.body.id}`).set("authorization", `Bearer ${token}`).expect(204);
+
     await request(app).post(endpoint).set("authorization", `Bearer ${token}`)
       .field({ collectionId: ferrariCollectionId, active: "true" })
       .attach("leadImage", Buffer.from("invalid"), "lead.png")
@@ -1216,6 +1803,10 @@ test("home collection blocks support ordered CRUD, ranked products, limits, loca
     assert.equal(english.body[0].products.length, 5);
     assert.equal(english.body[0].products[0].id, extraProducts[4].id);
     assert.equal(english.body[0].products.some((product: { id: string }) => product.id === extraProducts[3].id), false);
+    assert.ok(english.body[0].products.every((product: { photos: unknown[] }) => product.photos.length <= 2));
+    assert.equal(english.body[0].products[0].description, undefined);
+    assert.equal(english.body[0].products[0].variants, undefined);
+    assert.equal(english.body[0].products[0].collections, undefined);
     const indonesian = await request(app).get("/api/home/collection-blocks?locale=id").expect(200);
     assert.equal(indonesian.body[0].collection.description, "Jelajahi koleksi Ferrari.");
     assert.equal(indonesian.body[0].products.find((product: { id: string }) => product.id === productId).name, "Jersey Tim Ferrari");
@@ -1317,24 +1908,32 @@ test("product sales validate and price public catalog results until cleared", as
   let comparisonId: string | undefined;
   try {
     await request(app).patch(`/api/admin/products/${productId}`).set("authorization", `Bearer ${token}`)
-      .send({ salePercentage: 0 }).expect(400);
+      .send({ salePriceIdr: 0 }).expect(400);
     await request(app).patch(`/api/admin/products/${productId}`).set("authorization", `Bearer ${token}`)
-      .send({ salePercentage: 100 }).expect(400);
+      .send({ salePriceIdr: -1 }).expect(400);
     await request(app).patch(`/api/admin/products/${productId}`).set("authorization", `Bearer ${token}`)
-      .send({ priceIdr: 1, salePercentage: 1 }).expect(400);
+      .send({ salePriceIdr: 1.5 }).expect(400);
+    await request(app).patch(`/api/admin/products/${productId}`).set("authorization", `Bearer ${token}`)
+      .send({ salePriceIdr: 1_250_000 }).expect(400);
+    await request(app).patch(`/api/admin/products/${productId}`).set("authorization", `Bearer ${token}`)
+      .send({ salePriceIdr: 1_250_001 }).expect(400);
+    await request(app).patch(`/api/admin/products/${productId}`).set("authorization", `Bearer ${token}`)
+      .send({ salePercentage: 10 }).expect(400);
     const managed = await request(app).patch(`/api/admin/products/${productId}`)
       .set("authorization", `Bearer ${token}`)
-      .send({ salePercentage: 28 }).expect(200);
-    assert.equal(managed.body.salePriceIdr, 900_000);
-    assert.equal(managed.body.salePercentage, 28);
+      .send({ priceIdr: 200_000, salePriceIdr: 180_000 }).expect(200);
+    assert.equal(managed.body.salePriceIdr, 180_000);
+    assert.equal(managed.body.salePercentage, 10);
     const repriced = await request(app).patch(`/api/admin/products/${productId}`)
       .set("authorization", `Bearer ${token}`)
       .send({ priceIdr: 1_000_000 }).expect(200);
-    assert.equal(repriced.body.salePriceIdr, 720_000);
-    assert.equal(repriced.body.salePercentage, 28);
+    assert.equal(repriced.body.salePriceIdr, 180_000);
+    assert.equal(repriced.body.salePercentage, 82);
+    await request(app).patch(`/api/admin/products/${productId}`).set("authorization", `Bearer ${token}`)
+      .send({ priceIdr: 180_000 }).expect(400);
     await request(app).patch(`/api/admin/products/${productId}`)
       .set("authorization", `Bearer ${token}`)
-      .send({ priceIdr: 1_250_000 }).expect(200);
+      .send({ priceIdr: 1_250_000, salePriceIdr: 900_000 }).expect(200);
 
     const comparison = await prisma.product.create({
       data: {
@@ -1370,6 +1969,20 @@ test("product sales validate and price public catalog results until cleared", as
     assert.deepEqual(saleCatalog.body.facets.price, { min: 800_000, max: 900_000 });
     const defaultCatalog = await request(app).get("/api/products?limit=100").expect(200);
     assert.equal(defaultCatalog.body.facets, undefined);
+    assert.deepEqual(Object.keys(defaultCatalog.body.data[0]).sort(), [
+      "condition",
+      "id",
+      "name",
+      "originalPriceIdr",
+      "photos",
+      "priceIdr",
+      "productType",
+      "salePercentage",
+      "slug",
+      "tags",
+      "team",
+    ]);
+    assert.ok(defaultCatalog.body.data.every((product: { photos: unknown[] }) => product.photos.length <= 2));
     await request(app).get("/api/products?sale=invalid").expect(400);
 
     const publicProduct = await request(app).get("/api/products/ferrari-team-jersey").expect(200);
@@ -1394,7 +2007,7 @@ test("product sales validate and price public catalog results until cleared", as
     assert.deepEqual(sorted.body.facets.price, { min: 800_000, max: 900_000 });
 
     await request(app).patch(`/api/admin/products/${productId}`).set("authorization", `Bearer ${token}`)
-      .send({ salePercentage: null }).expect(200);
+      .send({ salePriceIdr: null }).expect(200);
     const cleared = await request(app).get("/api/products/ferrari-team-jersey").expect(200);
     assert.equal(cleared.body.priceIdr, 1_250_000);
     assert.equal(cleared.body.originalPriceIdr, null);
@@ -1410,8 +2023,59 @@ test("product sales validate and price public catalog results until cleared", as
 
 test("cart items return only requested active variants and report missing ids", async () => {
   const product = await request(app).get("/api/products/ferrari-team-jersey").expect(200);
-  const variantId = product.body.variants[0].id as string;
+  const variantId = product.body.variants.find(({ sku }: { sku: string }) => sku === "FER-JER-RED-M").id as string;
   const missingId = randomUUID();
+  const empty = await request(app).post("/api/products/cart-items").send({
+    variantIds: [variantId],
+    locale: "en",
+  }).expect(200);
+  assert.equal(empty.body.data[0].variant.unitsSold, 0);
+
+  const salesCases = [
+    { suffix: "PAID-1", paymentStatus: "PAID", lifecycleStatus: "UNFULFILLED", quantity: 2 },
+    { suffix: "PAID-2", paymentStatus: "PAID", lifecycleStatus: "FULFILLED", quantity: 3 },
+    { suffix: "PENDING", paymentStatus: "PENDING", lifecycleStatus: "UNFULFILLED", quantity: 5 },
+    { suffix: "FAILED", paymentStatus: "FAILED", lifecycleStatus: "UNFULFILLED", quantity: 7 },
+    { suffix: "REFUNDED", paymentStatus: "REFUNDED", lifecycleStatus: "UNFULFILLED", quantity: 11 },
+    { suffix: "CANCELLED", paymentStatus: "PAID", lifecycleStatus: "CANCELLED", quantity: 13 },
+  ] as const;
+  await Promise.all(salesCases.map((sale) => prisma.order.create({
+    data: {
+      orderNumber: `SOLD-COUNT-${sale.suffix}`,
+      idempotencyKey: randomUUID(),
+      email: `${sale.suffix.toLowerCase()}@example.com`,
+      firstName: "Sales",
+      lastName: "Count",
+      phone: "+628123456789",
+      address: "Sales Count Street 1",
+      city: "Jakarta",
+      province: "DKI Jakarta",
+      postalCode: "12345",
+      subtotalIdr: sale.quantity * 1_000,
+      shippingIdr: 0,
+      totalIdr: sale.quantity * 1_000,
+      courierCode: "jne",
+      courierName: "JNE",
+      courierServiceCode: "reg",
+      courierServiceName: "Regular",
+      courierDuration: "1 - 2 days",
+      paymentStatus: sale.paymentStatus,
+      lifecycleStatus: sale.lifecycleStatus,
+      items: {
+        create: {
+          variantId,
+          productName: product.body.name,
+          sku: "FER-JER-RED-M",
+          unitPriceIdr: 1_000,
+          quantity: sale.quantity,
+          packageLengthMm: 300,
+          packageWidthMm: 220,
+          packageHeightMm: 40,
+          packageWeightG: 450,
+        },
+      },
+    },
+  })));
   const response = await request(app).post("/api/products/cart-items").send({
     variantIds: [variantId, variantId, missingId],
     locale: "id",
@@ -1422,10 +2086,12 @@ test("cart items return only requested active variants and report missing ids", 
   assert.equal(response.body.data[0].variant.id, variantId);
   assert.equal(response.body.data[0].variant.available, true);
   assert.equal(response.body.data[0].variant.stockQuantity, 8);
+  assert.equal(response.body.data[0].variant.unitsSold, 5);
   assert.deepEqual(response.body.missingVariantIds, [missingId]);
   assert.equal(response.body.data[0].product.description, undefined);
   await request(app).post("/api/products/cart-items").send({ variantIds: [], locale: "en" }).expect(400);
   await request(app).post("/api/products/cart-items").send({ variantIds: [variantId], locale: "fr" }).expect(400);
+  await prisma.order.deleteMany({ where: { orderNumber: { startsWith: "SOLD-COUNT-" } } });
 });
 
 test("shipping rates use authoritative cart data and normalize Biteship responses", async () => {
@@ -1433,15 +2099,15 @@ test("shipping rates use authoritative cart data and normalize Biteship response
   const originalShippingConfig = {
     apiKey: config.biteshipApiKey,
     originPostalCode: config.biteshipOriginPostalCode,
-    couriers: config.biteshipCouriers,
+    couriers: await activeCourierCodes(),
     turnstileSecretKey: config.turnstileSecretKey,
     storefrontUrl: config.storefrontUrl,
   };
   const product = await request(app).get("/api/products/ferrari-team-jersey").expect(200);
-  const variantId = product.body.variants[0].id as string;
+  const variantId = product.body.variants.find(({ sku }: { sku: string }) => sku === "FER-JER-RED-M").id as string;
   config.biteshipApiKey = "biteship_test.test-key";
   config.biteshipOriginPostalCode = "12440";
-  config.biteshipCouriers = ["jne", "sicepat"];
+  await setActiveCourierCodes(["jne", "sicepat"]);
   config.turnstileSecretKey = "turnstile-test-secret";
   config.storefrontUrl = "https://valydejersey.com";
   await prisma.product.update({ where: { id: productId }, data: { salePriceIdr: 900_000, salePercentage: 28 } });
@@ -1490,6 +2156,11 @@ test("shipping rates use authoritative cart data and normalize Biteship response
       destinationPostalCode: "12240",
       items: [{ variantId, quantity: 1 }],
     };
+    await request(app).get("/api/shipping/free-shipping-policy").expect(200, {
+      active: false,
+      minimumPurchaseIdr: 1_000_000,
+      maxCoverageIdr: 25_000,
+    });
     await request(app).post("/api/shipping/rates").send(protectedRequest).expect(403);
     for (const turnstileToken of ["turnstile-rejected", "turnstile-wrong-action", "turnstile-wrong-hostname"]) {
       await request(app).post("/api/shipping/rates").send({ ...protectedRequest, turnstileToken }).expect(403);
@@ -1514,6 +2185,42 @@ test("shipping rates use authoritative cart data and normalize Biteship response
         name: "Ferrari Team Jersey", category: "fashion", sku: "FER-JER-RED-M", value: 900_000,
         quantity: 3, weight: 450, height: 4, length: 30, width: 22,
       }],
+    });
+
+    await prisma.freeShippingRule.update({
+      where: { id: 1 },
+      data: { active: true, minimumPurchaseIdr: 900_000, maxCoverageIdr: 25_000 },
+    });
+    const coveredQuote = await request(app).post("/api/shipping/rates").send({
+      ...protectedRequest,
+      turnstileToken: "turnstile-valid",
+    }).expect(200);
+    assert.deepEqual(coveredQuote.body.rates.map((rate: {
+      originalPrice: number; shippingDiscountIdr: number; price: number;
+    }) => [rate.originalPrice, rate.shippingDiscountIdr, rate.price]), [
+      [18_000, 18_000, 0], [25_000, 25_000, 0], [32_000, 25_000, 7_000],
+    ]);
+    await prisma.freeShippingRule.update({ where: { id: 1 }, data: { active: false } });
+
+    globalThis.fetch = withTurnstile(async (_input, init) => {
+      upstreamBody = JSON.parse(String(init?.body)) as Record<string, unknown>;
+      return Response.json({
+        pricing: [{
+          courier_code: "jne", courier_name: "JNE", courier_service_code: "reg",
+          courier_service_name: "Reguler", price: 22_000, insurance_fee: 4_000,
+          available_for_insurance: true, available_collection_method: ["pickup"],
+        }],
+      });
+    });
+    const insuredQuote = await request(app).post("/api/shipping/rates").send({
+      ...protectedRequest, turnstileToken: "turnstile-valid",
+    }).expect(200);
+    assert.deepEqual(upstreamBody?.courier_insurance, 900_000);
+    assert.deepEqual(insuredQuote.body.rates[0], {
+      courierCode: "jne", courierName: "JNE", serviceCode: "reg", serviceName: "Reguler",
+      description: "", duration: "", serviceType: "", currency: "IDR", originalPrice: 18_000,
+      shippingDiscountIdr: 0, insuranceAvailable: true, insuranceFeeIdr: 4_000,
+      insuranceValueIdr: 900_000, price: 22_000, availableCollectionMethods: ["pickup"],
     });
 
     await request(app).post("/api/shipping/rates")
@@ -1551,9 +2258,13 @@ test("shipping rates use authoritative cart data and normalize Biteship response
     globalThis.fetch = originalFetch;
     config.biteshipApiKey = originalShippingConfig.apiKey;
     config.biteshipOriginPostalCode = originalShippingConfig.originPostalCode;
-    config.biteshipCouriers = originalShippingConfig.couriers;
+    await setActiveCourierCodes(originalShippingConfig.couriers);
     config.turnstileSecretKey = originalShippingConfig.turnstileSecretKey;
     config.storefrontUrl = originalShippingConfig.storefrontUrl;
+    await prisma.freeShippingRule.update({
+      where: { id: 1 },
+      data: { active: false, minimumPurchaseIdr: 1_000_000, maxCoverageIdr: 25_000 },
+    });
   }
 });
 
@@ -1661,7 +2372,7 @@ test("Biteship status webhooks update provider data without changing order lifec
 
 test("promo codes are normalized, validated, previewed, and managed by admins", async () => {
   const product = await request(app).get("/api/products/ferrari-team-jersey").expect(200);
-  const variantId = product.body.variants[0].id as string;
+  const variantId = product.body.variants.find(({ sku }: { sku: string }) => sku === "FER-JER-RED-M").id as string;
   await request(app).get("/api/admin/promo-codes").expect(401);
   const created = await request(app).post("/api/admin/promo-codes")
     .set("authorization", `Bearer ${token}`)
@@ -1723,7 +2434,7 @@ test("checkout verifies payment notifications, reserves stock, and waits for man
     originName: config.biteshipOriginContactName,
     originPhone: config.biteshipOriginContactPhone,
     originAddress: config.biteshipOriginAddress,
-    couriers: config.biteshipCouriers,
+    couriers: await activeCourierCodes(),
     midtransEnv: config.midtransEnv,
     merchantId: config.midtransMerchantId,
     serverKey: config.midtransServerKey,
@@ -1739,13 +2450,13 @@ test("checkout verifies payment notifications, reserves stock, and waits for man
     telegramChatId: config.telegramChatId,
   };
   const product = await request(app).get("/api/products/ferrari-team-jersey").expect(200);
-  const variantId = product.body.variants[0].id as string;
+  const variantId = product.body.variants.find(({ sku }: { sku: string }) => sku === "FER-JER-RED-M").id as string;
   config.biteshipApiKey = "biteship_test.checkout";
   config.biteshipOriginPostalCode = "12440";
   config.biteshipOriginContactName = "Warehouse";
   config.biteshipOriginContactPhone = "081234567890";
   config.biteshipOriginAddress = "Jl. Warehouse 1, Jakarta";
-  config.biteshipCouriers = ["jne"];
+  await setActiveCourierCodes(["jne"]);
   config.midtransEnv = "sandbox";
   config.midtransMerchantId = "merchant-test";
   config.midtransServerKey = "server-test";
@@ -1770,6 +2481,7 @@ test("checkout verifies payment notifications, reserves stock, and waits for man
   let failNextBooking = false;
   let rateCollectionMethods = ["pickup", "drop_off"];
   const statusResponses = new Map<string, Record<string, unknown> | "upstream-error">();
+  const expireFailures = new Set<string>();
   const sentEmails: EmailMessageBuilder[] = [];
   const telegramBodies: Array<{ chat_id: string; text: string; disable_web_page_preview: boolean }> = [];
   setDefaultEmailSender({
@@ -1781,6 +2493,8 @@ test("checkout verifies payment notifications, reserves stock, and waits for man
   const snapBodies: Array<{
     transaction_details: { gross_amount: number };
     item_details: Array<{ id: string; name: string; price: number; quantity: number }>;
+    expiry: { start_time: string; unit: string; duration: number };
+    page_expiry: { unit: string; duration: number };
   }> = [];
   const bookingBodies: Array<{
     reference_id: string;
@@ -1802,7 +2516,7 @@ test("checkout verifies payment notifications, reserves stock, and waits for man
       return new Response(JSON.stringify({ pricing: [{
         courier_code: "jne", courier_name: "JNE", courier_service_code: "reg", courier_service_name: "Reguler",
         description: "Regular service", duration: "2 - 3 days", service_type: "standard", currency: "IDR",
-        price: 18_000, available_collection_method: rateCollectionMethods,
+        price: 18_000, insurance_fee: 0, available_for_insurance: true, available_collection_method: rateCollectionMethods,
       }] }), { status: 200, headers: { "content-type": "application/json" } });
     }
     if (url.includes("midtrans.com/snap/v1/transactions")) {
@@ -1828,6 +2542,19 @@ test("checkout verifies payment notifications, reserves stock, and waits for man
       if (status === "upstream-error") return Response.json({ status_message: "Unavailable" }, { status: 503 });
       if (status) return Response.json(status);
       return Response.json({ status_message: "Transaction does not exist" }, { status: 404 });
+    }
+    const expireOrderId = url.match(/midtrans\.com\/v2\/([^/]+)\/expire$/)?.[1];
+    if (expireOrderId) {
+      const orderId = decodeURIComponent(expireOrderId);
+      if (expireFailures.has(orderId)) return Response.json({ status_code: "412" }, { status: 503 });
+      const status = statusResponses.get(orderId);
+      const grossAmount = status && status !== "upstream-error" ? String(status.gross_amount) : "0.00";
+      return Response.json({
+        status_code: "407",
+        order_id: orderId,
+        gross_amount: grossAmount,
+        transaction_status: "expire",
+      });
     }
     if (url.endsWith("/v1/orders")) {
       bookingCalls += 1;
@@ -1951,8 +2678,10 @@ test("checkout verifies payment notifications, reserves stock, and waits for man
     items: [{ variantId, quantity: 1 }],
     courierCode: "jne",
     serviceCode: "reg",
+    quotedShippingIdr: 18_000,
     turnstileToken: "turnstile-valid",
   };
+  let selloutProductId: string | undefined;
 
   try {
     const ordersBeforeRejectedHuman = await prisma.order.count();
@@ -1975,6 +2704,13 @@ test("checkout verifies payment notifications, reserves stock, and waits for man
     assert.equal(repeated.body.orderId, checkout.body.orderId);
     assert.equal(rateCalls, 1);
     assert.equal(snapCalls, 1);
+    await request(app).post("/api/checkout").send({
+      ...payload,
+      idempotencyKey: randomUUID(),
+      quotedShippingIdr: 18_001,
+    }).expect(409, {
+      error: { code: "SHIPPING_RATE_CHANGED", message: "The selected shipping service or price has changed" },
+    });
     assert.equal((await prisma.productVariant.findUniqueOrThrow({ where: { id: variantId } })).stockQuantity, 7);
     assert.deepEqual(snapBodies[0].item_details[0], {
       id: "FER-JER-RED-M",
@@ -1988,14 +2724,19 @@ test("checkout verifies payment notifications, reserves stock, and waits for man
       price: -100_000,
       quantity: 1,
     });
+    assert.deepEqual(snapBodies[0].page_expiry, { unit: "hours", duration: 6 });
+    assert.equal(snapBodies[0].expiry.unit, "hours");
+    assert.equal(snapBodies[0].expiry.duration, 6);
+    assert.match(snapBodies[0].expiry.start_time, /^\d{4}-\d{2}-\d{2} \d{2}:\d{2}:\d{2} \+0700$/);
     const itemSnapshot = await prisma.orderItem.findFirstOrThrow({ where: { orderId: checkout.body.orderId } });
     assert.equal(itemSnapshot.sku, "FER-JER-RED-M");
     assert.equal(itemSnapshot.color, "Red");
     assert.equal(itemSnapshot.size, "M");
-    assert.deepEqual(
-      (await prisma.order.findUniqueOrThrow({ where: { id: checkout.body.orderId } })).shipmentAvailableCollectionMethods,
-      ["PICKUP", "DROP_OFF"],
-    );
+    const createdOrder = await prisma.order.findUniqueOrThrow({ where: { id: checkout.body.orderId } });
+    assert.equal(createdOrder.shippingOriginalIdr, 18_000);
+    assert.equal(createdOrder.shippingDiscountIdr, 0);
+    assert.deepEqual(createdOrder.shipmentAvailableCollectionMethods, ["PICKUP", "DROP_OFF"]);
+    assert.equal(createdOrder.paymentExpiresAt.getTime() - createdOrder.createdAt.getTime(), 6 * 60 * 60 * 1_000);
 
     await request(app).patch(`/api/admin/promo-codes/${promoCodeId}`)
       .set("authorization", `Bearer ${token}`).send({ active: false }).expect(200);
@@ -2056,7 +2797,13 @@ test("checkout verifies payment notifications, reserves stock, and waits for man
     assert.equal(sentEmails[0].subject, `Payment received — ${checkout.body.orderNumber}`);
     assert.match(sentEmails[0].text ?? "", /Ferrari Team Jersey \(Color: Red \/ Size: M\) x1/);
     assert.match(sentEmails[0].text ?? "", /Total paid: Rp\s?1\.168\.000/);
+    assert.ok(sentEmails[0].text?.includes(`We received your payment for order ${checkout.body.orderNumber}\n\n`));
     assert.match(sentEmails[0].html ?? "", /Track your order/);
+    const paymentTrackUrl = new URL("/track-order", config.storefrontUrl);
+    paymentTrackUrl.searchParams.set("orderNumber", checkout.body.orderNumber);
+    paymentTrackUrl.searchParams.set("email", payload.email);
+    assert.ok(sentEmails[0].text?.includes(`Track your order: ${paymentTrackUrl.toString()}`));
+    assert.ok(sentEmails[0].html?.includes(`href="${paymentTrackUrl.toString().replaceAll("&", "&amp;")}"`));
     assert.ok((await prisma.order.findUniqueOrThrow({ where: { id: checkout.body.orderId } })).paymentConfirmationEmailSentAt);
     config.emailDeliveryEnabled = false;
     assert.equal(await sendPaymentConfirmationEmail(checkout.body.orderId, { force: true }), false);
@@ -2312,7 +3059,8 @@ test("checkout verifies payment notifications, reserves stock, and waits for man
     assert.equal(refunded.paymentStatus, "REFUNDED");
     assert.ok(refunded.promoRedeemedAt);
 
-    const stockBeforeReconciliation = (await prisma.productVariant.findUniqueOrThrow({ where: { id: variantId } })).stockQuantity;
+    await prisma.productVariant.update({ where: { id: variantId }, data: { stockQuantity: 20 } });
+    const stockBeforeReconciliation = 20;
     const confirmationCount = sentEmails.length;
     const reconciliationPaid = await request(app).post("/api/checkout")
       .send({ ...payload, idempotencyKey: randomUUID() }).expect(201);
@@ -2320,10 +3068,23 @@ test("checkout verifies payment notifications, reserves stock, and waits for man
       .send({ ...payload, idempotencyKey: randomUUID() }).expect(201);
     const reconciliationInvalid = await request(app).post("/api/checkout")
       .send({ ...payload, idempotencyKey: randomUUID() }).expect(201);
-    const staleAt = new Date(Date.now() - 20 * 60 * 1_000);
+    const reconciliationPending = await request(app).post("/api/checkout")
+      .send({ ...payload, idempotencyKey: randomUUID() }).expect(201);
+    const reconciliationMissing = await request(app).post("/api/checkout")
+      .send({ ...payload, idempotencyKey: randomUUID() }).expect(201);
+    const reconciliationExpireFailed = await request(app).post("/api/checkout")
+      .send({ ...payload, idempotencyKey: randomUUID() }).expect(201);
+    const staleAt = new Date(Date.now() - 60 * 1_000);
     await prisma.order.updateMany({
-      where: { id: { in: [reconciliationPaid.body.orderId, reconciliationExpired.body.orderId, reconciliationInvalid.body.orderId] } },
-      data: { createdAt: staleAt, updatedAt: staleAt },
+      where: { id: { in: [
+        reconciliationPaid.body.orderId,
+        reconciliationExpired.body.orderId,
+        reconciliationInvalid.body.orderId,
+        reconciliationPending.body.orderId,
+        reconciliationMissing.body.orderId,
+        reconciliationExpireFailed.body.orderId,
+      ] } },
+      data: { paymentExpiresAt: staleAt },
     });
     statusResponses.set(reconciliationPaid.body.orderId, notification(reconciliationPaid.body.orderId, "settlement"));
     statusResponses.set(reconciliationExpired.body.orderId, notification(reconciliationExpired.body.orderId, "expire"));
@@ -2331,19 +3092,71 @@ test("checkout verifies payment notifications, reserves stock, and waits for man
       ...notification(reconciliationInvalid.body.orderId, "pending"),
       signature_key: "invalid",
     });
+    statusResponses.set(reconciliationPending.body.orderId, notification(reconciliationPending.body.orderId, "pending"));
+    statusResponses.set(reconciliationExpireFailed.body.orderId, notification(reconciliationExpireFailed.body.orderId, "pending"));
+    expireFailures.add(reconciliationExpireFailed.body.orderId);
 
     const reconciliation = await PublicCheckoutService.reconcilePendingPayments();
-    assert.deepEqual(reconciliation, { checked: 3, reconciled: 2, failed: 1, catalogChanged: true });
+    assert.deepEqual(reconciliation, {
+      checked: 6,
+      expired: 2,
+      released: 2,
+      reconciled: 3,
+      failed: 2,
+      catalogChanged: true,
+    });
     assert.equal((await prisma.order.findUniqueOrThrow({ where: { id: reconciliationPaid.body.orderId } })).paymentStatus, "PAID");
     assert.equal((await prisma.order.findUniqueOrThrow({ where: { id: reconciliationExpired.body.orderId } })).paymentStatus, "EXPIRED");
     assert.equal((await prisma.order.findUniqueOrThrow({ where: { id: reconciliationInvalid.body.orderId } })).paymentStatus, "PENDING");
-    assert.equal((await prisma.productVariant.findUniqueOrThrow({ where: { id: variantId } })).stockQuantity, stockBeforeReconciliation - 2);
+    assert.equal((await prisma.order.findUniqueOrThrow({ where: { id: reconciliationPending.body.orderId } })).paymentStatus, "EXPIRED");
+    assert.equal((await prisma.order.findUniqueOrThrow({ where: { id: reconciliationMissing.body.orderId } })).paymentStatus, "EXPIRED");
+    assert.equal((await prisma.order.findUniqueOrThrow({ where: { id: reconciliationExpireFailed.body.orderId } })).paymentStatus, "PENDING");
+    assert.equal((await prisma.productVariant.findUniqueOrThrow({ where: { id: variantId } })).stockQuantity, stockBeforeReconciliation - 3);
     assert.equal(sentEmails.length, confirmationCount + 1);
     assert.equal(await prisma.orderAuditEvent.count({
       where: { orderId: reconciliationInvalid.body.orderId, action: "PAYMENT_RECONCILIATION_FAILED" },
     }), 1);
     await request(app).post("/api/payments/midtrans/notification")
       .send(notification(reconciliationInvalid.body.orderId, "expire")).expect(200);
+    await request(app).post("/api/payments/midtrans/notification")
+      .send(notification(reconciliationExpireFailed.body.orderId, "expire")).expect(200);
+
+    const batchOrders = Array.from({ length: 51 }, (_, index) => ({
+      id: randomUUID(),
+      orderNumber: `BATCH-${index}-${randomUUID().slice(0, 8)}`,
+      idempotencyKey: randomUUID(),
+      email: `batch-${index}@example.com`,
+      firstName: "Batch",
+      lastName: "Expiry",
+      phone: "+628123456789",
+      address: "Batch Street 1",
+      city: "Jakarta",
+      province: "DKI Jakarta",
+      postalCode: "12345",
+      subtotalIdr: 10_000,
+      shippingIdr: 0,
+      totalIdr: 10_000,
+      courierCode: "jne",
+      courierName: "JNE",
+      courierServiceCode: "reg",
+      courierServiceName: "Regular",
+      courierDuration: "1 - 2 days",
+      midtransSnapToken: `batch-snap-${index}`,
+      paymentExpiresAt: staleAt,
+    }));
+    await prisma.order.createMany({ data: batchOrders });
+    assert.deepEqual(await PublicCheckoutService.reconcilePendingPayments(), {
+      checked: 50,
+      expired: 50,
+      released: 50,
+      reconciled: 0,
+      failed: 0,
+      catalogChanged: true,
+    });
+    assert.equal(await prisma.order.count({
+      where: { id: { in: batchOrders.map(({ id }) => id) }, paymentStatus: "PENDING" },
+    }), 1);
+    await prisma.order.deleteMany({ where: { id: { in: batchOrders.map(({ id }) => id) } } });
 
     const telegramProduct = await prisma.product.create({
       data: {
@@ -2414,14 +3227,66 @@ test("checkout verifies payment notifications, reserves stock, and waits for man
     await reconcilePendingTelegramNotifications();
     await waitForTelegram(refundedTelegramCheckout.body.orderId);
     assert.match(telegramBodies.at(-1)?.text ?? "", /pembayaran kemudian direfund/);
+
+    const sellout = await prisma.product.create({
+      data: {
+        name: "Settlement Sellout Product",
+        slug: "settlement-sellout-product",
+        priceIdr: 100_000,
+        status: "ACTIVE",
+        condition: "BNWT",
+        categoryId,
+        variants: {
+          create: [{
+            sku: "SETTLEMENT-SELLOUT",
+            stockQuantity: 1,
+            packageLengthMm: 100,
+            packageWidthMm: 100,
+            packageHeightMm: 100,
+            packageWeightG: 100,
+          }],
+        },
+      },
+      include: { variants: true },
+    });
+    selloutProductId = sellout.id;
+    const selloutPayload = {
+      ...payload,
+      idempotencyKey: randomUUID(),
+      items: [{ variantId: sellout.variants[0].id, quantity: 1 }],
+    };
+    const pendingSellout = await request(app).post("/api/checkout").send(selloutPayload).expect(201);
+    assert.equal((await prisma.product.findUniqueOrThrow({ where: { id: sellout.id } })).status, "ACTIVE");
+    assert.equal((await prisma.productVariant.findUniqueOrThrow({ where: { id: sellout.variants[0].id } })).stockQuantity, 0);
+    const selloutGross = `${pendingSellout.body.totalIdr}.00`;
+    await request(app).post("/api/payments/midtrans/notification")
+      .send(notification(pendingSellout.body.orderId, "pending", selloutGross)).expect(200);
+    assert.equal((await prisma.product.findUniqueOrThrow({ where: { id: sellout.id } })).status, "ACTIVE");
+    await request(app).post("/api/payments/midtrans/notification")
+      .send(notification(pendingSellout.body.orderId, "expire", selloutGross)).expect(200);
+    assert.equal((await prisma.product.findUniqueOrThrow({ where: { id: sellout.id } })).status, "ACTIVE");
+    assert.equal((await prisma.productVariant.findUniqueOrThrow({ where: { id: sellout.variants[0].id } })).stockQuantity, 1);
+
+    const confirmedSellout = await request(app).post("/api/checkout").send({
+      ...selloutPayload,
+      idempotencyKey: randomUUID(),
+    }).expect(201);
+    await request(app).post("/api/payments/midtrans/notification")
+      .send(notification(confirmedSellout.body.orderId, "settlement", selloutGross)).expect(200);
+    assert.equal((await prisma.product.findUniqueOrThrow({ where: { id: sellout.id } })).status, "ARCHIVED");
+    await request(app).post("/api/payments/midtrans/notification")
+      .send(notification(confirmedSellout.body.orderId, "settlement", selloutGross)).expect(200);
+    assert.equal((await prisma.product.findUniqueOrThrow({ where: { id: sellout.id } })).status, "ARCHIVED");
   } finally {
+    if (selloutProductId) await prisma.product.delete({ where: { id: selloutProductId } });
+    await prisma.product.deleteMany({ where: { slug: "telegram-test-product" } });
     globalThis.fetch = originalFetch;
     config.biteshipApiKey = originalConfig.apiKey;
     config.biteshipOriginPostalCode = originalConfig.originPostalCode;
     config.biteshipOriginContactName = originalConfig.originName;
     config.biteshipOriginContactPhone = originalConfig.originPhone;
     config.biteshipOriginAddress = originalConfig.originAddress;
-    config.biteshipCouriers = originalConfig.couriers;
+    await setActiveCourierCodes(originalConfig.couriers);
     config.midtransEnv = originalConfig.midtransEnv;
     config.midtransMerchantId = originalConfig.merchantId;
     config.midtransServerKey = originalConfig.serverKey;
@@ -2487,6 +3352,10 @@ test("collection hierarchy, memberships, and counted facets are public", async (
     [["charles-leclerc", 1], ["niki-lauda", 1]],
   );
   assert.equal(response.body.facets.productTypes[0].slug, "jerseys");
+  assert.deepEqual(
+    response.body.facets.tags.map((tag: { slug: string; count: number }) => [tag.slug, tag.count]),
+    [["limited-edition", 1]],
+  );
   assert.equal(response.body.facets.audiences[0].value, "UNISEX");
   assert.equal(response.body.facets.availability.inStock, 1);
   assert.deepEqual(response.body.facets.price, { min: 1_250_000, max: 1_250_000 });
