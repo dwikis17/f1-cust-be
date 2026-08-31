@@ -54,6 +54,7 @@ export type ProductFilters = {
   minPrice?: number;
   maxPrice?: number;
   onSale?: boolean;
+  minSalePercentage?: number;
 };
 
 type FacetName = "tag" | "team" | "driver" | "productType" | "audience" | "condition" | "availability" | "price";
@@ -109,6 +110,7 @@ function productWhere(filters: ProductFilters, omit?: FacetName): Prisma.Product
     ...(omit !== "audience" && filters.audiences?.length && { audience: { in: filters.audiences } }),
     ...(omit !== "condition" && filters.conditions?.length && { condition: { in: filters.conditions } }),
     ...(filters.onSale && { salePercentage: { not: null } }),
+    ...(filters.minSalePercentage !== undefined && { salePercentage: { gte: filters.minSalePercentage } }),
     ...(hasVariantFilter && { variants: { some: variantFilter } }),
   };
 }
