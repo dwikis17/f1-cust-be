@@ -50,6 +50,7 @@ const listQuerySchema = z.object({
   maxPrice: z.coerce.number().int().nonnegative().optional(),
   sort: sortSchema.optional(),
   sale: trueQuerySchema,
+  minSalePercentage: z.coerce.number().int().min(1).max(100).optional(),
   includeFacets: trueQuerySchema,
 }).strict().superRefine((value, context) => {
   if (value.minPrice !== undefined && value.maxPrice !== undefined && value.minPrice > value.maxPrice) {
@@ -72,6 +73,7 @@ function filters(query: z.infer<typeof listQuerySchema>): ProductFilters {
     minPrice: query.minPrice,
     maxPrice: query.maxPrice,
     onSale: query.sale === "true",
+    minSalePercentage: query.minSalePercentage,
   };
 }
 
