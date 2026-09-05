@@ -1,7 +1,7 @@
 import type { NextFunction, Request, Response } from "express";
 import { z } from "zod";
 import { parse } from "../../http.js";
-import { idSchema } from "../../schemas.js";
+import { idSchema, latitudeSchema, longitudeSchema } from "../../schemas.js";
 import { promoCodeValueSchema } from "../../schemas.js";
 import { PublicShippingService } from "../../services/public/shipping-service.js";
 import { FreeShippingRuleRepository } from "../../repositories/free-shipping-rule-repository.js";
@@ -9,6 +9,8 @@ import { verifyHuman } from "../../turnstile.js";
 
 const shippingRatesSchema = z.object({
   destinationPostalCode: z.string().trim().regex(/^\d{5}$/, "Postal code must contain exactly 5 digits"),
+  destinationLatitude: latitudeSchema,
+  destinationLongitude: longitudeSchema,
   items: z.array(z.object({
     variantId: idSchema,
     quantity: z.number().int().min(1).max(9),

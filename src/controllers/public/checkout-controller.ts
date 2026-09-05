@@ -1,7 +1,7 @@
 import type { NextFunction, Request, Response } from "express";
 import { z } from "zod";
 import { parse } from "../../http.js";
-import { idSchema, promoCodeValueSchema } from "../../schemas.js";
+import { idSchema, latitudeSchema, longitudeSchema, promoCodeValueSchema } from "../../schemas.js";
 import { PublicCheckoutService } from "../../services/public/checkout-service.js";
 import { revalidateStorefront } from "../../storefront-revalidation.js";
 import { verifyHuman } from "../../turnstile.js";
@@ -16,6 +16,8 @@ const checkoutSchema = z.object({
   city: z.string().trim().min(2).max(120),
   province: z.string().trim().min(2).max(120),
   postalCode: z.string().trim().regex(/^\d{5}$/),
+  destinationLatitude: latitudeSchema,
+  destinationLongitude: longitudeSchema,
   items: z.array(z.object({ variantId: idSchema, quantity: z.number().int().min(1).max(9) }).strict()).min(1).max(50),
   courierCode: z.string().trim().min(1).max(50).regex(/^[a-z0-9_-]+$/),
   serviceCode: z.string().trim().min(1).max(50).regex(/^[a-z0-9_-]+$/),

@@ -39,6 +39,8 @@ export type CheckoutInput = {
   city: string;
   province: string;
   postalCode: string;
+  destinationLatitude: number;
+  destinationLongitude: number;
   items: Array<{ variantId: string; quantity: number }>;
   courierCode: string;
   serviceCode: string;
@@ -583,6 +585,8 @@ export class OrderRepository {
             city: input.city,
             province: input.province,
             postalCode: input.postalCode,
+            destinationLatitude: input.destinationLatitude,
+            destinationLongitude: input.destinationLongitude,
             subtotalIdr,
             discountIdr,
             shippingOriginalIdr: input.shippingOriginalPrice,

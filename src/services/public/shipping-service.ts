@@ -12,6 +12,8 @@ import { calculateShippingPrice } from "../../free-shipping.js";
 
 type ShippingInput = {
   destinationPostalCode: string;
+  destinationLatitude: number;
+  destinationLongitude: number;
   items: Array<{ variantId: string; quantity: number }>;
   promoCode?: string;
 };
@@ -78,6 +80,8 @@ function assertShippingConfig(courierCodes: string[]) {
 export class PublicShippingService {
   static async requestBiteshipRates(input: {
     destinationPostalCode: string;
+    destinationLatitude?: number;
+    destinationLongitude?: number;
     items: BiteshipRateItem[];
     courierCodes: string[];
     courierInsuranceIdr?: number;
@@ -94,6 +98,12 @@ export class PublicShippingService {
         body: JSON.stringify({
           origin_postal_code: Number(config.biteshipOriginPostalCode),
           destination_postal_code: Number(input.destinationPostalCode),
+          ...(input.destinationLatitude != null && input.destinationLongitude != null && config.biteshipOriginLatitude != null && config.biteshipOriginLongitude != null ? {
+            origin_latitude: config.biteshipOriginLatitude,
+            origin_longitude: config.biteshipOriginLongitude,
+            destination_latitude: input.destinationLatitude,
+            destination_longitude: input.destinationLongitude,
+          } : {}),
           couriers: input.courierCodes.join(","),
           ...(input.courierInsuranceIdr ? { courier_insurance: input.courierInsuranceIdr } : {}),
           items: input.items,
@@ -170,6 +180,8 @@ export class PublicShippingService {
     const purchaseIdr = subtotalIdr - discountIdr;
     const rates = await PublicShippingService.requestBiteshipRates({
       destinationPostalCode: input.destinationPostalCode,
+      destinationLatitude: input.destinationLatitude,
+      destinationLongitude: input.destinationLongitude,
       items: variants.map((variant) => ({
         name: variant.product.name,
         category: "fashion",

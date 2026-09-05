@@ -121,14 +121,19 @@ Product and collection list endpoints return compact product cards: localized na
 
 ### Biteship shipping estimates
 
-`POST /api/shipping/rates` accepts a five-digit destination postal code and cart lines shaped as `{ variantId, quantity }`. The API resolves price, stock, weight, and package dimensions from the database before requesting live Biteship courier rates, so clients cannot supply shipping measurements.
+`POST /api/shipping/rates` accepts a five-digit destination postal code, confirmed destination latitude/longitude, and cart lines shaped as `{ variantId, quantity }`. The API resolves price, stock, weight, and package dimensions from the database before requesting live Biteship courier rates, so clients cannot supply shipping measurements. Coordinates are saved with the paid order and reused for Biteship instant-courier booking.
 
-For local development, set `BITESHIP_API_KEY`, `BITESHIP_WEBHOOK_SECRET`, and `BITESHIP_ORIGIN_POSTAL_CODE` in `.env`. Available courier companies are managed from **Operations → Couriers** in `f1-admin`; the initial database migration enables `jne`, `jnt`, `sicepat`, and `anteraja`. For the deployed Worker, keep the API key and webhook secret private and set them independently for each environment:
+For local development, set `BITESHIP_API_KEY`, `BITESHIP_WEBHOOK_SECRET`, `BITESHIP_ORIGIN_POSTAL_CODE`, `BITESHIP_ORIGIN_LATITUDE`, `BITESHIP_ORIGIN_LONGITUDE`, and `MAPBOX_PERMANENT_GEOCODING_TOKEN` in `.env`. Available courier companies are managed from **Operations → Couriers** in `f1-admin`; the initial database migration enables `jne`, `jnt`, `sicepat`, and `anteraja`. For the deployed Worker, keep credentials private and set them independently for each environment:
+
+The location endpoint uses Mapbox Geocoding v6 permanent mode. If the server token has URL restrictions, allow the corresponding storefront origin; the Worker forwards `STOREFRONT_URL` as the request `Referer`.
 
 ```sh
 npx wrangler secret put BITESHIP_API_KEY
 npx wrangler secret put BITESHIP_WEBHOOK_SECRET
 npx wrangler secret put BITESHIP_ORIGIN_POSTAL_CODE
+npx wrangler secret put BITESHIP_ORIGIN_LATITUDE --env staging
+npx wrangler secret put BITESHIP_ORIGIN_LONGITUDE --env staging
+npx wrangler secret put MAPBOX_PERMANENT_GEOCODING_TOKEN --env staging
 ```
 
 Configure Biteship's [`order.status` webhook](https://biteship.com/id/docs/api/webhook/overview) to `POST https://<api-host>/api/webhooks/biteship` with `Authorization: Bearer <BITESHIP_WEBHOOK_SECRET>`. During webhook installation, an empty `application/json` request returns plain-text `ok`; non-empty webhook requests require authentication and validation. The endpoint updates the matching order's latest Biteship status, tracking ID, and waybill ID; it does not change F1 payment or lifecycle state. A valid webhook for an unknown Biteship order is acknowledged without creating a local order.

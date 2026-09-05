@@ -1,6 +1,8 @@
 import { z } from "zod";
 
 export const idSchema = z.string().uuid();
+export const latitudeSchema = z.number().finite().min(-90).max(90);
+export const longitudeSchema = z.number().finite().min(-180).max(180);
 export const slugSchema = z.string().trim().min(2).max(100).regex(/^[a-z0-9]+(?:-[a-z0-9]+)*$/);
 export const nameSchema = z.string().trim().min(1).max(120);
 export const promoCodeValueSchema = z.string()

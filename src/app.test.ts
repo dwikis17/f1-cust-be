@@ -632,6 +632,8 @@ test("admins search, operate, audit, export, and invoice orders safely", async (
   let operationsRateMethods = ["pickup", "drop_off"];
   config.biteshipApiKey = "biteship_test.operations";
   config.biteshipOriginPostalCode = "12240";
+  config.biteshipOriginLatitude = -6.2441792;
+  config.biteshipOriginLongitude = 106.783529;
   config.biteshipOriginContactName = "Valyde Jersey";
   config.biteshipOriginContactPhone = "081382854010";
   config.biteshipOriginAddress = "Jl. Origin 1";
@@ -2241,6 +2243,8 @@ test("shipping rates use authoritative cart data and normalize Biteship response
   const originalShippingConfig = {
     apiKey: config.biteshipApiKey,
     originPostalCode: config.biteshipOriginPostalCode,
+    originLatitude: config.biteshipOriginLatitude,
+    originLongitude: config.biteshipOriginLongitude,
     couriers: await activeCourierCodes(),
     turnstileSecretKey: config.turnstileSecretKey,
     storefrontUrl: config.storefrontUrl,
@@ -2249,6 +2253,8 @@ test("shipping rates use authoritative cart data and normalize Biteship response
   const variantId = product.body.variants.find(({ sku }: { sku: string }) => sku === "FER-JER-RED-M").id as string;
   config.biteshipApiKey = "biteship_test.test-key";
   config.biteshipOriginPostalCode = "12440";
+  config.biteshipOriginLatitude = -6.3031123;
+  config.biteshipOriginLongitude = 106.7794935;
   await setActiveCourierCodes(["jne", "sicepat"]);
   config.turnstileSecretKey = "turnstile-test-secret";
   config.storefrontUrl = "https://valydejersey.com";
@@ -2296,6 +2302,8 @@ test("shipping rates use authoritative cart data and normalize Biteship response
 
     const protectedRequest = {
       destinationPostalCode: "12240",
+      destinationLatitude: -6.2441792,
+      destinationLongitude: 106.783529,
       items: [{ variantId, quantity: 1 }],
     };
     await request(app).get("/api/shipping/free-shipping-policy").expect(200, {
@@ -2311,6 +2319,8 @@ test("shipping rates use authoritative cart data and normalize Biteship response
 
     const quote = await request(app).post("/api/shipping/rates").send({
       destinationPostalCode: "12240",
+      destinationLatitude: -6.2441792,
+      destinationLongitude: 106.783529,
       items: [{ variantId, quantity: 2 }, { variantId, quantity: 1 }],
       turnstileToken: "turnstile-valid",
     }).expect("cache-control", "no-store").expect(200);
@@ -2321,7 +2331,11 @@ test("shipping rates use authoritative cart data and normalize Biteship response
     ]);
     assert.deepEqual(upstreamBody, {
       origin_postal_code: 12440,
+      origin_latitude: -6.3031123,
+      origin_longitude: 106.7794935,
       destination_postal_code: 12240,
+      destination_latitude: -6.2441792,
+      destination_longitude: 106.783529,
       couriers: "jne,sicepat",
       items: [{
         name: "Ferrari Team Jersey", category: "fashion", sku: "FER-JER-RED-M", value: 900_000,
@@ -2368,38 +2382,40 @@ test("shipping rates use authoritative cart data and normalize Biteship response
     await request(app).post("/api/shipping/rates")
       .send({ destinationPostalCode: "123", items: [{ variantId, quantity: 1 }], turnstileToken: "turnstile-valid" }).expect(400);
     await request(app).post("/api/shipping/rates")
-      .send({ destinationPostalCode: "12240", items: [{ variantId: randomUUID(), quantity: 1 }], turnstileToken: "turnstile-valid" }).expect(409);
+      .send({ destinationPostalCode: "12240", destinationLatitude: -6.2441792, destinationLongitude: 106.783529, items: [{ variantId: randomUUID(), quantity: 1 }], turnstileToken: "turnstile-valid" }).expect(409);
     await request(app).post("/api/shipping/rates")
-      .send({ destinationPostalCode: "12240", items: [{ variantId, quantity: 9 }], turnstileToken: "turnstile-valid" }).expect(409);
+      .send({ destinationPostalCode: "12240", destinationLatitude: -6.2441792, destinationLongitude: 106.783529, items: [{ variantId, quantity: 9 }], turnstileToken: "turnstile-valid" }).expect(409);
 
     globalThis.fetch = withTurnstile(async () => new Response(JSON.stringify({ code: 40001001, message: "Invalid postal code" }), {
       status: 400,
       headers: { "content-type": "application/json" },
     }));
     await request(app).post("/api/shipping/rates")
-      .send({ destinationPostalCode: "99999", items: [{ variantId, quantity: 1 }], turnstileToken: "turnstile-valid" })
+      .send({ destinationPostalCode: "99999", destinationLatitude: -6.2441792, destinationLongitude: 106.783529, items: [{ variantId, quantity: 1 }], turnstileToken: "turnstile-valid" })
       .expect(422, { error: { code: "INVALID_DESTINATION", message: "The destination postal code is not supported" } });
 
     globalThis.fetch = withTurnstile(async () => { throw new DOMException("Timed out", "TimeoutError"); });
     await request(app).post("/api/shipping/rates")
-      .send({ destinationPostalCode: "12240", items: [{ variantId, quantity: 1 }], turnstileToken: "turnstile-valid" }).expect(504);
+      .send({ destinationPostalCode: "12240", destinationLatitude: -6.2441792, destinationLongitude: 106.783529, items: [{ variantId, quantity: 1 }], turnstileToken: "turnstile-valid" }).expect(504);
 
     globalThis.fetch = withTurnstile(async () => new Response(JSON.stringify({ pricing: [] }), {
       status: 200,
       headers: { "content-type": "application/json" },
     }));
     const empty = await request(app).post("/api/shipping/rates")
-      .send({ destinationPostalCode: "12240", items: [{ variantId, quantity: 1 }], turnstileToken: "turnstile-valid" }).expect(200);
+      .send({ destinationPostalCode: "12240", destinationLatitude: -6.2441792, destinationLongitude: 106.783529, items: [{ variantId, quantity: 1 }], turnstileToken: "turnstile-valid" }).expect(200);
     assert.deepEqual(empty.body.rates, []);
 
     config.biteshipApiKey = undefined;
     await request(app).post("/api/shipping/rates")
-      .send({ destinationPostalCode: "12240", items: [{ variantId, quantity: 1 }], turnstileToken: "turnstile-valid" }).expect(503);
+      .send({ destinationPostalCode: "12240", destinationLatitude: -6.2441792, destinationLongitude: 106.783529, items: [{ variantId, quantity: 1 }], turnstileToken: "turnstile-valid" }).expect(503);
   } finally {
     await prisma.product.update({ where: { id: productId }, data: { salePriceIdr: null, salePercentage: null } });
     globalThis.fetch = originalFetch;
     config.biteshipApiKey = originalShippingConfig.apiKey;
     config.biteshipOriginPostalCode = originalShippingConfig.originPostalCode;
+    config.biteshipOriginLatitude = originalShippingConfig.originLatitude;
+    config.biteshipOriginLongitude = originalShippingConfig.originLongitude;
     await setActiveCourierCodes(originalShippingConfig.couriers);
     config.turnstileSecretKey = originalShippingConfig.turnstileSecretKey;
     config.storefrontUrl = originalShippingConfig.storefrontUrl;
@@ -2573,6 +2589,8 @@ test("checkout verifies payment notifications, reserves stock, and waits for man
   const originalConfig = {
     apiKey: config.biteshipApiKey,
     originPostalCode: config.biteshipOriginPostalCode,
+    originLatitude: config.biteshipOriginLatitude,
+    originLongitude: config.biteshipOriginLongitude,
     originName: config.biteshipOriginContactName,
     originPhone: config.biteshipOriginContactPhone,
     originAddress: config.biteshipOriginAddress,
@@ -2595,6 +2613,8 @@ test("checkout verifies payment notifications, reserves stock, and waits for man
   const variantId = product.body.variants.find(({ sku }: { sku: string }) => sku === "FER-JER-RED-M").id as string;
   config.biteshipApiKey = "biteship_test.checkout";
   config.biteshipOriginPostalCode = "12440";
+  config.biteshipOriginLatitude = -6.3031123;
+  config.biteshipOriginLongitude = 106.7794935;
   config.biteshipOriginContactName = "Warehouse";
   config.biteshipOriginContactPhone = "081234567890";
   config.biteshipOriginAddress = "Jl. Warehouse 1, Jakarta";
@@ -2817,6 +2837,8 @@ test("checkout verifies payment notifications, reserves stock, and waits for man
     city: "Jakarta Selatan",
     province: "DKI Jakarta",
     postalCode: "12240",
+    destinationLatitude: -6.2441792,
+    destinationLongitude: 106.783529,
     items: [{ variantId, quantity: 1 }],
     courierCode: "jne",
     serviceCode: "reg",
@@ -3425,6 +3447,8 @@ test("checkout verifies payment notifications, reserves stock, and waits for man
     globalThis.fetch = originalFetch;
     config.biteshipApiKey = originalConfig.apiKey;
     config.biteshipOriginPostalCode = originalConfig.originPostalCode;
+    config.biteshipOriginLatitude = originalConfig.originLatitude;
+    config.biteshipOriginLongitude = originalConfig.originLongitude;
     config.biteshipOriginContactName = originalConfig.originName;
     config.biteshipOriginContactPhone = originalConfig.originPhone;
     config.biteshipOriginAddress = originalConfig.originAddress;

@@ -376,6 +376,8 @@ model Order {
   city                               String
   province                           String
   postalCode                         String
+  destinationLatitude                Float?
+  destinationLongitude               Float?
   subtotalIdr                        Int
   discountIdr                        Int                        @default(0)
   shippingOriginalIdr                Int                        @default(0)

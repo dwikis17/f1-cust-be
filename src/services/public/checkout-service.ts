@@ -329,6 +329,10 @@ function biteshipItems(order: OrderWithItems) {
 async function getShipmentCollectionOptionsInternal(order: OrderWithItems) {
   const rates = await requestBiteshipRates({
     destinationPostalCode: order.postalCode,
+    ...(order.destinationLatitude != null && order.destinationLongitude != null ? {
+      destinationLatitude: order.destinationLatitude,
+      destinationLongitude: order.destinationLongitude,
+    } : {}),
     items: biteshipItems(order),
     courierCodes: [order.courierCode],
   });
@@ -341,8 +345,9 @@ async function requestShipmentBookingInternal(
   order: OrderWithItems,
   requestedCollectionMethod: ShipmentCollectionMethod = "drop_off",
 ): Promise<ShipmentBookingResult> {
-  if (!config.biteshipApiKey || !config.biteshipOriginPostalCode || !config.biteshipOriginContactName
-    || !config.biteshipOriginContactPhone || !config.biteshipOriginAddress) {
+  const hasCoordinates = order.destinationLatitude != null && order.destinationLongitude != null;
+  if (!config.biteshipApiKey || !config.biteshipOriginPostalCode || !config.biteshipOriginContactName || !config.biteshipOriginContactPhone
+    || !config.biteshipOriginAddress || (hasCoordinates && (config.biteshipOriginLatitude == null || config.biteshipOriginLongitude == null))) {
     return { success: false, code: "CONFIGURATION", message: "Biteship shipment booking is not configured" };
   }
 
@@ -385,12 +390,14 @@ async function requestShipmentBookingInternal(
         origin_contact_phone: config.biteshipOriginContactPhone,
         origin_address: config.biteshipOriginAddress,
         origin_postal_code: Number(config.biteshipOriginPostalCode),
+        ...(hasCoordinates ? { origin_coordinate: { latitude: config.biteshipOriginLatitude, longitude: config.biteshipOriginLongitude } } : {}),
         origin_collection_method: collectionMethod,
         destination_contact_name: `${order.firstName} ${order.lastName}`,
         destination_contact_phone: order.phone,
         destination_contact_email: order.email,
         destination_address: `${order.address}, ${order.city}, ${order.province} ${order.postalCode}`,
         destination_postal_code: Number(order.postalCode),
+        ...(hasCoordinates ? { destination_coordinate: { latitude: order.destinationLatitude, longitude: order.destinationLongitude } } : {}),
         courier_company: order.courierCode,
         courier_type: order.courierServiceCode,
         ...(order.insuranceValueIdr > 0 ? { courier_insurance: order.insuranceValueIdr } : {}),
@@ -477,6 +484,8 @@ export class PublicCheckoutService {
 
     const quote = await PublicShippingService.rates({
       destinationPostalCode: input.postalCode,
+      destinationLatitude: input.destinationLatitude,
+      destinationLongitude: input.destinationLongitude,
       items: input.items,
       promoCode: input.promoCode,
     });
