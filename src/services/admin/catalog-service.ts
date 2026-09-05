@@ -152,7 +152,15 @@ export class CatalogService {
     await CatalogService.deleteManagedImage(collection.imageUrl);
   }
   static async replaceCollectionProducts(id: string, input: CollectionMembership) {
-    if (!await CatalogRepository.findCollection(id)) notFound("Collection not found");
+    const collection = await CatalogRepository.findCollection(id);
+    if (!collection) notFound("Collection not found");
+    if (collection.slug === "new-arrival") {
+      throw new HttpError(
+        409,
+        "MANAGED_NEW_ARRIVAL_COLLECTION",
+        "New Arrival products are managed by the new-arrival tag",
+      );
+    }
     const productIds = [...new Set(input.productIds)];
     const featuredProductIds = [...new Set(input.featuredProductIds)];
     if (await CatalogRepository.countProducts(productIds) !== productIds.length) {

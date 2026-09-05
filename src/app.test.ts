@@ -1703,6 +1703,148 @@ test("sold-out products archive after admin inventory changes and reject empty a
   }
 });
 
+test("New Arrival keeps the newest 25 active tagged products and drives its public collection", async () => {
+  const newArrival = await request(app).post("/api/admin/tags").set("authorization", `Bearer ${token}`)
+    .send({ name: "New Arrival", slug: "new-arrival" }).expect(201);
+  const campaign = await request(app).post("/api/admin/tags").set("authorization", `Bearer ${token}`)
+    .send({ name: "New Arrival Test Campaign", slug: "new-arrival-test-campaign" }).expect(201);
+  const collection = await request(app).post("/api/admin/collections").set("authorization", `Bearer ${token}`)
+    .send({ name: "New Arrival", slug: "new-arrival", kind: "MANUAL", description: "Latest products." }).expect(201);
+  const productIds: string[] = [];
+  let blockId = "";
+  const productInput = (index: number, status: "ACTIVE" | "DRAFT", tagIds: string[]) => ({
+    name: `New Arrival Test ${index}`,
+    slug: `new-arrival-test-${index}`,
+    priceIdr: 100_000 + index,
+    status,
+    condition: "BNWT",
+    categoryId,
+    collectionIds: [ferrariCollectionId],
+    audience: "UNISEX",
+    tagIds,
+    variants: [{
+      sku: `NEW-ARRIVAL-${index}`,
+      size: "M",
+      color: "Red",
+      stockQuantity: 1,
+      packageLengthMm: 300,
+      packageWidthMm: 200,
+      packageHeightMm: 50,
+      packageWeightG: 400,
+    }],
+  });
+  const activeTaggedIds = () => prisma.productTag.findMany({
+    where: { tagId: newArrival.body.id, product: { status: "ACTIVE" } },
+    select: { productId: true },
+    orderBy: [{ product: { createdAt: "desc" } }, { product: { id: "asc" } }],
+  });
+
+  try {
+    let lastCreated;
+    for (let index = 0; index < 26; index += 1) {
+      lastCreated = await request(app).post("/api/admin/products").set("authorization", `Bearer ${token}`)
+        .send(productInput(index, "ACTIVE", [newArrival.body.id, campaign.body.id])).expect(201);
+      productIds.push(lastCreated.body.id);
+    }
+
+    const keptAfterCreate = await activeTaggedIds();
+    assert.equal(keptAfterCreate.length, 25);
+    assert.equal(
+      lastCreated.body.tags.some(({ tag }: { tag: { id: string } }) => tag.id === newArrival.body.id),
+      keptAfterCreate.some(({ productId: keptId }) => keptId === lastCreated.body.id),
+    );
+    const evictedId = productIds.find((id) => !keptAfterCreate.some(({ productId: keptId }) => keptId === id));
+    assert.ok(evictedId);
+    const evicted = await prisma.product.findUniqueOrThrow({
+      where: { id: evictedId },
+      include: { tags: true },
+    });
+    assert.deepEqual(evicted.tags.map(({ tagId }) => tagId), [campaign.body.id]);
+
+    const draft = await request(app).post("/api/admin/products").set("authorization", `Bearer ${token}`)
+      .send(productInput(26, "DRAFT", [newArrival.body.id, campaign.body.id])).expect(201);
+    productIds.push(draft.body.id);
+    assert.equal((await activeTaggedIds()).length, 25);
+    assert.ok(draft.body.tags.some(({ tag }: { tag: { id: string } }) => tag.id === newArrival.body.id));
+    await request(app).patch(`/api/admin/products/${draft.body.id}`).set("authorization", `Bearer ${token}`)
+      .send({ status: "ACTIVE" }).expect(200);
+    assert.equal((await activeTaggedIds()).length, 25);
+
+    const older = await request(app).post("/api/admin/products").set("authorization", `Bearer ${token}`)
+      .send(productInput(27, "ACTIVE", [campaign.body.id])).expect(201);
+    productIds.push(older.body.id);
+    await prisma.product.update({ where: { id: older.body.id }, data: { createdAt: new Date("2000-01-01T00:00:00Z") } });
+    const olderTagged = await request(app).patch(`/api/admin/products/${older.body.id}`)
+      .set("authorization", `Bearer ${token}`)
+      .send({ tagIds: [newArrival.body.id, campaign.body.id] }).expect(200);
+    assert.equal(olderTagged.body.tags.some(({ tag }: { tag: { id: string } }) => tag.id === newArrival.body.id), false);
+
+    assert.equal(await prisma.productCollection.count({ where: { collectionId: collection.body.id } }), 0);
+    const publicCollection = await request(app).get("/api/collections/new-arrival/products?sort=newest&limit=100")
+      .expect(200);
+    assert.equal(publicCollection.body.total, 25);
+    assert.equal(publicCollection.body.data.length, 25);
+    assert.equal(
+      publicCollection.body.facets.tags.find((tag: { slug: string }) => tag.slug === "new-arrival").count,
+      25,
+    );
+
+    const block = await request(app).post("/api/admin/home/collection-blocks")
+      .set("authorization", `Bearer ${token}`)
+      .field({ collectionId: collection.body.id, active: "true" }).expect(201);
+    blockId = block.body.id;
+    const publicBlocks = await request(app).get("/api/home/collection-blocks").expect(200);
+    const newArrivalBlock = publicBlocks.body.find((value: { id: string }) => value.id === blockId);
+    assert.deepEqual(
+      newArrivalBlock.products.map((product: { id: string }) => product.id),
+      publicCollection.body.data.slice(0, 5).map((product: { id: string }) => product.id),
+    );
+
+    await request(app).put(`/api/admin/collections/${collection.body.id}/products`)
+      .set("authorization", `Bearer ${token}`)
+      .send({ productIds: [productIds[0]], featuredProductIds: [] })
+      .expect(409, {
+        error: {
+          code: "MANAGED_NEW_ARRIVAL_COLLECTION",
+          message: "New Arrival products are managed by the new-arrival tag",
+        },
+      });
+
+    const sameCreatedAt = new Date("2026-09-05T00:00:00Z");
+    await prisma.product.updateMany({ where: { id: { in: productIds.slice(0, 26) } }, data: { createdAt: sameCreatedAt } });
+    await prisma.productTag.createMany({
+      data: productIds.slice(0, 26).map((id) => ({ productId: id, tagId: newArrival.body.id })),
+      skipDuplicates: true,
+    });
+    const expected = (await activeTaggedIds()).slice(0, 25).map(({ productId: keptId }) => keptId);
+    const expectedEvicted = (await activeTaggedIds())[25]?.productId;
+    assert.ok(expectedEvicted);
+    const prunedResponse = await request(app).patch(`/api/admin/products/${expectedEvicted}`)
+      .set("authorization", `Bearer ${token}`)
+      .send({ name: `Pruned ${expectedEvicted}` }).expect(200);
+    assert.deepEqual((await activeTaggedIds()).map(({ productId: keptId }) => keptId), expected);
+    assert.equal(
+      prunedResponse.body.tags.some(({ tag }: { tag: { id: string } }) => tag.id === newArrival.body.id),
+      false,
+    );
+
+    const concurrentIds = [expectedEvicted, older.body.id];
+    await prisma.product.update({ where: { id: concurrentIds[0] }, data: { createdAt: new Date("2030-01-01T00:00:00Z") } });
+    await prisma.product.update({ where: { id: concurrentIds[1] }, data: { createdAt: new Date("2031-01-01T00:00:00Z") } });
+    await Promise.all(concurrentIds.map((id) => request(app).patch(`/api/admin/products/${id}`)
+      .set("authorization", `Bearer ${token}`)
+      .send({ tagIds: [newArrival.body.id, campaign.body.id] }).expect(200)));
+    const keptAfterConcurrentUpdates = await activeTaggedIds();
+    assert.equal(keptAfterConcurrentUpdates.length, 25);
+    assert.ok(concurrentIds.every((id) => keptAfterConcurrentUpdates.some(({ productId: keptId }) => keptId === id)));
+  } finally {
+    if (blockId) await prisma.homeCollectionBlock.deleteMany({ where: { id: blockId } });
+    await prisma.product.deleteMany({ where: { id: { in: productIds } } });
+    await prisma.collection.deleteMany({ where: { id: collection.body.id } });
+    await prisma.tag.deleteMany({ where: { id: { in: [newArrival.body.id, campaign.body.id] } } });
+  }
+});
+
 test("home collection blocks support ordered CRUD, ranked products, limits, localization, and image cleanup", async () => {
   const endpoint = "/api/admin/home/collection-blocks";
   const pngHeader = Buffer.from([0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a]);

@@ -44,6 +44,25 @@ type ProductCreateData = Omit<Prisma.ProductCreateArgs["data"], "variants"> & {
 type VariantCreateData = Omit<Prisma.ProductVariantUncheckedCreateInput, "sizingGuide"> & { sizingGuide?: unknown | null };
 type VariantUpdateData = Omit<Prisma.ProductVariantUpdateInput, "sizingGuide"> & { sizingGuide?: unknown | null };
 type ProductClient = Prisma.TransactionClient | typeof prisma;
+const newArrivalTagSlug = "new-arrival";
+const newArrivalLimit = 25;
+
+async function pruneNewArrivals(tx: Prisma.TransactionClient) {
+  await tx.$queryRaw`SELECT pg_advisory_xact_lock(710025)::text`;
+  const tag = await tx.tag.findUnique({ where: { slug: newArrivalTagSlug }, select: { id: true } });
+  if (!tag) return;
+  const excess = await tx.productTag.findMany({
+    where: { tagId: tag.id, product: { status: "ACTIVE" } },
+    select: { productId: true },
+    orderBy: [{ product: { createdAt: "desc" } }, { product: { id: "asc" } }],
+    skip: newArrivalLimit,
+  });
+  if (excess.length) {
+    await tx.productTag.deleteMany({
+      where: { tagId: tag.id, productId: { in: excess.map(({ productId }) => productId) } },
+    });
+  }
+}
 
 function productWhere(input: Omit<ProductListInput, "all" | "page" | "limit">): Prisma.ProductWhereInput {
   const search = input.search?.trim();
@@ -102,18 +121,22 @@ export class ProductRepository {
     return prisma.product.findUnique({ where: { id }, include: productInclude });
   }
   static createProduct(data: ProductCreateData) {
-    return prisma.product.create({
-      data: {
-        ...data,
-        variants: {
-          ...data.variants,
-          create: data.variants.create.map((variant) => ({
-            ...variant,
-            sizingGuide: variant.sizingGuide ?? Prisma.JsonNull,
-          })),
-        },
-      } as Prisma.ProductCreateArgs["data"],
-      include: productInclude,
+    return prisma.$transaction(async (tx) => {
+      const product = await tx.product.create({
+        data: {
+          ...data,
+          variants: {
+            ...data.variants,
+            create: data.variants.create.map((variant) => ({
+              ...variant,
+              sizingGuide: variant.sizingGuide ?? Prisma.JsonNull,
+            })),
+          },
+        } as Prisma.ProductCreateArgs["data"],
+        select: { id: true },
+      });
+      await pruneNewArrivals(tx);
+      return tx.product.findUniqueOrThrow({ where: { id: product.id }, include: productInclude });
     });
   }
   static updateProduct(id: string, data: Prisma.ProductUpdateArgs["data"], relations: RelationUpdates) {
@@ -140,7 +163,9 @@ export class ProductRepository {
           });
         }
       }
-      return tx.product.update({ where: { id }, data, include: productInclude });
+      await tx.product.update({ where: { id }, data });
+      await pruneNewArrivals(tx);
+      return tx.product.findUniqueOrThrow({ where: { id }, include: productInclude });
     });
   }
 

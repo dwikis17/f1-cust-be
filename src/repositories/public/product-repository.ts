@@ -59,6 +59,7 @@ export type ProductFilters = {
 
 type FacetName = "tag" | "team" | "driver" | "productType" | "audience" | "condition" | "availability" | "price";
 type PriceRow = { id: string; priceIdr: number; salePriceIdr: number | null };
+const newArrivalSlug = "new-arrival";
 
 const hasPriceFilter = (filters: ProductFilters) => filters.minPrice !== undefined || filters.maxPrice !== undefined;
 
@@ -136,6 +137,9 @@ function membershipOrderBy(sort: ProductSort): Prisma.ProductCollectionOrderByWi
 }
 
 function inCollection(collectionSlug: string, where: Prisma.ProductWhereInput): Prisma.ProductWhereInput {
+  if (collectionSlug === newArrivalSlug) {
+    return { AND: [where, { tags: { some: { tag: { slug: newArrivalSlug } } } }] };
+  }
   return { ...where, collections: { some: { collection: { slug: collectionSlug, active: true } } } };
 }
 
@@ -156,8 +160,13 @@ export class PublicProductRepository {
     return { ...where, id: { in: products.filter((product) => matchesPrice(product, filters)).map(({ id }) => id) } };
   }
 
-  static async listProducts(filters: ProductFilters, sort: ProductSort, page: number, limit: number) {
-    const where = productWhere(filters);
+  private static async listProductCards(
+    where: Prisma.ProductWhereInput,
+    filters: ProductFilters,
+    sort: ProductSort,
+    page: number,
+    limit: number,
+  ) {
     if (hasPriceFilter(filters) || sort === "price_asc" || sort === "price_desc") {
       const candidates = await prisma.product.findMany({
         where,
@@ -191,6 +200,10 @@ export class PublicProductRepository {
     ]);
   }
 
+  static listProducts(filters: ProductFilters, sort: ProductSort, page: number, limit: number) {
+    return PublicProductRepository.listProductCards(productWhere(filters), filters, sort, page, limit);
+  }
+
   static async listCollectionProducts(
     collectionSlug: string,
     filters: ProductFilters,
@@ -199,6 +212,16 @@ export class PublicProductRepository {
     limit: number,
   ) {
     const product = productWhere(filters);
+    if (collectionSlug === newArrivalSlug) {
+      const [total, products] = await PublicProductRepository.listProductCards(
+        inCollection(collectionSlug, product),
+        filters,
+        sort,
+        page,
+        limit,
+      );
+      return [total, products.map((value) => ({ productId: value.id, product: value }))] as const;
+    }
     const where: Prisma.ProductCollectionWhereInput = { collection: { slug: collectionSlug, active: true }, product };
     if (hasPriceFilter(filters) || sort === "price_asc" || sort === "price_desc") {
       const candidates = await prisma.productCollection.findMany({
@@ -289,6 +312,14 @@ export class PublicProductRepository {
   }
 
   static listFeaturedCollectionProductCards(collectionSlug: string, limit: number) {
+    if (collectionSlug === newArrivalSlug) {
+      return prisma.product.findMany({
+        where: inCollection(collectionSlug, productWhere({})),
+        select: productCardSelect,
+        orderBy: productOrderBy("newest"),
+        take: limit,
+      }).then((products) => products.map((product) => ({ product })));
+    }
     return prisma.productCollection.findMany({
       where: { collection: { slug: collectionSlug, active: true }, product: { status: "ACTIVE" } },
       select: { product: { select: productCardSelect } },
