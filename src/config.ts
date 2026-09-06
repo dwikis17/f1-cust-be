@@ -27,7 +27,7 @@ const env = z.object({
   ADMIN_DASHBOARD_URL: z.string().url().optional(),
   TELEGRAM_BOT_TOKEN: z.string().trim().min(1).optional(),
   TELEGRAM_CHAT_ID: z.string().trim().regex(/^-?\d+$/).optional(),
-  TURNSTILE_ENABLED: z.enum(["true", "false"]).default("true"),
+  TURNSTILE_ENABLED: z.enum(["true", "false"]).default("false"),
   TURNSTILE_SECRET_KEY: z.string().trim().optional(),
   STOREFRONT_REVALIDATE_SECRET: z.string().trim().min(32).optional(),
   EMAIL_FROM_ADDRESS: z.string().trim().email().optional(),

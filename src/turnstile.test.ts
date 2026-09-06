@@ -32,19 +32,14 @@ test("human verification validates the expected action and can be disabled", asy
     };
     await verifyHuman("valid-token", "checkout", "203.0.113.10");
 
-    globalThis.fetch = async () => Response.json({
-      success: true,
-      hostname: "example.com",
-      metadata: { result_with_testing_key: true },
-    });
-    await verifyHuman("dummy-test-token", "shipping-rates");
-
     await assert.rejects(() => verifyHuman(undefined, "checkout"), isHttpError(403, "HUMAN_VERIFICATION_FAILED"));
 
     for (const body of [
       { success: false, action: "checkout", hostname: "valydejersey.com" },
+      { success: false, "error-codes": ["timeout-or-duplicate"] },
       { success: true, action: "shipping-rates", hostname: "valydejersey.com" },
       { success: true, action: "checkout", hostname: "example.com" },
+      { success: true, hostname: "example.com", metadata: { result_with_testing_key: true } },
     ]) {
       globalThis.fetch = async () => Response.json(body);
       await assert.rejects(() => verifyHuman("rejected-token", "checkout"), isHttpError(403, "HUMAN_VERIFICATION_FAILED"));

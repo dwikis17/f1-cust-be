@@ -123,22 +123,18 @@ Product and collection list endpoints return compact product cards: localized na
 
 `POST /api/shipping/rates` accepts a five-digit destination postal code, confirmed destination latitude/longitude, and cart lines shaped as `{ variantId, quantity }`. The API resolves price, stock, weight, and package dimensions from the database before requesting live Biteship courier rates, so clients cannot supply shipping measurements. Coordinates are saved with the paid order and reused for Biteship instant-courier booking.
 
-For local development, set `BITESHIP_API_KEY`, `BITESHIP_WEBHOOK_SECRET`, `BITESHIP_ORIGIN_POSTAL_CODE`, `BITESHIP_ORIGIN_LATITUDE`, `BITESHIP_ORIGIN_LONGITUDE`, and `MAPBOX_PERMANENT_GEOCODING_TOKEN` in `.env`. Available courier companies are managed from **Operations → Couriers** in `f1-admin`; the initial database migration enables `jne`, `jnt`, `sicepat`, and `anteraja`. For the deployed Worker, keep credentials private and set them independently for each environment:
+For local development, set `BITESHIP_API_KEY`, `BITESHIP_WEBHOOK_SECRET`, `BITESHIP_ORIGIN_POSTAL_CODE`, `BITESHIP_ORIGIN_LATITUDE`, `BITESHIP_ORIGIN_LONGITUDE`, and `MAPBOX_PERMANENT_GEOCODING_TOKEN` in `.env`. Available courier companies are managed from **Operations → Couriers** in `f1-admin`; the initial database migration enables `jne`, `jnt`, `sicepat`, and `anteraja`. For the deployed Worker, keep credentials private and set them independently for each environment. Rotate any Mapbox secret token that has appeared in chat, logs, or source control before storing its replacement:
 
-The location endpoint uses Mapbox Geocoding v6 permanent mode. If the server token has URL restrictions, allow the corresponding storefront origin; the Worker forwards `STOREFRONT_URL` as the request `Referer`.
-
-```sh
-npx wrangler secret put BITESHIP_API_KEY
-npx wrangler secret put BITESHIP_WEBHOOK_SECRET
-npx wrangler secret put BITESHIP_ORIGIN_POSTAL_CODE
-npx wrangler secret put BITESHIP_ORIGIN_LATITUDE --env staging
-npx wrangler secret put BITESHIP_ORIGIN_LONGITUDE --env staging
-npx wrangler secret put MAPBOX_PERMANENT_GEOCODING_TOKEN --env staging
-```
+The location endpoint uses Mapbox Geocoding v6 permanent mode. If the server token has URL restrictions, allow the corresponding storefront origin; the Worker forwards `STOREFRONT_URL` as the request `Referer`. In **Workers & Pages → f1-store-api → Settings → Variables and Secrets**, store `BITESHIP_API_KEY`, `BITESHIP_WEBHOOK_SECRET`, and `MAPBOX_PERMANENT_GEOCODING_TOKEN` as encrypted production secrets. Keep origin postal code and coordinates in `wrangler.jsonc` because they are not credentials.
 
 Configure Biteship's [`order.status` webhook](https://biteship.com/id/docs/api/webhook/overview) to `POST https://<api-host>/api/webhooks/biteship` with `Authorization: Bearer <BITESHIP_WEBHOOK_SECRET>`. During webhook installation, an empty `application/json` request returns plain-text `ok`; non-empty webhook requests require authentication and validation. The endpoint updates the matching order's latest Biteship status, tracking ID, and waybill ID; it does not change F1 payment or lifecycle state. A valid webhook for an unknown Biteship order is acknowledged without creating a local order.
 
-Before production traffic, add an edge rate-limit rule for `POST /api/shipping/rates` (default: 10 requests per minute per IP). Biteship Rates requests use paid live data even with a testing key, so automated tests mock Biteship and never make billable calls.
+Before production traffic, create two Cloudflare WAF rate-limiting rules for `api.valydejersey.com`. Use `IP` as the counting characteristic, a threshold of 10 requests per 1 minute, and the `Block` action with an HTTP 429 response for each rule:
+
+- `http.host eq "api.valydejersey.com" and http.request.method eq "POST" and http.request.uri.path eq "/api/shipping/rates"`
+- `http.host eq "api.valydejersey.com" and http.request.method eq "POST" and http.request.uri.path eq "/api/locations/search"`
+
+Keep these as separate rules so address searches do not consume the shipping-rate allowance. Do not use Managed Challenge on the API host: the storefront Worker proxies these requests and cannot relay an interactive challenge page to the browser. WAF rules are zone configuration and are not represented by this Worker's Wrangler configuration. Biteship Rates requests use paid live data even with a testing key, so automated tests mock Biteship and never make billable calls.
 
 ### Shipment tracking
 
@@ -150,7 +146,7 @@ New and migrated orders use public numbers shaped like `VLD-AB12-CD34-EF56`. Exi
 
 Guest checkout uses Midtrans Snap. The backend owns all price and stock calculations, verifies Midtrans notifications, and creates the Biteship shipment only after an accepted `capture` or `settlement`. Configure the local variables shown in `.env.example`; keep `MIDTRANS_SERVER_KEY` and `BITESHIP_API_KEY` as Worker secrets when deployed. Set the Midtrans Payment Notification URL to `https://<api-host>/api/payments/midtrans/notification`.
 
-Turnstile is disabled for now. Set `TURNSTILE_ENABLED=true`, configure `TURNSTILE_SECRET_KEY` with `npx wrangler secret put TURNSTILE_SECRET_KEY`, and provide the storefront site key when re-enabling it. The storefront loads Snap using `NEXT_PUBLIC_MIDTRANS_CLIENT_KEY`. Biteship booking also requires the full pickup contact and address variables; a paid order remains visible as `BOOKING_FAILED` and a replayed Midtrans notification safely retries it.
+Turnstile is enabled only in production. Store the production widget's matching secret as the encrypted `TURNSTILE_SECRET_KEY` binding in **Workers & Pages → f1-store-api → Settings → Variables and Secrets**; never put it in `wrangler.jsonc`, `.env.example`, chat, or source control. The widget hostname is `valydejersey.com` (not the API hostname), and the API requires the expected `shipping-rates` or `checkout` action. Cloudflare Siteverify rejects expired and replayed tokens. Local development and staging keep `TURNSTILE_ENABLED=false`; do not mix Cloudflare test secrets with a production site key. Deploy the storefront with its matching production site key before deploying the backend enforcement change. The storefront loads Snap using `NEXT_PUBLIC_MIDTRANS_CLIENT_KEY`. Biteship booking also requires the full pickup contact and address variables; a paid order remains visible as `BOOKING_FAILED` and a replayed Midtrans notification safely retries it.
 
 Accepted `capture` and `settlement` notifications also send a payment confirmation through the Worker `EMAIL` binding. The message contains the order lines, totals, delivery service, destination, tracking number when available, and a link to `/track-order`. Delivery is idempotent across repeated Midtrans notifications and is retried when Cloudflare temporarily rejects a send. Configure `EMAIL_FROM_ADDRESS`, `EMAIL_FROM_NAME`, and optional `EMAIL_REPLY_TO`; the sender domain must first be onboarded in Cloudflare Email Service.
 
