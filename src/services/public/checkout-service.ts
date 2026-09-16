@@ -2,7 +2,7 @@ import { Buffer } from "node:buffer";
 import { createHash, randomUUID, timingSafeEqual } from "node:crypto";
 import { z } from "zod";
 import { config } from "../../config.js";
-import { sendPaymentConfirmationEmail } from "../../email-service.js";
+import { sendPaymentConfirmationEmail, sendPendingPaymentEmail } from "../../email-service.js";
 import { scheduleBackground } from "../../background.js";
 import { HttpError, notFound } from "../../http.js";
 import {
@@ -84,6 +84,13 @@ function errorCode(error: unknown) {
   return error && typeof error === "object" && "code" in error && typeof error.code === "string" ? error.code : undefined;
 }
 
+function midtransPaymentUrl(snapToken: string) {
+  const baseUrl = config.midtransEnv === "production"
+    ? "https://app.midtrans.com"
+    : "https://app.sandbox.midtrans.com";
+  return `${baseUrl}/snap/v2/vtweb/${encodeURIComponent(snapToken)}`;
+}
+
 function publicOrder(order: {
   id: string;
   orderNumber: string;
@@ -97,6 +104,8 @@ function publicOrder(order: {
   totalIdr: number;
   promoCode: { code: string } | null;
   paymentStatus: string;
+  midtransSnapToken: string | null;
+  paymentExpiresAt: Date;
   shipmentBookingStatus: string;
   lifecycleStatus: string;
   externalRefundedAt: Date | null;
@@ -124,6 +133,12 @@ function publicOrder(order: {
     totalIdr: order.totalIdr,
     promoCode: order.promoCode?.code ?? null,
     paymentStatus: order.paymentStatus,
+    paymentUrl: order.paymentStatus === "PENDING"
+      && order.midtransSnapToken
+      && order.paymentExpiresAt.getTime() > Date.now()
+      ? midtransPaymentUrl(order.midtransSnapToken)
+      : null,
+    paymentExpiresAt: order.paymentExpiresAt,
     fulfillmentStatus: order.shipmentBookingStatus,
     lifecycleStatus: order.lifecycleStatus,
     refundState: order.externalRefundedAt
@@ -209,6 +224,18 @@ function telegramPaidFields(order: { paymentStatus: string; telegramNotification
 
 async function releaseStock(orderId: string, paymentStatus: "FAILED" | "EXPIRED" | "CANCELLED", midtransStatus: string) {
   return OrderRepository.releaseStock(orderId, paymentStatus, midtransStatus);
+}
+
+function schedulePendingPaymentEmail(orderId: string) {
+  scheduleBackground(sendPendingPaymentEmail(orderId).catch(async (error) => {
+    console.error(`Pending payment email failed for order ${orderId}`, error);
+    await OrderRepository.createAudit({
+      orderId,
+      action: "PENDING_PAYMENT_EMAIL_FAILED",
+      outcome: "FAILED",
+      details: { message: "Checkout succeeded; the customer can continue payment from the order page" },
+    });
+  }));
 }
 
 function midtransStartTime(date: Date) {
@@ -480,7 +507,11 @@ export class PublicCheckoutService {
   static async create(input: CheckoutInput) {
     requirePaymentConfig();
     const previous = await OrderRepository.findByIdempotencyKey(input.idempotencyKey);
-    if (previous) return checkoutResponse(previous);
+    if (previous) {
+      const response = checkoutResponse(previous);
+      schedulePendingPaymentEmail(previous.id);
+      return response;
+    }
 
     const quote = await PublicShippingService.rates({
       destinationPostalCode: input.postalCode,
@@ -534,6 +565,7 @@ export class PublicCheckoutService {
     try {
       const snapToken = await createSnapToken(order);
       const ready = await OrderRepository.setSnapToken(order.id, snapToken);
+      schedulePendingPaymentEmail(ready.id);
       return checkoutResponse(ready);
     } catch (error) {
       await releaseStock(order.id, "FAILED", "token_failure");

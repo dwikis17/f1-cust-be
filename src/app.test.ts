@@ -2337,6 +2337,7 @@ test("shipping rates use authoritative cart data and normalize Biteship response
       destination_latitude: -6.2441792,
       destination_longitude: 106.783529,
       couriers: "jne,sicepat",
+      courier_insurance: 2_700_000,
       items: [{
         name: "Ferrari Team Jersey", category: "fashion", sku: "FER-JER-RED-M", value: 900_000,
         quantity: 3, weight: 450, height: 4, length: 30, width: 22,
@@ -2794,6 +2795,29 @@ test("checkout verifies payment notifications, reserves stock, and waits for man
     throw new Error(`Telegram notification did not send for ${orderId}`);
   }
 
+  async function waitForPendingPaymentEmail(orderId: string) {
+    const deadline = Date.now() + 2_000;
+    while (Date.now() < deadline) {
+      const order = await prisma.order.findUnique({
+        where: { id: orderId },
+        select: { pendingPaymentEmailSentAt: true },
+      });
+      if (order?.pendingPaymentEmailSentAt) return order;
+      await new Promise((resolve) => setTimeout(resolve, 10));
+    }
+    throw new Error(`Pending payment email did not send for ${orderId}`);
+  }
+
+  async function waitForAudit(orderId: string, action: string) {
+    const deadline = Date.now() + 2_000;
+    while (Date.now() < deadline) {
+      const event = await prisma.orderAuditEvent.findFirst({ where: { orderId, action } });
+      if (event) return event;
+      await new Promise((resolve) => setTimeout(resolve, 10));
+    }
+    throw new Error(`Audit ${action} was not created for ${orderId}`);
+  }
+
   async function waitForTelegramAttempt(orderId: string, attempts: number) {
     const deadline = Date.now() + 2_000;
     while (Date.now() < deadline) {
@@ -2864,10 +2888,30 @@ test("checkout verifies payment notifications, reserves stock, and waits for man
     assert.equal(checkout.body.totalIdr, 1_168_000);
     assert.equal(checkout.body.promoCode, "GRID20");
     assert.equal(checkout.body.snapToken, "snap-1");
+    await waitForPendingPaymentEmail(checkout.body.orderId);
+    assert.equal(sentEmails.length, 1);
+    assert.equal(sentEmails[0].subject, `Complete payment — ${checkout.body.orderNumber}`);
+    assert.ok(sentEmails[0].text?.includes(`http://localhost:3001/orders/${checkout.body.orderId}`));
+    assert.doesNotMatch(sentEmails[0].text ?? "", /snap-1/);
     const repeated = await request(app).post("/api/checkout").send(promoPayload).expect(201);
     assert.equal(repeated.body.orderId, checkout.body.orderId);
+    await new Promise((resolve) => setTimeout(resolve, 25));
+    assert.equal(sentEmails.length, 1);
     assert.equal(rateCalls, 1);
     assert.equal(snapCalls, 1);
+    await prisma.order.update({
+      where: { id: checkout.body.orderId },
+      data: { pendingPaymentEmailSentAt: null },
+    });
+    setDefaultEmailSender({ async send() { throw new Error("Simulated pending payment email failure"); } });
+    await request(app).post("/api/checkout").send(promoPayload).expect(201);
+    await waitForAudit(checkout.body.orderId, "PENDING_PAYMENT_EMAIL_FAILED");
+    setDefaultEmailSender({
+      async send(message) {
+        sentEmails.push(message);
+        return { messageId: `email-${sentEmails.length}` };
+      },
+    });
     await request(app).post("/api/checkout").send({
       ...payload,
       idempotencyKey: randomUUID(),
@@ -2915,6 +2959,8 @@ test("checkout verifies payment notifications, reserves stock, and waits for man
     assert.match(receipt.body.orderNumber, /^VLD-[0-9A-F]{4}-[0-9A-F]{4}-[0-9A-F]{4}$/);
     assert.equal(receipt.body.orderNumber, checkout.body.orderNumber);
     assert.equal(receipt.body.paymentStatus, "PENDING");
+    assert.equal(receipt.body.paymentUrl, "https://app.sandbox.midtrans.com/snap/v2/vtweb/snap-1");
+    assert.equal(new Date(receipt.body.paymentExpiresAt).getTime(), createdOrder.paymentExpiresAt.getTime());
     assert.equal(receipt.body.promoCode, "GRID20");
     assert.equal(receipt.body.discountIdr, 100_000);
     assert.equal(receipt.body.midtransSnapToken, undefined);
@@ -2954,24 +3000,26 @@ test("checkout verifies payment notifications, reserves stock, and waits for man
     assert.match(telegramBodies[0].text, /Item: Ferrari Team Jersey \(Red \/ M\) x1/);
     assert.match(telegramBodies[0].text, /Detail: http:\/\/localhost:3002\/dashboard\/orders\//);
     assert.equal(bookingCalls, 0);
-    assert.equal(sentEmails.length, 1);
-    assert.deepEqual(sentEmails[0].to, { email: "buyer@example.com", name: "Ayu Racer" });
-    assert.deepEqual(sentEmails[0].from, { email: "orders@valydejersey.com", name: "Valyde Jersey" });
-    assert.equal(sentEmails[0].replyTo, "support@valydejersey.com");
-    assert.equal(sentEmails[0].subject, `Payment received — ${checkout.body.orderNumber}`);
-    assert.match(sentEmails[0].text ?? "", /Ferrari Team Jersey \(Color: Red \/ Size: M\) x1/);
-    assert.match(sentEmails[0].text ?? "", /Total paid: Rp\s?1\.168\.000/);
-    assert.ok(sentEmails[0].text?.includes(`We received your payment for order ${checkout.body.orderNumber}\n\n`));
-    assert.match(sentEmails[0].html ?? "", /Track your order/);
+    assert.equal(sentEmails.length, 2);
+    assert.deepEqual(sentEmails[1].to, { email: "buyer@example.com", name: "Ayu Racer" });
+    assert.deepEqual(sentEmails[1].from, { email: "orders@valydejersey.com", name: "Valyde Jersey" });
+    assert.equal(sentEmails[1].replyTo, "support@valydejersey.com");
+    assert.equal(sentEmails[1].subject, `Payment received — ${checkout.body.orderNumber}`);
+    assert.match(sentEmails[1].text ?? "", /Ferrari Team Jersey \(Color: Red \/ Size: M\) x1/);
+    assert.match(sentEmails[1].text ?? "", /Total paid: Rp\s?1\.168\.000/);
+    assert.ok(sentEmails[1].text?.includes(`We received your payment for order ${checkout.body.orderNumber}\n\n`));
+    assert.match(sentEmails[1].html ?? "", /Track your order/);
     const paymentTrackUrl = new URL("/track-order", config.storefrontUrl);
     paymentTrackUrl.searchParams.set("orderNumber", checkout.body.orderNumber);
     paymentTrackUrl.searchParams.set("email", payload.email);
-    assert.ok(sentEmails[0].text?.includes(`Track your order: ${paymentTrackUrl.toString()}`));
-    assert.ok(sentEmails[0].html?.includes(`href="${paymentTrackUrl.toString().replaceAll("&", "&amp;")}"`));
+    assert.ok(sentEmails[1].text?.includes(`Track your order: ${paymentTrackUrl.toString()}`));
+    assert.ok(sentEmails[1].html?.includes(`href="${paymentTrackUrl.toString().replaceAll("&", "&amp;")}"`));
     assert.ok((await prisma.order.findUniqueOrThrow({ where: { id: checkout.body.orderId } })).paymentConfirmationEmailSentAt);
+    const paidReceipt = await request(app).get(`/api/orders/${checkout.body.orderId}`).expect(200);
+    assert.equal(paidReceipt.body.paymentUrl, null);
     config.emailDeliveryEnabled = false;
     assert.equal(await sendPaymentConfirmationEmail(checkout.body.orderId, { force: true }), false);
-    assert.equal(sentEmails.length, 1);
+    assert.equal(sentEmails.length, 2);
     config.emailDeliveryEnabled = true;
     await request(app).get(`/api/admin/orders/${checkout.body.orderId}/payment-events`).expect(401);
     await request(app).get(`/api/admin/orders/${randomUUID()}/payment-events`)
@@ -3010,11 +3058,11 @@ test("checkout verifies payment notifications, reserves stock, and waits for man
     assert.equal(shipped.body.lifecycleStatus, "FULFILLED");
     assert.equal(shipped.body.fulfillmentStatus, "BOOKED");
     assert.equal(shipped.body.tracking.waybillId, "waybill-1");
-    assert.equal(sentEmails.length, 2);
-    assert.equal(sentEmails[1].subject, `Your order has shipped — ${checkout.body.orderNumber}`);
-    assert.match(sentEmails[1].text ?? "", /shipment has been booked/);
-    assert.doesNotMatch(sentEmails[1].text ?? "", /booked for pickup/);
-    assert.match(sentEmails[1].text ?? "", /Tracking number: waybill-1/);
+    assert.equal(sentEmails.length, 3);
+    assert.equal(sentEmails[2].subject, `Your order has shipped — ${checkout.body.orderNumber}`);
+    assert.match(sentEmails[2].text ?? "", /shipment has been booked/);
+    assert.doesNotMatch(sentEmails[2].text ?? "", /booked for pickup/);
+    assert.match(sentEmails[2].text ?? "", /Tracking number: waybill-1/);
     const tracked = await request(app).post("/api/orders/track")
       .send({ orderNumber: shipped.body.orderNumber.toLowerCase(), email: "BUYER@EXAMPLE.COM" }).expect(200);
     assert.equal(tracked.body.orderNumber, shipped.body.orderNumber);
@@ -3184,6 +3232,8 @@ test("checkout verifies payment notifications, reserves stock, and waits for man
     assert.equal(optionlessSnapshot.size, null);
     await request(app).post("/api/payments/midtrans/notification")
       .send(notification(optionlessCheckout.body.orderId, "expire", "418000.00")).expect(200);
+    const expiredReceipt = await request(app).get(`/api/orders/${optionlessCheckout.body.orderId}`).expect(200);
+    assert.equal(expiredReceipt.body.paymentUrl, null);
     await prisma.product.update({ where: { id: optionless.id }, data: { status: "ARCHIVED" } });
 
     const insufficient = await request(app).post("/api/checkout").send({
@@ -3225,7 +3275,7 @@ test("checkout verifies payment notifications, reserves stock, and waits for man
 
     await prisma.productVariant.update({ where: { id: variantId }, data: { stockQuantity: 20 } });
     const stockBeforeReconciliation = 20;
-    const confirmationCount = sentEmails.length;
+    const confirmationCount = sentEmails.filter((message) => message.subject.startsWith("Payment received")).length;
     const reconciliationPaid = await request(app).post("/api/checkout")
       .send({ ...payload, idempotencyKey: randomUUID() }).expect(201);
     const reconciliationExpired = await request(app).post("/api/checkout")
@@ -3276,7 +3326,7 @@ test("checkout verifies payment notifications, reserves stock, and waits for man
     assert.equal((await prisma.order.findUniqueOrThrow({ where: { id: reconciliationMissing.body.orderId } })).paymentStatus, "EXPIRED");
     assert.equal((await prisma.order.findUniqueOrThrow({ where: { id: reconciliationExpireFailed.body.orderId } })).paymentStatus, "PENDING");
     assert.equal((await prisma.productVariant.findUniqueOrThrow({ where: { id: variantId } })).stockQuantity, stockBeforeReconciliation - 3);
-    assert.equal(sentEmails.length, confirmationCount + 1);
+    assert.equal(sentEmails.filter((message) => message.subject.startsWith("Payment received")).length, confirmationCount + 1);
     assert.equal(await prisma.orderAuditEvent.count({
       where: { orderId: reconciliationInvalid.body.orderId, action: "PAYMENT_RECONCILIATION_FAILED" },
     }), 1);

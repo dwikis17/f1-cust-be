@@ -41,6 +41,14 @@ function itemDescription(item: { color: string | null; size: string | null }) {
   return [item.color && `Color: ${item.color}`, item.size && `Size: ${item.size}`].filter(Boolean).join(" / ");
 }
 
+function jakartaDateTime(value: Date) {
+  return new Intl.DateTimeFormat("en-ID", {
+    dateStyle: "medium",
+    timeStyle: "short",
+    timeZone: "Asia/Jakarta",
+  }).format(value);
+}
+
 type ConfirmationOrder = NonNullable<Awaited<ReturnType<typeof loadConfirmationOrder>>>;
 
 function loadConfirmationOrder(orderId: string) {
@@ -48,6 +56,36 @@ function loadConfirmationOrder(orderId: string) {
     where: { id: orderId },
     include: { items: true, promoCode: { select: { code: true } } },
   });
+}
+
+export function buildPendingPaymentEmail(order: ConfirmationOrder): EmailMessageBuilder {
+  if (!config.emailFromAddress || !config.storefrontUrl) {
+    throw new Error("EMAIL_FROM_ADDRESS and STOREFRONT_URL are required to send payment links");
+  }
+
+  const customerName = `${order.firstName} ${order.lastName}`.trim();
+  const orderUrl = new URL(`/orders/${order.id}`, config.storefrontUrl).toString();
+  const expiresAt = jakartaDateTime(order.paymentExpiresAt);
+
+  return {
+    to: { email: order.email, name: customerName },
+    from: { email: config.emailFromAddress, name: config.emailFromName },
+    ...(config.emailReplyTo ? { replyTo: config.emailReplyTo } : {}),
+    subject: `Complete payment — ${order.orderNumber}`,
+    text: `Hi ${customerName},
+
+Your order ${order.orderNumber} is waiting for payment.
+
+Total: ${idr(order.totalIdr)}
+Complete payment before ${expiresAt} WIB:
+${orderUrl}
+
+If you already paid, you can ignore this email. Your order page will update after Midtrans confirms the payment.
+
+Thank you,
+${config.emailFromName}`,
+    html: `<!doctype html><html><body style="margin:0;background:#f4f4f4;color:#151515;font-family:Arial,sans-serif"><table role="presentation" width="100%" cellspacing="0" cellpadding="0"><tr><td style="padding:32px 16px"><table role="presentation" width="100%" cellspacing="0" cellpadding="0" style="max-width:640px;margin:auto;background:#fff;border:1px solid #ddd"><tr><td style="padding:30px 32px;background:#151515;color:#fff"><div style="font-size:13px;letter-spacing:2px;text-transform:uppercase">${escapeHtml(config.emailFromName)}</div><h1 style="margin:12px 0 0;font-size:28px">Complete your payment</h1></td></tr><tr><td style="padding:32px"><p style="margin-top:0">Hi ${escapeHtml(customerName)},</p><p>Your order <strong>${escapeHtml(order.orderNumber)}</strong> is waiting for payment.</p><div style="margin:24px 0;padding:20px;background:#f5f5f5"><span style="color:#666">Total</span><div style="margin-top:6px;font-size:24px;font-weight:bold">${escapeHtml(idr(order.totalIdr))}</div><p style="margin:12px 0 0;color:#555">Pay before ${escapeHtml(expiresAt)} WIB.</p></div><a href="${escapeHtml(orderUrl)}" style="display:inline-block;padding:13px 20px;background:#151515;color:#fff;text-decoration:none;font-weight:bold">Complete payment</a><p style="margin:24px 0 0;color:#666;font-size:13px">If you already paid, you can ignore this email. Your order page will update after Midtrans confirms the payment.</p></td></tr></table></td></tr></table></body></html>`,
+  };
 }
 
 export function buildPaymentConfirmationEmail(order: ConfirmationOrder): EmailMessageBuilder {
@@ -137,6 +175,51 @@ Thank you,
 ${config.emailFromName}`,
     html: `<!doctype html><html><body style="margin:0;background:#f4f4f4;color:#151515;font-family:Arial,sans-serif"><table role="presentation" width="100%" cellspacing="0" cellpadding="0"><tr><td style="padding:32px 16px"><table role="presentation" width="100%" cellspacing="0" cellpadding="0" style="max-width:640px;margin:auto;background:#fff;border:1px solid #ddd"><tr><td style="padding:30px 32px;background:#151515;color:#fff"><div style="font-size:13px;letter-spacing:2px;text-transform:uppercase">${escapeHtml(config.emailFromName)}</div><h1 style="margin:12px 0 0;font-size:28px">Your order has shipped</h1></td></tr><tr><td style="padding:32px"><p style="margin-top:0">Hi ${escapeHtml(customerName)},</p><p>Your order <strong>${escapeHtml(order.orderNumber)}</strong> has been packed and the shipment has been booked.</p><div style="margin:24px 0;padding:20px;background:#f5f5f5"><strong>Delivery</strong><p style="margin:8px 0 0">${escapeHtml(order.courierName)} ${escapeHtml(order.courierServiceName)} (${escapeHtml(order.courierDuration)})</p>${waybillHtml}</div><a href="${escapeHtml(trackUrl)}" style="display:inline-block;padding:13px 20px;background:#151515;color:#fff;text-decoration:none;font-weight:bold">Track your shipment</a><p style="margin:24px 0 0;color:#666;font-size:13px">Use order number <strong>${escapeHtml(order.orderNumber)}</strong> and this email address on the tracking page.</p></td></tr></table></td></tr></table></body></html>`,
   };
+}
+
+export async function sendPendingPaymentEmail(orderId: string) {
+  if (!config.emailDeliveryEnabled) return false;
+  const claimedAt = new Date();
+  const staleBefore = new Date(claimedAt.getTime() - 10 * 60 * 1_000);
+  const claimed = await prisma.order.updateMany({
+    where: {
+      id: orderId,
+      paymentStatus: "PENDING",
+      paymentExpiresAt: { gt: claimedAt },
+      midtransSnapToken: { not: null },
+      pendingPaymentEmailSentAt: null,
+      OR: [
+        { pendingPaymentEmailSendingAt: null },
+        { pendingPaymentEmailSendingAt: { lt: staleBefore } },
+      ],
+    },
+    data: { pendingPaymentEmailSendingAt: claimedAt },
+  });
+  if (!claimed.count) return false;
+
+  try {
+    const order = await loadConfirmationOrder(orderId);
+    if (!order) throw new Error("Order disappeared before its payment link email could be sent");
+    if (order.paymentStatus !== "PENDING" || order.paymentExpiresAt <= new Date()) {
+      await prisma.order.updateMany({
+        where: { id: orderId, pendingPaymentEmailSendingAt: claimedAt },
+        data: { pendingPaymentEmailSendingAt: null },
+      });
+      return false;
+    }
+    await currentSender().send(buildPendingPaymentEmail(order));
+    await prisma.order.updateMany({
+      where: { id: orderId, pendingPaymentEmailSendingAt: claimedAt },
+      data: { pendingPaymentEmailSendingAt: null, pendingPaymentEmailSentAt: new Date() },
+    });
+    return true;
+  } catch (error) {
+    await prisma.order.updateMany({
+      where: { id: orderId, pendingPaymentEmailSendingAt: claimedAt },
+      data: { pendingPaymentEmailSendingAt: null },
+    });
+    throw error;
+  }
 }
 
 export async function sendPaymentConfirmationEmail(orderId: string, options: { force?: boolean } = {}) {
