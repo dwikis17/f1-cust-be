@@ -138,6 +138,11 @@ function publicOrder(order: {
       && order.paymentExpiresAt.getTime() > Date.now()
       ? midtransPaymentUrl(order.midtransSnapToken)
       : null,
+    paymentToken: order.paymentStatus === "PENDING"
+      && order.midtransSnapToken
+      && order.paymentExpiresAt.getTime() > Date.now()
+      ? order.midtransSnapToken
+      : null,
     paymentExpiresAt: order.paymentExpiresAt,
     fulfillmentStatus: order.shipmentBookingStatus,
     lifecycleStatus: order.lifecycleStatus,

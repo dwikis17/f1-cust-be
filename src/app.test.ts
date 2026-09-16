@@ -2960,6 +2960,7 @@ test("checkout verifies payment notifications, reserves stock, and waits for man
     assert.equal(receipt.body.orderNumber, checkout.body.orderNumber);
     assert.equal(receipt.body.paymentStatus, "PENDING");
     assert.equal(receipt.body.paymentUrl, "https://app.sandbox.midtrans.com/snap/v2/vtweb/snap-1");
+    assert.equal(receipt.body.paymentToken, "snap-1");
     assert.equal(new Date(receipt.body.paymentExpiresAt).getTime(), createdOrder.paymentExpiresAt.getTime());
     assert.equal(receipt.body.promoCode, "GRID20");
     assert.equal(receipt.body.discountIdr, 100_000);
@@ -3017,6 +3018,7 @@ test("checkout verifies payment notifications, reserves stock, and waits for man
     assert.ok((await prisma.order.findUniqueOrThrow({ where: { id: checkout.body.orderId } })).paymentConfirmationEmailSentAt);
     const paidReceipt = await request(app).get(`/api/orders/${checkout.body.orderId}`).expect(200);
     assert.equal(paidReceipt.body.paymentUrl, null);
+    assert.equal(paidReceipt.body.paymentToken, null);
     config.emailDeliveryEnabled = false;
     assert.equal(await sendPaymentConfirmationEmail(checkout.body.orderId, { force: true }), false);
     assert.equal(sentEmails.length, 2);
@@ -3234,6 +3236,7 @@ test("checkout verifies payment notifications, reserves stock, and waits for man
       .send(notification(optionlessCheckout.body.orderId, "expire", "418000.00")).expect(200);
     const expiredReceipt = await request(app).get(`/api/orders/${optionlessCheckout.body.orderId}`).expect(200);
     assert.equal(expiredReceipt.body.paymentUrl, null);
+    assert.equal(expiredReceipt.body.paymentToken, null);
     await prisma.product.update({ where: { id: optionless.id }, data: { status: "ARCHIVED" } });
 
     const insufficient = await request(app).post("/api/checkout").send({
