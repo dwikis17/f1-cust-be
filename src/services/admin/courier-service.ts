@@ -1,7 +1,7 @@
 import { z } from "zod";
 import { config } from "../../config.js";
 import { HttpError } from "../../http.js";
-import { ShippingCourierRepository } from "../../repositories/shipping-courier-repository.js";
+import { BLOCKED_COURIER_CODES, ShippingCourierRepository } from "../../repositories/shipping-courier-repository.js";
 import { FreeShippingRuleRepository } from "../../repositories/free-shipping-rule-repository.js";
 
 const biteshipCourierSchema = z.object({
@@ -55,6 +55,7 @@ async function fetchBiteshipCouriers() {
   const couriers = new Map<string, CatalogCourier>();
   for (const service of parsed.data.couriers) {
     const code = service.courier_code.toLowerCase();
+    if (BLOCKED_COURIER_CODES.has(code)) continue;
     const courier = couriers.get(code) ?? {
       code,
       name: service.courier_name,
@@ -107,6 +108,10 @@ export class CourierService {
   }
 
   static async setActive(code: string, active: boolean) {
+    if (active && BLOCKED_COURIER_CODES.has(code)) {
+      throw new HttpError(400, "COURIER_NOT_SUPPORTED", "Instant couriers are not supported");
+    }
+
     const current = await ShippingCourierRepository.find(code);
     if (current?.active === active) return current;
 

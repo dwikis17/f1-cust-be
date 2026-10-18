@@ -1,13 +1,19 @@
 import { prisma } from "../db.js";
 
+// Instant couriers need exact delivery coordinates, which checkout no longer collects.
+export const BLOCKED_COURIER_CODES = new Set(["gojek", "grab", "lalamove", "borzo", "deliveree", "rara"]);
+
 export class ShippingCourierRepository {
   static list() {
-    return prisma.shippingCourier.findMany({ orderBy: { code: "asc" } });
+    return prisma.shippingCourier.findMany({
+      where: { code: { notIn: [...BLOCKED_COURIER_CODES] } },
+      orderBy: { code: "asc" },
+    });
   }
 
   static listActiveCodes() {
     return prisma.shippingCourier.findMany({
-      where: { active: true },
+      where: { active: true, code: { notIn: [...BLOCKED_COURIER_CODES] } },
       select: { code: true },
       orderBy: { code: "asc" },
     }).then((couriers) => couriers.map(({ code }) => code));

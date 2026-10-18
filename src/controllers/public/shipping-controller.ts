@@ -9,8 +9,8 @@ import { verifyHuman } from "../../turnstile.js";
 
 const shippingRatesSchema = z.object({
   destinationPostalCode: z.string().trim().regex(/^\d{5}$/, "Postal code must contain exactly 5 digits"),
-  destinationLatitude: latitudeSchema,
-  destinationLongitude: longitudeSchema,
+  destinationLatitude: latitudeSchema.optional(),
+  destinationLongitude: longitudeSchema.optional(),
   items: z.array(z.object({
     variantId: idSchema,
     quantity: z.number().int().min(1).max(9),

@@ -39,8 +39,8 @@ export type CheckoutInput = {
   city: string;
   province: string;
   postalCode: string;
-  destinationLatitude: number;
-  destinationLongitude: number;
+  destinationLatitude?: number;
+  destinationLongitude?: number;
   items: Array<{ variantId: string; quantity: number }>;
   courierCode: string;
   serviceCode: string;
