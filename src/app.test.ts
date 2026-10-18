@@ -198,7 +198,9 @@ test("admins manage the live Biteship courier allowlist", async () => {
       { courier_code: "jnt", courier_name: "J&T Express", courier_service_code: "reg" },
       { courier_code: "sicepat", courier_name: "SiCepat", courier_service_code: "reg" },
       { courier_code: "anteraja", courier_name: "AnterAja", courier_service_code: "reg" },
+      { courier_code: "ninja", courier_name: "Ninja Xpress", courier_service_code: "standard" },
       { courier_code: "lalamove", courier_name: "Lalamove", courier_service_code: "instant" },
+      { courier_code: "gojek", courier_name: "Gojek", courier_service_code: "instant" },
     ],
   };
 
@@ -216,7 +218,8 @@ test("admins manage the live Biteship courier allowlist", async () => {
       "anteraja", "jnt", "jne", "sicepat",
     ]);
     assert.equal(catalog.body.couriers.find((courier: { code: string }) => courier.code === "jne").serviceCount, 2);
-    assert.equal(catalog.body.couriers.find((courier: { code: string }) => courier.code === "lalamove").active, false);
+    assert.equal(catalog.body.couriers.find((courier: { code: string }) => courier.code === "ninja").active, false);
+    assert.equal(catalog.body.couriers.some((courier: { code: string }) => ["lalamove", "gojek"].includes(courier.code)), false);
     assert.deepEqual(catalog.body.freeShippingRule, {
       active: false,
       minimumPurchaseIdr: 1_000_000,
@@ -230,8 +233,12 @@ test("admins manage the live Biteship courier allowlist", async () => {
       .send({ ...catalog.body.freeShippingRule, active: true }).expect(200);
     assert.equal(savedRule.body.active, true);
 
-    await request(app).patch("/api/admin/couriers/lalamove")
+    await request(app).patch("/api/admin/couriers/ninja")
       .set("authorization", `Bearer ${token}`).send({ active: true }).expect(200);
+    await request(app).patch("/api/admin/couriers/gojek")
+      .set("authorization", `Bearer ${token}`).send({ active: true }).expect(400, {
+        error: { code: "COURIER_NOT_SUPPORTED", message: "Instant couriers are not supported" },
+      });
     await request(app).patch("/api/admin/couriers/unknown")
       .set("authorization", `Bearer ${token}`).send({ active: true }).expect(400, {
         error: {
@@ -240,18 +247,19 @@ test("admins manage the live Biteship courier allowlist", async () => {
         },
       });
 
-    await setActiveCourierCodes(["lalamove"]);
-    await request(app).patch("/api/admin/couriers/lalamove")
+    await setActiveCourierCodes(["ninja"]);
+    await request(app).patch("/api/admin/couriers/ninja")
       .set("authorization", `Bearer ${token}`).send({ active: false }).expect(409, {
         error: { code: "LAST_ACTIVE_COURIER", message: "At least one courier must remain active" },
       });
 
+    await setActiveCourierCodes(["ninja", "gojek"]);
     globalThis.fetch = async () => { throw new Error("Biteship unavailable"); };
     const fallback = await request(app).get("/api/admin/couriers")
       .set("authorization", `Bearer ${token}`).expect(200);
     assert.equal(fallback.body.catalogAvailable, false);
     assert.deepEqual(fallback.body.couriers, [
-      { code: "lalamove", name: "lalamove", serviceCount: 0, active: true },
+      { code: "ninja", name: "ninja", serviceCount: 0, active: true },
     ]);
   } finally {
     globalThis.fetch = previousFetch;
@@ -2379,6 +2387,17 @@ test("shipping rates use authoritative cart data and normalize Biteship response
       shippingDiscountIdr: 0, insuranceAvailable: true, insuranceFeeIdr: 4_000,
       insuranceValueIdr: 900_000, price: 22_000, availableCollectionMethods: ["pickup"],
     });
+
+    await setActiveCourierCodes(["jne", "sicepat", "gojek"]);
+    await request(app).post("/api/shipping/rates").send({
+      destinationPostalCode: "12240", items: [{ variantId, quantity: 1 }], turnstileToken: "turnstile-valid",
+    }).expect(200);
+    assert.equal(upstreamBody?.destination_postal_code, 12240);
+    assert.equal(upstreamBody?.couriers, "jne,sicepat");
+    for (const key of ["origin_latitude", "origin_longitude", "destination_latitude", "destination_longitude"]) {
+      assert.equal(key in (upstreamBody ?? {}), false);
+    }
+    await setActiveCourierCodes(["jne", "sicepat"]);
 
     await request(app).post("/api/shipping/rates")
       .send({ destinationPostalCode: "123", items: [{ variantId, quantity: 1 }], turnstileToken: "turnstile-valid" }).expect(400);

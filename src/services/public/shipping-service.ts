@@ -12,8 +12,8 @@ import { calculateShippingPrice } from "../../free-shipping.js";
 
 type ShippingInput = {
   destinationPostalCode: string;
-  destinationLatitude: number;
-  destinationLongitude: number;
+  destinationLatitude?: number;
+  destinationLongitude?: number;
   items: Array<{ variantId: string; quantity: number }>;
   promoCode?: string;
 };
