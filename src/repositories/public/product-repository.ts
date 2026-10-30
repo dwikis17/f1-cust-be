@@ -188,7 +188,7 @@ export class PublicProductRepository {
         return product ? [product] : [];
       })] as const;
     }
-    return prisma.$transaction([
+    return Promise.all([
       prisma.product.count({ where }),
       prisma.product.findMany({
         where,
@@ -249,7 +249,7 @@ export class PublicProductRepository {
         return membership ? [membership] : [];
       })] as const;
     }
-    return prisma.$transaction([
+    return Promise.all([
       prisma.productCollection.count({ where }),
       prisma.productCollection.findMany({
         where,

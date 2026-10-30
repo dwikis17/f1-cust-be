@@ -16,12 +16,12 @@ export function notFound(message = "Resource not found"): never {
   throw new HttpError(404, "NOT_FOUND", message);
 }
 
-function prismaError(error: unknown): { code: string; meta?: { target?: unknown } } | undefined {
+function prismaError(error: unknown): { code: string; meta?: { target?: unknown; [key: string]: unknown } } | undefined {
   if (!error || typeof error !== "object" || !("code" in error) || typeof error.code !== "string") return;
-  return error as { code: string; meta?: { target?: unknown } };
+  return error as { code: string; meta?: { target?: unknown; [key: string]: unknown } };
 }
 
-export function errorHandler(error: unknown, _request: Request, response: Response, _next: NextFunction) {
+export function errorHandler(error: unknown, request: Request, response: Response, _next: NextFunction) {
   if (error instanceof HttpError) {
     response.status(error.status).json({ error: { code: error.code, message: error.message, fields: error.fields } });
     return;
@@ -51,6 +51,15 @@ export function errorHandler(error: unknown, _request: Request, response: Respon
       return;
     }
     if (databaseError.code === "P2003" || databaseError.code === "P2025") {
+      if (databaseError.code === "P2003") {
+        console.warn(JSON.stringify({
+          message: "foreign key violation",
+          method: request.method,
+          path: request.originalUrl,
+          code: databaseError.code,
+          meta: databaseError.meta,
+        }));
+      }
       response.status(databaseError.code === "P2025" ? 404 : 409).json({
         error: {
           code: databaseError.code === "P2025" ? "NOT_FOUND" : "REFERENCE_CONFLICT",

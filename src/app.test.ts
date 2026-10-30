@@ -3692,6 +3692,50 @@ test("database uniqueness and transactional tag updates are enforced", async () 
   assert.equal(afterRollback.body.tags[0].tag.slug, "limited-edition");
 });
 
+test("product updates replace tag, driver, and collection links atomically", async () => {
+  const first = await request(app).post("/api/admin/tags").set("authorization", `Bearer ${token}`)
+    .send({ name: "Relink First", slug: "relink-first" }).expect(201);
+  const second = await request(app).post("/api/admin/tags").set("authorization", `Bearer ${token}`)
+    .send({ name: "Relink Second", slug: "relink-second" }).expect(201);
+  const product = await request(app).post("/api/admin/products").set("authorization", `Bearer ${token}`)
+    .send({
+      name: "Relink Product",
+      slug: "relink-product",
+      priceIdr: 300_000,
+      status: "DRAFT",
+      condition: "BNWT",
+      categoryId,
+      tagIds: [first.body.id],
+      driverIds: [driverId],
+      collectionIds: [ferrariCollectionId],
+      variants: [{
+        sku: "RELINK-M", size: "M", stockQuantity: 1,
+        packageLengthMm: 300, packageWidthMm: 220, packageHeightMm: 40, packageWeightG: 400,
+      }],
+    }).expect(201);
+  const id = product.body.id;
+  try {
+    const relinked = await request(app).patch(`/api/admin/products/${id}`).set("authorization", `Bearer ${token}`)
+      .send({ tagIds: [second.body.id], driverIds: [historicalDriverId], collectionIds: [] }).expect(200);
+    assert.deepEqual(relinked.body.tags.map(({ tag }: { tag: { id: string } }) => tag.id), [second.body.id]);
+    assert.deepEqual(relinked.body.driverIds, [historicalDriverId]);
+    assert.deepEqual(relinked.body.collectionIds, []);
+
+    await request(app).patch(`/api/admin/products/${randomUUID()}`).set("authorization", `Bearer ${token}`)
+      .send({ tagIds: [first.body.id] }).expect(404);
+
+    await Promise.all([first.body.id, second.body.id].map((tagId) =>
+      request(app).patch(`/api/admin/products/${id}`).set("authorization", `Bearer ${token}`)
+        .send({ tagIds: [tagId] }).expect(200)));
+    const links = await prisma.productTag.findMany({ where: { productId: id }, select: { tagId: true } });
+    assert.equal(links.length, 1);
+    assert.ok([first.body.id, second.body.id].includes(links[0].tagId));
+  } finally {
+    await prisma.product.delete({ where: { id } });
+    await prisma.tag.deleteMany({ where: { id: { in: [first.body.id, second.body.id] } } });
+  }
+});
+
 test("driver transfers preserve historical product teams and references", async () => {
   await request(app).patch(`/api/admin/drivers/${driverId}`).set("authorization", `Bearer ${token}`)
     .send({ teamId: secondTeamId }).expect(200);

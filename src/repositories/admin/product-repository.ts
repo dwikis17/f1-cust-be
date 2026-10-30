@@ -141,6 +141,8 @@ export class ProductRepository {
   }
   static updateProduct(id: string, data: Prisma.ProductUpdateArgs["data"], relations: RelationUpdates) {
     return prisma.$transaction(async (tx) => {
+      // Lock the product row first so relation rewrites never race a missing parent.
+      await tx.product.update({ where: { id }, data });
       if (relations.tagIds !== undefined) {
         await tx.productTag.deleteMany({ where: { productId: id } });
         if (relations.tagIds.length > 0) {
@@ -163,7 +165,6 @@ export class ProductRepository {
           });
         }
       }
-      await tx.product.update({ where: { id }, data });
       await pruneNewArrivals(tx);
       return tx.product.findUniqueOrThrow({ where: { id }, include: productInclude });
     });
